@@ -261,22 +261,22 @@ export function usePlotWorldbookAgentControl() {
       toast.info(plotCopy.agentControl.modeChanged.agent, { muteable: false });
       return;
     }
-    if (next === 'disabled') {
+    if (next === 'disabled' || next === 'passive') {
       try {
         _set_pendingFinalGenerationGreenlights_ACU([]);
         disableLegacyAgentWorldbookControl_ACU();
-        const restoreResult = await restoreWorldbookGreenlights_ACU({ cleanupMode: 'restore_only' });
+        const restoreResult = await restoreWorldbookGreenlights_ACU({ cleanupMode: 'full' });
         snapshot.value = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
         if (restoreResult.skipped > 0 || restoreResult.failed > 0) {
-          const message = plotCopy.agentControl.restore.reasons[restoreResult.reason || ''] || `Agent 世界书已关闭，但恢复受控条目未完全完成：${restoreResult.reason || 'unknown'}`;
+          const message = plotCopy.agentControl.restore.reasons[restoreResult.reason || ''] || `Agent 世界书已退出接管，但恢复受控条目未完全完成：${restoreResult.reason || 'unknown'}`;
           toast.warning(message, { muteable: false });
           return;
         }
-        toast.info(plotCopy.agentControl.modeChanged.disabled, { muteable: false });
+        toast.info(plotCopy.agentControl.modeChanged[next], { muteable: false });
         return;
       } catch (error: any) {
         snapshot.value = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
-        toast.warning(`Agent 世界书已关闭，但恢复受控条目失败：${error?.message || '未知错误'}`, { muteable: false });
+        toast.warning(`Agent 世界书已退出接管，但恢复受控条目失败：${error?.message || '未知错误'}`, { muteable: false });
         return;
       }
     }

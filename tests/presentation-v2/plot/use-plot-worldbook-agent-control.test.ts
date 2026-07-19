@@ -326,6 +326,8 @@ describe('usePlotWorldbookAgentControl', () => {
   it('syncAgentWorldbookTakeoverAfterSkillChange 在非 Agent 模式不触发物理接管', async () => {
     const c = await getComposable();
     await c.setMode('passive');
+    expect(mockRestore).toHaveBeenCalledWith({ cleanupMode: 'full' });
+    expect(toast.info).toHaveBeenCalledWith('Agent 世界书已切换为仅观察模式。', { muteable: false });
     mockTakeover.mockClear();
     mockRefreshSnapshot.mockClear();
 
@@ -395,14 +397,14 @@ describe('usePlotWorldbookAgentControl', () => {
     expect(toast.info).not.toHaveBeenCalledWith('Agent 世界书已切换为接管模式。', { muteable: false });
   });
 
-  it('setMode disabled 保存成功后执行 restore_only 恢复但保留 legacy snapshot', async () => {
+  it('setMode disabled 保存成功后执行 full 恢复并退出物理接管', async () => {
     const c = await getComposable();
     const settings = (c as any).__settings;
 
     await c.setMode('disabled');
 
     expect(mockWriteControl).toHaveBeenCalledWith({ mode: 'disabled', enabled: false });
-    expect(mockRestore).toHaveBeenCalledWith({ cleanupMode: 'restore_only' });
+    expect(mockRestore).toHaveBeenCalledWith({ cleanupMode: 'full' });
     expect(mockRestore).toHaveBeenCalledTimes(1);
     expect(settings.plotSettings.agentWorldbookControl.mode).toBe('disabled');
     expect(settings.plotSettings.agentWorldbookControl.enabled).toBe(false);
@@ -418,7 +420,7 @@ describe('usePlotWorldbookAgentControl', () => {
     await c.setMode('disabled');
 
     expect(mockWriteControl).toHaveBeenCalledWith({ mode: 'disabled', enabled: false });
-    expect(mockRestore).toHaveBeenCalledWith({ cleanupMode: 'restore_only' });
+    expect(mockRestore).toHaveBeenCalledWith({ cleanupMode: 'full' });
     expect(settings.plotSettings.agentWorldbookControl.mode).toBe('disabled');
     expect(settings.plotSettings.agentWorldbookControl.enabled).toBe(false);
     expect(settings.plotSettings.agentWorldbookControlSnapshot).toBeDefined();

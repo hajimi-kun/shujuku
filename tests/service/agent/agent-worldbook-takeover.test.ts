@@ -255,6 +255,59 @@ describe('agent worldbook takeover native trigger suppression', () => {
     expect(getPlotAgentWorldbookSnapshot_ACU().active).toBe(true);
   });
 
+  it('分批 Skill 化后合并旧接管快照，不会只保留最后一批条目', async () => {
+    const first = await takeoverWorldbookGreenlights_ACU();
+    expect(first.totalCandidates).toBe(1);
+    expect(first.disabled).toBe(1);
+
+    mockEntriesByBook.set('角色A世界书', [
+      ...(mockEntriesByBook.get('角色A世界书') || []),
+      { uid: 2, enabled: true, keys: ['钥匙B'], comment: skillCommentB_ACU, content: '内容B' },
+    ]);
+
+    const second = await takeoverWorldbookGreenlights_ACU();
+
+    expect(second.totalCandidates).toBe(1);
+    expect(second.disabled).toBe(1);
+    expect(mockEntriesByBook.get('角色A世界书')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ uid: 1, enabled: false }),
+      expect.objectContaining({ uid: 2, enabled: false }),
+    ]));
+    expect(second.snapshot.books['角色A世界书']).toEqual(expect.arrayContaining([
+      expect.objectContaining({ uid: 1 }),
+      expect.objectContaining({ uid: 2 }),
+    ]));
+    expect(second.snapshot.books['角色A世界书']).toHaveLength(2);
+  });
+
+  it('旧版本丢失快照的已关闭 Skill 条目会在重新接管时重新纳入', async () => {
+    const selectionSignature = buildWorldbookSelectionSignature_ACU(['角色A世界书']);
+    const activeSnapshot = {
+      active: true,
+      selectionSignature,
+      createdAt: 1,
+      books: { '角色A世界书': [{ uid: 2, previousEnabled: true, previousKeys: ['钥匙B'] }] },
+    };
+    mockStateSnapshot.current = activeSnapshot;
+    setPlotAgentWorldbookSnapshot_ACU(activeSnapshot);
+    mockEntriesByBook.set('角色A世界书', [
+      { uid: 1, enabled: false, keys: ['钥匙A'], comment: skillComment_ACU, content: '内容A' },
+      { uid: 2, enabled: false, keys: ['钥匙B'], comment: skillCommentB_ACU, content: '内容B' },
+    ]);
+
+    const result = await takeoverWorldbookGreenlights_ACU();
+
+    expect(result.totalCandidates).toBe(1);
+    expect(result.snapshot.books['角色A世界书']).toEqual(expect.arrayContaining([
+      expect.objectContaining({ uid: 1, previousEnabled: true }),
+      expect.objectContaining({ uid: 2, previousEnabled: true }),
+    ]));
+    expect(mockEntriesByBook.get('角色A世界书')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ uid: 1, enabled: false }),
+      expect.objectContaining({ uid: 2, enabled: false }),
+    ]));
+  });
+
   it('重复接管时会恢复并剔除已失去 Skill meta 的旧 active snapshot 条目', async () => {
     const first = await takeoverWorldbookGreenlights_ACU();
     expect(first.reason).toBe('native_worldbook_trigger_disabled');
