@@ -1,0 +1,100 @@
+16162b7  chore: release spv3.9.9
+2f74398 release: build js and publish spv3.9.8.1
+324c319 release: build js and publish spv3.9.8
+0d5f6e0 release: build js and publish spv3.9.7
+7f5d0b2 release: build js and publish spv3.9.6
+ea5f638 release: build js and publish spv3.9.5
+998b5ce release: build js and publish spv3.9.4
+8f92c4e fix(table): filter noop tracking keys in delta and sync build artifacts
+9fca1ca fix(table): merge same-floor multi-group saves
+080b705 feat(table): delta+checkpoint storage rollout and integration coverage
+0d87e2e fix: syncAllSettingsToUI_ACU 补充 bodyParams/excludeBodyParams/requestHeaders 回填 + rebuild
+ccefafc Merge pull request #12 from zero15498/fix/ui-v2-spv3.8.4
+6fd4520 fix:修复文字颜色被sillytavern主题影响的问题
+54425dc feature:默认隐藏旧UI
+1590282 fix:修复编辑depth和order后无法保存的问题
+e201e44 Merge tag 'spv3.8.5' into fix/ui-v2-spv3.8.4
+3cdcfe8 优化表格编辑器性能
+5077b54 build: 重新打包 index.js (spv3.8.5)
+bb3ab5c fix: 统一所有请求路径使用buildCustomApiRequestBody_ACU，修复bodyParams附加参数不生效
+1964727 feature:内置地雷色主题
+52bb181 fix:修复按钮颜色被注入样式影响的问题
+db847cb fix:修复可视化编辑器加载大表时卡死
+cd5a0c5 fix:修复编辑列名时输入被打断
+c6253df fix:修复智能续写找不到酒馆输入框
+ff9d28f build: sync userscript bundle to root index.js on every build
+8a20aff fix: bodyParams JSON input support for custom API parameters
+cf7bcbe Merge pull request #11 from zero15498/port/ui-v2-spv3.8.1
+208b6ed port ui v2 to spv3.8.1
+717e40f fix: syncAllSettingsToUI_ACU 补充 rerankInstruction UI 写入 (spv3.8.1)
+29d66e2 feat: 移植 rerank 指令参数 + API 附加 body 参数机制 (spv3.7)
+27b0a9c spv3.6.12: 修复外置向量快照文件名含非法字符导致上传400错误
+368171a spv3.6.10 修复交火向量索引填表完成后外部文件不更新
+6f04bb5 spv3.6.8: 外置向量快照路径加入角色名前缀，方便识别
+72986c6 refactor: 简化外置向量快照路径为仅chatKey，添加旧路径向后兼容 (spv3.6.7)
+8c818f7 fix: 交火模式归档去重 + 消除saving阶段embedding阻塞 + 移除500ms人为延迟 (spv3.6.6)
+9b74314 fix: 填表完成后统一强制应用编码索引列AM序列锁定 (spv3.6.5)
+ae8212d fix: 纪要索引条目内容保护仅在交火门槛达标后生效，未达标时允许普通填表更新 (spv3.6.4)
+9b1aa3d fix: 关键词提示词覆盖改为版本驱动无条件替换，删除签名匹配死代码 (spv3.6.3)
+a8712a6 fix: 恢复函数多候选sourceTableKey防止动态键导致数据丢失 (spv3.6.2)
+a32241c feat: 自动从外部快照恢复丢失的向量索引state (spv3.6.1)
+acd2ee6 fix: 强化关键词提示词强制<keywords>标签+回退提取+一次性覆盖 (spv3.6.0)
+b44b47f fix: 修复单文件快照manifest热缓存始终为0 B (spv3.6)
+c754169 feat: crossfire recent-fixed-inject, keyword tags, default config update, remove health-check buttons (spv3.5.21)
+43eb896 refactor: single-file snapshot overwrite for vector index external storage (spv3.5.20)
+6e5c5f2 fix: separate vectorize from archive, debounce archive triggered by vector data change
+1f41893 fix: bypass flush queue and no-changes skip for direct archive after table refill
+eb68309 fix: flush vector index after table refill
+46c3fd6 fix: persist vector flush checkpoint
+45e15bf fix: add debounced vector flush queue
+90d7520 fix: add legacy vector migration and compatibility
+700644a fix: delete vector files after clearing local index
+8c48ed8 fix: publish bundled entry for vector health check
+d04a45c fix: expose vector health check in table tools
+cf56f79 fix: add vector health checks and safe gc
+c83a6b3 fix: adopt content-addressed vector chunks
+d4f1f09 fix: silence loading warnings during background saves
+00fb319 fix: block settings overwrite during startup load
+d4409f9 fix: reset auto update stop flag after abort
+cbb6aa5 fix: reduce redundant summary vector archives
+35de984 fix: scope summary vector cache stats
+83cc458 fix: restore zero tk summary index disable behavior
+d448dc7 feat: allow zero tk with summary vector index
+7efcfae fix: reuse summary vectors after row order shifts
+844c97d fix: persist summary vector archive only once
+e2b16d2 fix: archive summary vector changes without new embeddings
+fab0559 fix: save summary vector index once after archive
+4df5bfb fix: keep only latest summary vector snapshot
+2f4bf69 fix: retain versioned summary vector snapshots
+06f69b4 fix: version summary vector snapshot files
+13672a4 fix: coalesce summary vector archive uploads
+d3e6997 fix: harden table crud update notifications
+b89b22d fix: serialize summary vector index archive writes
+6adc37b fix: repair summary vector shard checksum drift
+c968823 fix: skip generation when summary vector shards are missing
+41f7e77 fix: invalidate vector cache when external files are missing
+486bcbc fix: restrict vector index scope deletion to current chat
+10f1d08 fix: delete summary vector index files reliably
+2e8bf97 fix: restore plot task api select after preset refresh
+859df05 fix: preserve plot task api overrides on task switching
+20ef177 fix: store plot task api presets globally by task
+9d1584e fix: keep plot task api preset per task
+fc03a1b fix: make plot task api preset global
+6376808 fix: persist plot task api preset and harden table crud api
+e85d5a8 fix: delete summary vector index files by scope
+2d704e2 fix: keep summary vector snapshot scope stable
+e8c11c3 fix: use upload-safe vector index filenames
+e93ce79 fix: preload summary vector cache on chat change
+19df796 fix: use stable vector snapshot files
+a1e5f32 fix: persist summary vector index incrementally
+c8e926c fix: correct vector file cleanup deletion paths
+1361133 release: spv3.3.1
+c4efd20 fix: improve callback diagnostics and vector file deletion
+4ff712e fix: hide merge summary ui
+401d8fe fix: restore regressed plot and manual update behavior
+6f180fe fix: use selected api preset for crossfire keywords
+d9a2d16 fix: populate crossfire keyword api presets
+445f5ac chore: rename crossfire vector ui label
+400ab25 fix: restore manual grouped parallel update
+fdf6e75 fix: restore manual extra hint runtime state
+88c3451 fix: restore auto update tracking gate

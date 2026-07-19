@@ -1,0 +1,543 @@
+
+> acu-star-database-iii@1.1.0 test
+> vitest run
+
+
+[1m[46m RUN [49m[22m [36mv3.2.4 [39m[90me:/xiangmu/shujuku[39m
+
+ [31m❯[39m tests/shared/log-buffer.test.ts [2m([22m[2m29 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 19[2mms[22m[39m
+   [32m✓[39m pushLog + getAllLogs[2m > [22m推送一条日志后可以获取[32m 3[2mms[22m[39m
+   [32m✓[39m pushLog + getAllLogs[2m > [22m推送多条日志按顺序排列[32m 1[2mms[22m[39m
+   [32m✓[39m pushLog + getAllLogs[2m > [22mID 自增[32m 0[2mms[22m[39m
+   [32m✓[39m pushLog + getAllLogs[2m > [22mgetAllLogs 返回副本（不影响内部缓冲区）[32m 0[2mms[22m[39m
+   [32m✓[39m 环形缓冲区[2m > [22m超过 2000 条时丢弃最旧的[32m 3[2mms[22m[39m
+   [32m✓[39m clearLogs[2m > [22m清空所有日志[32m 1[2mms[22m[39m
+   [32m✓[39m extractTag[2m > [22m从第二个参数提取 [模块名][32m 0[2mms[22m[39m
+   [32m✓[39m extractTag[2m > [22m提取中文模块名[32m 0[2mms[22m[39m
+   [32m✓[39m extractTag[2m > [22m提取 ORM 标签[32m 0[2mms[22m[39m
+   [32m✓[39m extractTag[2m > [22m无标签时返回"未分类"[32m 0[2mms[22m[39m
+   [32m✓[39m extractTag[2m > [22m空参数返回"未分类"[32m 0[2mms[22m[39m
+   [32m✓[39m extractTag[2m > [22m第一个参数不是 [ACU] 时也能提取[32m 0[2mms[22m[39m
+   [32m✓[39m extractTag[2m > [22m多个参数时从第二个开始查找标签[32m 0[2mms[22m[39m
+   [32m✓[39m formatArgs[2m > [22m字符串参数直接拼接[32m 0[2mms[22m[39m
+   [32m✓[39m formatArgs[2m > [22m数字参数转为字符串[32m 0[2mms[22m[39m
+   [32m✓[39m formatArgs[2m > [22mnull 和 undefined[32m 0[2mms[22m[39m
+   [32m✓[39m formatArgs[2m > [22m对象序列化为 JSON[32m 0[2mms[22m[39m
+[31m   [31m×[31m formatArgs[2m > [22mError 对象显示 name 和 message[39m[32m 6[2mms[22m[39m
+[31m     → expected 'Error: test error | Error: test error…' to be 'Error: test error' // Object.is equality[39m
+   [32m✓[39m formatArgs[2m > [22m布尔值转为字符串[32m 0[2mms[22m[39m
+   [32m✓[39m getKnownTags[2m > [22m收集所有出现过的标签[32m 0[2mms[22m[39m
+   [32m✓[39m getKnownTags[2m > [22m标签按字母排序[32m 0[2mms[22m[39m
+   [32m✓[39m subscribe / unsubscribe[2m > [22m订阅后收到新日志[32m 0[2mms[22m[39m
+   [32m✓[39m subscribe / unsubscribe[2m > [22m取消订阅后不再收到日志[32m 0[2mms[22m[39m
+   [32m✓[39m subscribe / unsubscribe[2m > [22munsubscribe 函数也能取消[32m 0[2mms[22m[39m
+   [32m✓[39m subscribe / unsubscribe[2m > [22m多个订阅者都能收到[32m 0[2mms[22m[39m
+   [32m✓[39m subscribe / unsubscribe[2m > [22m订阅者回调出错不影响其他订阅者[32m 0[2mms[22m[39m
+   [32m✓[39m subscribe / unsubscribe[2m > [22m同一个回调重复订阅只注册一次[32m 0[2mms[22m[39m
+   [32m✓[39m subscribe / unsubscribe[2m > [22mgetSubscriberCount 正确计数[32m 0[2mms[22m[39m
+   [32m✓[39m _resetForTesting[2m > [22m重置所有状态[32m 0[2mms[22m[39m
+ [32m✓[39m tests/shared/utils.test.ts [2m([22m[2m104 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m tests/service/worldbook/pipeline.test.ts [2m([22m[2m66 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m tests/service/plot/plot-logic.test.ts [2m([22m[2m121 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32m✓[39m tests/service/template/template-preset-service.test.ts [2m([22m[2m45 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/template-vars/sql-query-var.test.ts [2m([22m[2m147 tests[22m[2m)[22m[33m 311[2mms[22m[39m
+ [32m✓[39m tests/data/sqlite/sqlite-engine.test.ts [2m([22m[2m30 tests[22m[2m)[22m[33m 359[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/plot-runtime/plot-task-engine.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 36[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts [2m([22m[2m62 tests[22m[2m)[22m[33m 538[2mms[22m[39m
+ [32m✓[39m tests/data/sqlite/sync-bridge.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 393[2mms[22m[39m
+ [32m✓[39m tests/service/template/chat-scope.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/helpers-data-merge.test.ts [2m([22m[2m82 tests[22m[2m)[22m[32m 30[2mms[22m[39m
+ [32m✓[39m tests/service/table/table-storage-strategy.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m tests/data/storage/tavern-storage.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m tests/service/ai/prompt-api-call.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m tests/service/summary/merge-executor.test.ts [2m([22m[2m47 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m tests/service/template-assistant/service.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m tests/service/ai/table-edit-parser.test.ts [2m([22m[2m43 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m tests/service/table/table-service.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m tests/service/template-assistant/compiler.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m tests/service/summary/merge-logic.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m tests/service/settings/settings-service.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/template-vars/var-store-and-tags.test.ts [2m([22m[2m48 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m tests/integration/table-lifecycle.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/plot-runtime/plot-tag-utils.test.ts [2m([22m[2m58 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m tests/service/worldbook/injection-engine-config.test.ts [2m([22m[2m62 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m tests/service/worldbook/injection-engine-entries.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m tests/service/ai/api-call.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [31m❯[39m tests/presentation/table-crud-api.test.ts [2m([22m[2m40 tests[22m[2m | [22m[31m11 failed[39m[2m)[22m[32m 78[2mms[22m[39m
+   [32m✓[39m quoteIdentifier[2m > [22m普通英文标识符[32m 3[2mms[22m[39m
+   [32m✓[39m quoteIdentifier[2m > [22m中文标识符[32m 1[2mms[22m[39m
+   [32m✓[39m quoteIdentifier[2m > [22m包含反引号的标识符（转义）[32m 0[2mms[22m[39m
+   [32m✓[39m quoteIdentifier[2m > [22m空字符串[32m 0[2mms[22m[39m
+   [32m✓[39m quoteIdentifier[2m > [22m包含空格的标识符[32m 0[2mms[22m[39m
+   [32m✓[39m quoteIdentifier[2m > [22m包含特殊字符的标识符[32m 6[2mms[22m[39m
+   [32m✓[39m quoteIdentifier[2m > [22m多个反引号[32m 0[2mms[22m[39m
+   [32m✓[39m findTargetSheet[2m > [22m找到匹配的表[32m 2[2mms[22m[39m
+   [32m✓[39m findTargetSheet[2m > [22m找不到表返回 null[32m 1[2mms[22m[39m
+   [32m✓[39m findTargetSheet[2m > [22mcurrentJsonTableData 为 null 返回 null[32m 0[2mms[22m[39m
+   [32m✓[39m findTargetSheet[2m > [22m跳过非 sheet_ 开头的键[32m 0[2mms[22m[39m
+[31m   [31m×[31m createTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m生成正确的 UPDATE SQL（列名为字符串）[39m[32m 27[2mms[22m[39m
+[31m     → expected "spy" to be called with arguments: [ Array(1) ][90m
+
+Received: 
+
+[1m  1st spy call:
+
+[22m[2m  [[22m
+[32m-   "UPDATE `背包物品表` SET `数量` = '10' WHERE row_id = 1;",[90m
+[31m+   "UPDATE `背包物品表` SET `数量` = ? WHERE `row_id` = ?;",[90m
+[31m+   [[90m
+[31m+     "10",[90m
+[31m+     "1",[90m
+[31m+   ],[90m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+[31m   [31m×[31m createTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m生成正确的 UPDATE SQL（列名为数字索引）[39m[32m 3[2mms[22m[39m
+[31m     → expected "spy" to be called with arguments: [ Array(1) ][90m
+
+Received: 
+
+[1m  1st spy call:
+
+[22m[2m  [[22m
+[32m-   "UPDATE `背包物品表` SET `物品名` = '新铁剑' WHERE row_id = 1;",[90m
+[31m+   "UPDATE `背包物品表` SET `物品名` = ? WHERE `row_id` = ?;",[90m
+[31m+   [[90m
+[31m+     "新铁剑",[90m
+[31m+     "1",[90m
+[31m+   ],[90m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+[31m   [31m×[31m createTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22mvalue 为 null 时生成 NULL[39m[32m 2[2mms[22m[39m
+[31m     → expected "spy" to be called with arguments: [ Array(1) ][90m
+
+Received: 
+
+[1m  1st spy call:
+
+[22m[2m  [[22m
+[32m-   "UPDATE `背包物品表` SET `数量` = NULL WHERE row_id = 1;",[90m
+[31m+   "UPDATE `背包物品表` SET `数量` = ? WHERE `row_id` = ?;",[90m
+[31m+   [[90m
+[31m+     null,[90m
+[31m+     "1",[90m
+[31m+   ],[90m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+[31m   [31m×[31m createTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22mvalue 包含单引号时正确转义[39m[32m 4[2mms[22m[39m
+[31m     → expected "spy" to be called with arguments: [ Array(1) ][90m
+
+Received: 
+
+[1m  1st spy call:
+
+[22m[2m  [[22m
+[32m-   "UPDATE `背包物品表` SET `物品名` = '铁剑''加强版' WHERE row_id = 1;",[90m
+[31m+   "UPDATE `背包物品表` SET `物品名` = ? WHERE `row_id` = ?;",[90m
+[31m+   [[90m
+[31m+     "铁剑'加强版",[90m
+[31m+     "1",[90m
+[31m+   ],[90m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m表不存在返回 false[32m 0[2mms[22m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m列不存在返回 false[32m 0[2mms[22m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m行索引越界返回 false[32m 0[2mms[22m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22mSQL 执行失败返回 false[32m 0[2mms[22m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22mcurrentJsonTableData 为 null 返回 false[32m 0[2mms[22m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m已有历史数据时不把编辑器保存记为最新更新[32m 1[2mms[22m[39m
+[31m   [31m×[31m createTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22m生成正确的 UPDATE SQL（多列）[39m[32m 9[2mms[22m[39m
+[31m     → expected 'UPDATE `背包物品表` SET `物品名` = ?, `数量` = …' to contain '`物品名` = \'钢剑\''[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22m跳过 isImportMode 内部标记[32m 1[2mms[22m[39m
+[31m   [31m×[31m createTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22m跳过不存在的列名[39m[32m 1[2mms[22m[39m
+[31m     → expected 'UPDATE `背包物品表` SET `物品名` = ? WHERE `r…' to contain '`物品名` = \'钢剑\''[39m
+[31m   [31m×[31m createTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22m无有效列时返回 true（无操作）[39m[32m 2[2mms[22m[39m
+[31m     → expected false to be true // Object.is equality[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22mrowIndex < 1 返回 false[32m 0[2mms[22m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22mrow_id 不存在返回 false[32m 0[2mms[22m[39m
+[31m   [31m×[31m createTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m生成正确的 INSERT SQL[39m[32m 1[2mms[22m[39m
+[31m     → expected 'INSERT INTO `背包物品表` (`物品名`, `数量`) VAL…' to contain '\'盾牌\''[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m跳过 row_id 列（自增）[32m 0[2mms[22m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m空 data 生成 DEFAULT VALUES[32m 0[2mms[22m[39m
+[31m   [31m×[31m createTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22mvalue 为 null 时生成 NULL[39m[32m 1[2mms[22m[39m
+[31m     → expected 'INSERT INTO `背包物品表` (`物品名`, `数量`) VAL…' to contain 'NULL'[39m
+[31m   [31m×[31m createTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22mvalue 包含单引号时正确转义[39m[32m 2[2mms[22m[39m
+[31m     → expected 'INSERT INTO `背包物品表` (`物品名`) VALUES (?…' to contain '\'铁剑\'\'加强版\''[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m表不存在返回 -1[32m 0[2mms[22m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22mSQL 执行失败返回 -1[32m 0[2mms[22m[39m
+[31m   [31m×[31m createTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22m生成正确的 DELETE SQL[39m[32m 4[2mms[22m[39m
+[31m     → expected "spy" to be called with arguments: [ Array(1) ][90m
+
+Received: 
+
+[1m  1st spy call:
+
+[22m[2m  [[22m
+[32m-   "DELETE FROM `背包物品表` WHERE row_id = 1;",[90m
+[31m+   "DELETE FROM `背包物品表` WHERE `row_id` = ?;",[90m
+[31m+   [[90m
+[31m+     "1",[90m
+[31m+   ],[90m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22mrowIndex < 1 返回 false[32m 0[2mms[22m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22mrowIndex 越界返回 false[32m 0[2mms[22m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22mrow_id 为 null 返回 false[32m 0[2mms[22m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22mSQL 执行失败返回 false[32m 0[2mms[22m[39m
+   [32m✓[39m createTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22m表不存在返回 false[32m 0[2mms[22m[39m
+ [32m✓[39m tests/data/repositories/chat-message-data-repo.test.ts [2m([22m[2m62 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m tests/service/template/chat-scope-guide.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m tests/service/ai/json-sanitizer.test.ts [2m([22m[2m87 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m tests/data/sqlite/schema-mapper.test.ts [2m([22m[2m39 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/helpers-table-lock.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/visualizer/visualizer-store.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m tests/service/worldbook/injection-engine-state.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/template-vars/seed-condition.test.ts [2m([22m[2m56 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m tests/service/plot/plot-orchestrator.test.ts [2m([22m[2m34 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m tests/service/table/table-delta.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m tests/data/gateways/worldbook-gateway.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m tests/integration/ai-fill-table.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m tests/service/template/chat-scope-template.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m tests/data/storage/config-storage.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m tests/service/table/native-table-service-adapter.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m tests/service/vector/summary-vector-index-archive-service.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m tests/data/sqlite/sql-normalizer.test.ts [2m([22m[2m47 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m tests/data/repositories/isolation-repo.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-console.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m tests/service/loop/loop-controller.test.ts [2m([22m[2m25 tests[22m[2m)[22m[33m 3030[2mms[22m[39m
+   [33m[2m✓[22m[39m evaluateLoopEnd_ACU[2m > [22m正常循环中且等待回复时返回 continue [33m 1502[2mms[22m[39m
+   [33m[2m✓[22m[39m evaluateLoopEnd_ACU[2m > [22m标签检测未通过时返回 retry_delete [33m 1520[2mms[22m[39m
+ [32m✓[39m tests/shared/template-preset-utils.test.ts [2m([22m[2m37 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/template-vars/name-mapper.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/template-vars/if-block-and-condition.test.ts [2m([22m[2m25 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m tests/shared/text-optimization.test.ts [2m([22m[2m35 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m tests/data/repositories/profile-repo.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m tests/service/ai/ai-service.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m tests/service/worldbook/injection-engine-order.test.ts [2m([22m[2m31 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m tests/data/gateways/ai-gateway.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m tests/service/worldbook/worldbook-service.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m tests/data/gateways/chat-gateway.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m tests/integration/settings-migration.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m tests/service/import/import-executor.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/helpers-remaining.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m tests/service/ai/prompt-prepare.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/panel-grid-conventions.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m tests/presentation/bootstrap/api-groups/worldbook-ai-api.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/template-vars/cell-utils.test.ts [2m([22m[2m34 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m tests/data/storage/chat-history.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/plot-runtime/plot-data-format.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m tests/service/ai/prompt-prepare-sql-mode.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m tests/data/storage/optimization-cache-storage.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m tests/presentation/visualizer-template-assistant-apply.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m tests/service/plot/plot-state.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-scheduler.test.ts [2m([22m[2m36 tests[22m[2m)[22m[33m 4088[2mms[22m[39m
+   [33m[2m✓[22m[39m executeAutoUpdatePlan_ACU[2m > [22m单组全部成功 [33m 501[2mms[22m[39m
+   [33m[2m✓[22m[39m executeAutoUpdatePlan_ACU[2m > [22m提供 processGroupedUpdates 时优先走 grouped 委托 [33m 509[2mms[22m[39m
+   [33m[2m✓[22m[39m executeAutoUpdatePlan_ACU[2m > [22mgrouped 委托返回 failedGroups 时按数量汇总失败组 [33m 505[2mms[22m[39m
+   [33m[2m✓[22m[39m executeAutoUpdatePlan_ACU[2m > [22m多组部分失败 [33m 503[2mms[22m[39m
+   [33m[2m✓[22m[39m executeAutoUpdatePlan_ACU[2m > [22mprocessUpdates 抛异常时计为失败 [33m 504[2mms[22m[39m
+   [33m[2m✓[22m[39m executeAutoUpdatePlan_ACU[2m > [22msetAutoUpdating 被正确调用 [33m 507[2mms[22m[39m
+   [33m[2m✓[22m[39m executeAutoUpdatePlan_ACU[2m > [22m自动合并触发成功 [33m 504[2mms[22m[39m
+   [33m[2m✓[22m[39m executeAutoUpdatePlan_ACU[2m > [22mpurgeOldLayerData 失败不影响整体结果 [33m 504[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/plot-runtime/plot-history-preset.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m tests/integration/sqlite-full-chain.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m tests/integration/merge-summary.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m tests/integration/template-var-pipeline.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/plot-runtime/plot-entry.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m tests/service/table/table-update-queue.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m tests/shared/json-helpers.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m tests/data/gateways/character-gateway.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/message-handler.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m tests/data/gateways/host-state-gateway.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m tests/service/loop/loop-evaluator.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m tests/shared/html-helpers.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m tests/service/table/storage-mode.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m tests/service/runtime/helpers-context-tags.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m tests/service/worldbook/worldbook-cleanup.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m tests/service/settings/settings-readers.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/presentation/data-admin-api.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 4[2mms[22m[39m
+ [31m❯[39m tests/presentation/visualizer-template-assistant-addon.test.ts [2m([22m[2m4 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[32m 49[2mms[22m[39m
+[31m   [31m×[31m visualizer template assistant addon[2m > [22m向现有 visualizer DOM 注入按钮和 host[39m[32m 34[2mms[22m[39m
+[31m     → expected null to be truthy[39m
+   [32m✓[39m visualizer template assistant addon[2m > [22m首次检测到 visualizer 时重置状态，并在切表时通知 panel[32m 6[2mms[22m[39m
+   [32m✓[39m visualizer template assistant addon[2m > [22m点击外挂按钮时切换 assistant 面板[32m 4[2mms[22m[39m
+[31m   [31m×[31m visualizer template assistant addon[2m > [22massistant host 元素被正确注入到 visualizer 根节点中[39m[32m 4[2mms[22m[39m
+[31m     → expected null to be truthy[39m
+ [32m✓[39m tests/presentation/visualizer-main-config.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts [2m([22m[2m89 tests[22m[2m)[22m[33m 10839[2mms[22m[39m
+   [33m[2m✓[22m[39m executeCardUpdateCore_ACU[2m > [22mprepareAIInput 返回 null 时返回错误 [33m 10011[2mms[22m[39m
+   [33m[2m✓[22m[39m applyUnifiedGroupFillResponses_ACU[2m > [22mSQL 模式下基于显式 baseSnapshot 顺序统一提交，不污染全局 currentJsonTableData [33m 421[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/continuation/continuation-store.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 4819[2mms[22m[39m
+   [33m[2m✓[22m[39m useContinuationStore[2m > [22m从 plotSettings.loopSettings 读取智能续写配置 [33m 1783[2mms[22m[39m
+   [33m[2m✓[22m[39m useContinuationStore[2m > [22m编辑提示词会写回 quickReplyContent 并重置索引 [33m 477[2mms[22m[39m
+   [33m[2m✓[22m[39m useContinuationStore[2m > [22m规则编辑写入结构化规则并移除旧 tags 字段 [33m 606[2mms[22m[39m
+   [33m[2m✓[22m[39m useContinuationStore[2m > [22m失败上限设为 49 时只解锁正文替换开关；未触碰过开关时默认关闭 [33m 660[2mms[22m[39m
+   [33m[2m✓[22m[39m useContinuationStore[2m > [22m从非 49 改填 49 时，如果开关从未被开启过，即使旧配置残留 enabled=true 也默认关闭 [33m 653[2mms[22m[39m
+   [33m[2m✓[22m[39m useContinuationStore[2m > [22m正文替换开关被用户开启过后，非 49 和 49 来回切换会保留开启偏好 [33m 638[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/sql-console/sql-console-page.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 4544[2mms[22m[39m
+   [33m[2m✓[22m[39m AdvancedToolsPage SQL panel[2m > [22m渲染高级工具页内 SQL 控制台面板，header 只放页面标题 [33m 1628[2mms[22m[39m
+   [33m[2m✓[22m[39m AdvancedToolsPage SQL panel[2m > [22m每个面板都渲染常驻说明信息条 [33m 601[2mms[22m[39m
+   [33m[2m✓[22m[39m AdvancedToolsPage SQL panel[2m > [22m输入 SELECT 后执行，展示查询表格并记录历史 [33m 765[2mms[22m[39m
+   [33m[2m✓[22m[39m AdvancedToolsPage SQL panel[2m > [22m快捷查看所有表会填入 SQL 并立即执行 [33m 808[2mms[22m[39m
+   [33m[2m✓[22m[39m AdvancedToolsPage SQL panel[2m > [22m执行变更失败时展示错误结果 [33m 741[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/table/table-page.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 6920[2mms[22m[39m
+   [33m[2m✓[22m[39m TablePage[2m > [22m左右分栏：左列含附加世界书条目与提示词，右列含标签筛选与注入目标 [33m 3685[2mms[22m[39m
+   [33m[2m✓[22m[39m TablePage[2m > [22m关闭后重新打开 UI 会刷新当前表格页 [33m 884[2mms[22m[39m
+   [33m[2m✓[22m[39m TablePage[2m > [22m每个面板都渲染常驻说明信息条 [33m 765[2mms[22m[39m
+   [33m[2m✓[22m[39m TablePage[2m > [22m注入目标在未解析角色卡世界书时仍显示角色卡绑定世界书默认选项 [33m 812[2mms[22m[39m
+   [33m[2m✓[22m[39m TablePage[2m > [22m切换注入目标世界书后立即刷新目前已选提示 [33m 773[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/log-viewer/log-viewer-page.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 6821[2mms[22m[39m
+   [33m[2m✓[22m[39m AdvancedToolsPage log panel[2m > [22m渲染高级工具页内运行日志面板，状态徽章留在面板标题区 [33m 3376[2mms[22m[39m
+   [33m[2m✓[22m[39m AdvancedToolsPage log panel[2m > [22m按级别和关键词筛选日志列表 [33m 829[2mms[22m[39m
+   [33m[2m✓[22m[39m AdvancedToolsPage log panel[2m > [22m暂停时新日志进入积压，恢复后刷新显示 [33m 846[2mms[22m[39m
+   [33m[2m✓[22m[39m AdvancedToolsPage log panel[2m > [22mDebug 采集开关会控制 debug 日志进入缓冲区 [33m 867[2mms[22m[39m
+   [33m[2m✓[22m[39m AdvancedToolsPage log panel[2m > [22m清空与导出使用当前筛选后的日志数据 [33m 891[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/import/import-page.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 8566[2mms[22m[39m
+   [33m[2m✓[22m[39m ImportPage[2m > [22m渲染外部导入页骨架，包含 4 个面板 [33m 3638[2mms[22m[39m
+   [33m[2m✓[22m[39m ImportPage[2m > [22m状态操作区把清空缓存放在主流程之后、删除之前，并使用普通按钮 [33m 750[2mms[22m[39m
+   [33m[2m✓[22m[39m ImportPage[2m > [22m世界书选择器列出当前世界书 + 角色卡 sentinel [33m 766[2mms[22m[39m
+   [33m[2m✓[22m[39m ImportPage[2m > [22m注入按钮在 staging 为空时禁用 [33m 744[2mms[22m[39m
+   [33m[2m✓[22m[39m ImportPage[2m > [22m未呈现"屏蔽外部导入世界书条目占位符"开关（D21.9） [33m 734[2mms[22m[39m
+   [33m[2m✓[22m[39m ImportPage[2m > [22m表选择器渲染当前模板的表，复用 AcuPanel/AcuButton [33m 969[2mms[22m[39m
+   [33m[2m✓[22m[39m ImportPage[2m > [22m每个面板都渲染常驻说明信息条（统一格式约定） [33m 961[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/continuation/continuation-page.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 8775[2mms[22m[39m
+   [33m[2m✓[22m[39m ContinuationPage[2m > [22m渲染智能续写真实页面，不再是占位页 [33m 3551[2mms[22m[39m
+   [33m[2m✓[22m[39m ContinuationPage[2m > [22m每个 AcuPanel 都附常驻说明信息条 [33m 708[2mms[22m[39m
+   [33m[2m✓[22m[39m ContinuationPage[2m > [22m修改循环延时会写回 settings 并保存 [33m 805[2mms[22m[39m
+   [33m[2m✓[22m[39m ContinuationPage[2m > [22m点击开始会写入酒馆输入框并触发发送按钮 [33m 912[2mms[22m[39m
+   [33m[2m✓[22m[39m ContinuationPage[2m > [22m父文档挂载时点击开始会写入宿主酒馆输入框 [33m 976[2mms[22m[39m
+   [33m[2m✓[22m[39m ContinuationPage[2m > [22m打开页面时会从已有循环状态恢复倒计时 [33m 822[2mms[22m[39m
+   [33m[2m✓[22m[39m ContinuationPage[2m > [22m关闭新 UI 后重开会恢复倒计时显示 [33m 998[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/api/api-page.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 4078[2mms[22m[39m
+   [33m[2m✓[22m[39m ApiPage[2m > [22m渲染 API 预设面板，选择和编辑集中在同一面板 [33m 1355[2mms[22m[39m
+   [33m[2m✓[22m[39m ApiPage[2m > [22m当前 API 配置表单可直接保存活动预设并同步当前聊天绑定 [33m 975[2mms[22m[39m
+   [33m[2m✓[22m[39m ApiPage[2m > [22mAPI 预设下拉可切换当前聊天并设置全局默认 [33m 833[2mms[22m[39m
+   [33m[2m✓[22m[39m ApiPage[2m > [22m无预设时提示并可通过图标新建，第一个预设保存后自动选中 [33m 911[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/bootstrap/mount.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 11266[2mms[22m[39m
+   [33m[2m✓[22m[39m mount — 当前文档场景[2m > [22mwindow.parent === window 时，根节点和 SFC 样式都注入当前 document [33m 3364[2mms[22m[39m
+   [33m[2m✓[22m[39m mount — 当前文档场景[2m > [22m打开后再关闭，根节点保留但 display 变 none [33m 788[2mms[22m[39m
+   [33m[2m✓[22m[39m mount — 当前文档场景[2m > [22m主题按钮可以打开主题菜单，并在外部点击后关闭 [33m 940[2mms[22m[39m
+   [33m[2m✓[22m[39m mount — 当前文档场景[2m > [22mtoast layer is teleported to the app root instead of staying inside the shell [33m 787[2mms[22m[39m
+   [33m[2m✓[22m[39m mount — 当前文档场景[2m > [22m汉堡按钮打开移动端导航抽屉，点击页面项后关闭抽屉并切换页面 [33m 905[2mms[22m[39m
+   [33m[2m✓[22m[39m mount — 当前文档场景[2m > [22m移动端导航抽屉通过遮罩 click 关闭并避免穿透底层控件 [33m 1045[2mms[22m[39m
+   [33m[2m✓[22m[39m mount — 父文档场景（iframe 模拟）[2m > [22mwindow.parent !== window 且可访问 parent.document 时，根节点出现在父文档 [33m 861[2mms[22m[39m
+   [33m[2m✓[22m[39m mount — 父文档场景（iframe 模拟）[2m > [22m父文档挂载时，Vue 创建的表单控件属于父文档 realm [33m 891[2mms[22m[39m
+   [33m[2m✓[22m[39m mount — 父文档场景（iframe 模拟）[2m > [22m父文档挂载时，主题菜单响应父文档外部点击关闭 [33m 873[2mms[22m[39m
+   [33m[2m✓[22m[39m mount — 父文档场景（iframe 模拟）[2m > [22m父文档不可访问时降级到当前文档（getter 抛错） [33m 810[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-disclosure-group.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 832[2mms[22m[39m
+   [33m[2m✓[22m[39m AcuDisclosureGroup[2m > [22m渲染统一展开组 header，并同步 aria-expanded 与 chevron class [33m 403[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/plot/use-plot-task-editing.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1324[2mms[22m[39m
+   [33m[2m✓[22m[39m usePlotTaskEditing[2m > [22mloadFromRaw 空数组时插入一个默认任务 [33m 494[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/developer-page.test.ts [2m([22m[2m3 tests[22m[2m)[22m[33m 2849[2mms[22m[39m
+   [33m[2m✓[22m[39m DeveloperPage[2m > [22m渲染开发者开关和填表执行参数 [33m 1162[2mms[22m[39m
+   [33m[2m✓[22m[39m DeveloperPage[2m > [22m旧 UI 入口开关会写入 dev-options 并同步菜单显隐 [33m 916[2mms[22m[39m
+   [33m[2m✓[22m[39m DeveloperPage[2m > [22m最大并发更新组数输入会保存到 settings [33m 768[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/content-replace/content-replace-page.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 3020[2mms[22m[39m
+   [33m[2m✓[22m[39m ContentReplacePage[2m > [22m渲染正文替换左右等宽分栏和五个 v2 面板 [33m 487[2mms[22m[39m
+   [33m[2m✓[22m[39m ContentReplacePage[2m > [22m选择默认预设会载入内置提示词并写回设置 [33m 341[2mms[22m[39m
+   [33m[2m✓[22m[39m ContentReplacePage[2m > [22m标签筛选新增空规则时先保留可编辑草稿，填完整后再写入设置 [33m 772[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/basic-config/basic-config-page.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 3958[2mms[22m[39m
+   [33m[2m✓[22m[39m BasicConfigPage[2m > [22m基础模式只显示基础配置页，并集中呈现 API、更新设置、表格模板、剧情推进预设 [33m 1272[2mms[22m[39m
+   [33m[2m✓[22m[39m BasicConfigPage[2m > [22m基础配置页的表格模板面板提供可视化表格编辑器入口 [33m 877[2mms[22m[39m
+   [33m[2m✓[22m[39m BasicConfigPage[2m > [22m基础配置页每个面板都渲染常驻说明信息条 [33m 945[2mms[22m[39m
+   [33m[2m✓[22m[39m BasicConfigPage[2m > [22m点击侧边栏模式按钮后切换到高手模式并回到仪表盘 [33m 862[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/plot/plot-preset-store.test.ts [2m([22m[2m18 tests[22m[2m)[22m[33m 4265[2mms[22m[39m
+   [33m[2m✓[22m[39m usePlotPresetStore[2m > [22mrefreshFromSettings 读取 enabled / presets / 默认 / 当前活动 [33m 517[2mms[22m[39m
+   [33m[2m✓[22m[39m usePlotPresetStore[2m > [22mimportPresetFromJson 非法 JSON 返回 null [33m 340[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/theme/theme-store.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 708[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/import/use-import-flow.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 395[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-toast-viewport.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 586[2mms[22m[39m
+   [33m[2m✓[22m[39m AcuToastViewport[2m > [22mrenders stacked semantic toasts [33m 318[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/content-replace/content-replace-store.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 559[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/stores/toast-store.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 368[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/vector-index/vector-index-page.test.ts [2m([22m[2m14 tests[22m[2m)[22m[33m 14361[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m渲染交火模式页骨架，包含核心面板 [33m 3360[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m默认关键词提示词切换页面后仍显示默认 badge [33m 974[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m开发者选项开启后显示交火高级索引参数面板 [33m 799[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m每个面板都渲染常驻说明信息条 [33m 753[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m全局 header 展示当前页标题，页面内不再渲染重复 header [33m 820[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m关键词 API 预设下拉的跟随项显示当前活动 API 预设名 [33m 906[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m立即构建按钮触发归档流程并显示成功消息 [33m 878[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m非破坏迁移旧索引按钮只在检测到旧 manifest 后执行迁移 [33m 910[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m没有旧 manifest 时非破坏迁移按钮不写入新索引 [33m 814[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m交火页渲染 Embedding / Rerank 配置并可保存向量服务 [33m 864[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m关键词提示词编辑器只在侧抽屉中出现，保存后写回配置 [33m 774[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m关键词提示词抽屉有未保存修改时关闭整个 UI 会确认 [33m 773[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m最近固定注入条数输入非正整数时显示 toast 并重置为默认值 [33m 750[2mms[22m[39m
+   [33m[2m✓[22m[39m VectorIndexPage[2m > [22m每批归档行数写入交火索引实际读取的 summaryIndexArchiveMaxConcurrency 字段 [33m 980[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/visualizer/use-visualizer-assistant.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 532[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/visualizer/use-visualizer-config-editing.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 401[2mms[22m[39m
+   [33m[2m✓[22m[39m useVisualizerConfigEditing[2m > [22m编辑列名会同步 SQLite DDL 注释并标记 dirty [33m 384[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-rule-pair-list.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 414[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/plot/use-plot-worldbook-entries.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 384[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/api/vector-api-config.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 406[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/composables/useSqlConsole.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 306[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/table/table-preset-management.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 266[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/data-mgmt/data-mgmt-page.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 17439[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m渲染数据管理页三个面板，不包含交火模式索引管理 [33m 3669[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m数据隔离面板承载标识应用和当前标识注入条目清理 [33m 691[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m每个面板都渲染常驻说明信息条 [33m 744[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m左列放数据隔离和备份恢复，右列放删除清理 [33m 747[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m删除与清理面板分为自动清理和手动删除 [33m 773[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m数据隔离面板不再使用统计列表，历史标识收进折叠列表 [33m 797[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m全局 header 展示当前页标题，页面内不再渲染重复 header [33m 927[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m历史标识选择后保存并应用会切换隔离 profile [33m 1308[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m输入任意新标识后保存会刷新当前标识和历史列表 [33m 955[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m历史标识行内可以删除选中的历史记录 [33m 894[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m删除当前正在使用的历史标识会先切回默认再移除历史 [33m 917[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m删除当前标识本地数据会保存范围并调用清理链路 [33m 700[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m删除当前标识注入条目会调用世界书注入条目删除链路 [33m 768[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m删除与清理面板可以保存自动保留本地数据层数 [33m 929[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m模板覆盖最新层数据会先同步当前聊天生效模板再执行覆盖链路 [33m 902[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m备份与恢复面板导出合并配置和 JSON 数据使用普通按钮 [33m 850[2mms[22m[39m
+   [33m[2m✓[22m[39m DataMgmtPage[2m > [22m全页只保留删除所有本地数据为红色危险按钮 [33m 860[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/import/import-flow-store.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 297[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-info-banner.test.ts [2m([22m[2m12 tests[22m[2m)[22m[33m 316[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/table/use-table-template-presets.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 233[2mms[22m[39m
+ [32m✓[39m tests/presentation/custom-confirm.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 100[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/visualizer/open-visualizer-surface.test.ts [2m([22m[2m17 tests[22m[2m)[22m[33m 18341[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m外部调用会打开 v2 shell 并进入 visualizer surface，关闭后隐藏 shell [33m 3967[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22mv2 已打开时进入 visualizer，关闭后恢复进入前页面 [33m 813[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m安装独立 v2 全局接口：未打开时忽略，打开后记录刷新请求 [33m 787[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m载入当前数据后可编辑卡片并拦截 dirty 关闭 [33m 1358[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m新增行后保留数据工作区滚动位置 [33m 987[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m删除行确认弹层挂到 v2 根节点，确认后才修改草稿 [33m 1139[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m数据卡片单元格输入跨布局阈值时保持 textarea 焦点 [33m 1236[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m大表数据区只渲染当前页，单元格点击后才挂载 textarea [33m 1534[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m窄宽度分页只显示当前页相邻一页，保留跳转输入框在同一组 [33m 1028[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m数据卡片按表格字段顺序布局，仅连续两个短字段双列显示 [33m 720[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m可进入结构参数和数据库管理面板 [33m 1145[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m移动端数据库导航使用侧抽屉选择表并自动收起 [33m 1056[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m可进入 AI 助手面板且不展示额外常驻提示 [33m 841[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m编码索引自动编号以可配置开关展示，但不禁用手动输入框 [33m 1046[2mms[22m[39m
+   [33m[2m✓[22m[39m openVisualizerSurface_ACU[2m > [22m切换表格时会把当前导航项滚入可见区域 [33m 672[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/api/api-preset-store.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 220[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/form-fill/form-fill-page.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 18774[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage[2m > [22m渲染填表工作台的状态、自动更新、表格模板与手动填表面板 [33m 3742[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage[2m > [22m标签筛选里的 tableEdit 解析开关会保存设置 [33m 796[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage[2m > [22m每个主页面板都渲染常驻说明信息条 [33m 812[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage[2m > [22m填表 API 预设下拉的跟随项显示当前活动 API 预设名 [33m 769[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage[2m > [22m高级参数中的触发条件数字字段会归一化并保存 settings [33m 1158[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage[2m > [22m自动更新设置选项会写入更新间隔与保留最新层字段 [33m 943[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage[2m > [22m高级参数可编辑自动更新字段和触发条件字段，改成非快捷组合后显示自定义 [33m 987[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage[2m > [22m打开提示词抽屉时不显示其他面板的保存消息 [33m 900[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage[2m > [22m添加排除规则会写入结构化规则 [33m 915[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage[2m > [22m提示词编辑器只在侧抽屉中出现，保存后写回 charCardPrompt [33m 870[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage[2m > [22m关闭有未保存修改的提示词抽屉会确认 [33m 739[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage[2m > [22m提示词抽屉有未保存修改时关闭整个 UI 会确认 [33m 717[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage · 手动填表面板[2m > [22m渲染手动填表面板和常驻说明信息条，运行配置不混入手动面板 [33m 661[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage · 手动填表面板[2m > [22m手动参数保存到独立字段，不改自动更新设置 [33m 959[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage · 手动填表面板[2m > [22m执行手动填表时临时把独立参数桥接给 service，结束后恢复自动更新设置 [33m 747[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage · 手动填表面板[2m > [22m执行手动填表会把已选表传给 service 编排，空附加要求不传入额外内容 [33m 901[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage · 手动填表面板[2m > [22m手动填表展示 orchestrator 的具体进度文案，不把分组数显示成重试次数 [33m 888[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage · 手动填表面板[2m > [22m手动填表进度 toast 提供终止按钮并触发中止链路 [33m 678[2mms[22m[39m
+   [33m[2m✓[22m[39m FormFillPage · 手动填表面板[2m > [22m手动填表附加要求常驻显示，填写后传给本次执行 [33m 587[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-preset-dropdown.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 176[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/dashboard/dashboard-page.test.ts [2m([22m[2m22 tests[22m[2m)[22m[33m 19895[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m默认渲染运行概览和基础开关；header 不再有 subtitle / 刷新按钮 / API 三件套 [33m 3735[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m未加载聊天时表格更新和 SQL 模式使用白色提示，不显示黄色警告 [33m 679[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22mSQLite 存储开启且表格模板适配时显示模板适配 [33m 721[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22mSQLite 存储开启但表格模板不完整时提示去表格模板补齐 [33m 756[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m原生 JSON 存储但表格模板包含 SQL 信息时默认显示中性说明 [33m 717[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m开发者模式显示原生 JSON 下的 SQL 模板诊断 [33m 834[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22mAPI 未配置时健康面板第一项给出最高优先级提醒并可跳到 API 页 [33m 970[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22mAPI 健康追踪 API 页当前预设，而不是填表专用 API [33m 844[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m运行日志报错会在健康面板解释并统一跳转高级工具 [33m 937[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m运行日志 Warn 计数默认隐藏，仅开发者模式显示 [33m 1574[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m交火模式开启但向量模型缺失时显示独立提醒 [33m 703[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m修改自动填表开关会保存 settings [33m 649[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m切换到高级设置后显示高级开关、存储模式选择与开发者总开关 [33m 682[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m修改流式输出开关会保存 settings [33m 1004[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m高级设置里的存储模式选择会切换到 SQLite [33m 768[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m关闭 v2 后清空 toast，重开不显示旧通知 [33m 767[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m存储模式切换失败时写日志并显示短 toast [33m 828[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m高级设置承载功能页开关，并控制对应一级页可见性 [33m 778[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22mmaxRetries=49 时在外部导入下方显示正文替换开关，开启后才显示页面并启用功能 [33m 670[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m条件模板功能不再显示开关，并在刷新时保持开启 [33m 581[2mms[22m[39m
+   [33m[2m✓[22m[39m DashboardPage[2m > [22m开发者总开关会写入 dev-options 持久化 [33m 685[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/plot/plot-page.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 20147[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m渲染主区头部与状态行，header 不再放启用 toggle [33m 3922[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m开发者选项关闭时，编辑抽屉不渲染"匹配替换"字段 [33m 1005[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m开发者选项开启时，在编辑抽屉渲染"匹配替换"字段（含 5 个数字字段） [33m 966[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m任务 API 区域不暴露开发编号和 fallback 术语 [33m 982[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m编辑预设抽屉的任务提示词段提供图标式上移和下移按钮 [33m 1028[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m编辑预设抽屉包含标签筛选，并将规则保存进预设 [33m 1548[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m每个 AcuPanel 都附常驻说明信息条（D22.5） [33m 835[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m剧情推进 API 预设下拉默认空选项 = "跟随当前活动"，并列出 apiStore 预设 [33m 849[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m点击"管理预设"按钮打开抽屉并显示已有预设 [33m 748[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m剧情推进预设下拉直接使用 AcuPresetDropdown，显示任务数并支持切换与星标 [33m 763[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m剧情推进预设下拉支持选择默认预设，并可将默认预设设为全局默认 [33m 871[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m当前为默认预设时主编辑按钮会从默认新建 [33m 832[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m管理抽屉从默认新建时使用内置默认任务初始化，并可保存为自定义预设 [33m 1136[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m面板导入按钮会导入为预设并切换当前聊天使用 [33m 780[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m世界书选择器列出宿主世界书名 + character sentinel [33m 795[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m世界书条目列表渲染可见条目并过滤数据库生成条目 [33m 993[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m世界书条目区域渲染"全选"和"全不选"按钮 [33m 764[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m世界书条目区域渲染搜索过滤输入框 [33m 608[2mms[22m[39m
+   [33m[2m✓[22m[39m PlotPage[2m > [22m首次加载时 enabledEntries 持久化可见条目 uid [33m 711[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-segmented-control.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 77[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-drawer.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 291[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-mobile-panel-nav.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 68[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-textarea.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 75[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/form-fill/use-form-fill-worldbook-entries.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 233[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/router/router-store.test.ts [2m([22m[2m26 tests[22m[2m)[22m[33m 20323[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · pageRegistry 基线[2m > [22m注册表恰好 13 项，分布于 5 分组 [33m 3206[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · pageRegistry 基线[2m > [22m一级页名称与分组顺序符合手动触发 / 配置归属 [33m 506[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 基础模式默认可见性[2m > [22m未持久化时默认进入基础配置页，sidebar 只显示基础配置 [33m 621[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 基础模式默认可见性[2m > [22m基础模式拒绝切到高手模式页面 [33m 665[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 高手模式可见性[2m > [22m正文替换默认隐藏（featureGate 未开） [33m 705[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 高手模式可见性[2m > [22m高级工具始终可见，SQL 可用性由页内面板处理 [33m 643[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 高手模式可见性[2m > [22m初始化时从当前 settings 读取 SQLite 模式，但不再影响高级工具可见性 [33m 730[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 高手模式可见性[2m > [22m正文替换 featureGate 打开后出现在可见列表 [33m 806[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 高手模式可见性[2m > [22m初始化时 maxRetries=49 但开关未开，仍隐藏正文替换页 [33m 725[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 高手模式可见性[2m > [22m初始化时 maxRetries=49 且正文替换开关用户偏好为开，显示正文替换页 [33m 849[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 高手模式可见性[2m > [22m初始化时非 49 会隐藏正文替换页并自动禁用旧 enabled 状态 [33m 672[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 高手模式可见性[2m > [22mvisiblePagesByGroup 在高手模式默认状态下：overview=1 / config=4 / feature=2 / tool=2 / developer=0 [33m 842[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 高手模式可见性[2m > [22m智能续写、外部导入、交火模式都关闭时功能分组为空 [33m 667[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 高手模式可见性[2m > [22mdeveloper 一级页随 developerOptionsEnabled 切换可见性（plan §D24） [33m 616[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 切页 + 持久化[2m > [22m未持久化时默认页是 basic-config [33m 641[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 切页 + 持久化[2m > [22m高手模式未持久化路由时默认页是 dashboard [33m 616[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 切页 + 持久化[2m > [22mlocalStorage 中已有合法 id 时使用持久化值 [33m 787[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 切页 + 持久化[2m > [22m旧 SQL 控制台持久化路由会迁移到高级工具 [33m 884[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 切页 + 持久化[2m > [22m旧运行日志持久化路由会迁移到高级工具 [33m 551[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 切页 + 持久化[2m > [22m未知 id 落回默认页 [33m 753[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 切页 + 持久化[2m > [22msetActivePage 写入 localStorage [33m 719[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 切页 + 持久化[2m > [22m剧情推进、智能续写、外部导入与交火模式按功能开关控制一级页可见性 [33m 680[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 切页 + 持久化[2m > [22msetActivePage 拒绝切到不可见页 [33m 539[2mms[22m[39m
+   [33m[2m✓[22m[39m router-store · 切页 + 持久化[2m > [22m切换 SQLite 模式不会让高级工具页变成不可见 [33m 560[2mms[22m[39m
+   [33m[2m✓[22m[39m root-shell-store · close 行为（P0-6）[2m > [22mrequestOpenRefresh 累加打开刷新 tick [33m 593[2mms[22m[39m
+   [33m[2m✓[22m[39m root-shell-store · close 行为（P0-6）[2m > [22mrequestScrollReset 累加 tick [33m 742[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-file-button.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 127[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/visualizer/use-visualizer-save.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 69[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/worldbook-entry-toolbar.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 58[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-input.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 130[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/worldbook-selector.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 82[2mms[22m[39m
+ [32m✓[39m tests/shared/runtime-env.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m tests/presentation/template-preset-ui.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 59[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-choice-controls.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-message.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/worldbook-entry-list.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-panel-grid.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 33[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/components/acu-text.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/api/api-preset-management.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m tests/presentation-v2/stores/dialog-store.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+
+[2m Test Files [22m [1m[31m8 failed[39m[22m[2m | [22m[1m[32m148 passed[39m[22m[90m (156)[39m
+[2m      Tests [22m [1m[31m14 failed[39m[22m[2m | [22m[1m[32m3047 passed[39m[22m[90m (3061)[39m
+[2m   Start at [22m 14:07:34
+[2m   Duration [22m 31.19s[2m (transform 20.13s, setup 0ms, collect 32.27s, tests 230.52s, environment 103.76s, prepare 30.01s)[22m
+

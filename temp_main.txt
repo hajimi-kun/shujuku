@@ -1,0 +1,200 @@
+e26a76b Merge pull request #14 from zero15498/ui-v2/spv3.9.8.1
+a733a76  chore: archive analysis cache for spv3.9.9 release
+16162b7  chore: release spv3.9.9
+35f8a09 Merge tag 'spv3.9.8.1' into ui-v2/spv3.9.5
+0b8c5e9 fix:修复弹窗表现
+11a9ef5 兼容火狐
+2f74398 release: build js and publish spv3.9.8.1
+324c319 release: build js and publish spv3.9.8
+0d5f6e0 release: build js and publish spv3.9.7
+7f5d0b2 release: build js and publish spv3.9.6
+c64e357 build: merge spv3.9.5 and strip UI v2 scoped CSS markers
+ea5f638 release: build js and publish spv3.9.5
+998b5ce release: build js and publish spv3.9.4
+8f92c4e fix(table): filter noop tracking keys in delta and sync build artifacts
+9fca1ca fix(table): merge same-floor multi-group saves
+080b705 feat(table): delta+checkpoint storage rollout and integration coverage
+0d87e2e fix: syncAllSettingsToUI_ACU 补充 bodyParams/excludeBodyParams/requestHeaders 回填 + rebuild
+ccefafc Merge pull request #12 from zero15498/fix/ui-v2-spv3.8.4
+6fd4520 fix:修复文字颜色被sillytavern主题影响的问题
+54425dc feature:默认隐藏旧UI
+1590282 fix:修复编辑depth和order后无法保存的问题
+e201e44 Merge tag 'spv3.8.5' into fix/ui-v2-spv3.8.4
+3cdcfe8 优化表格编辑器性能
+5077b54 build: 重新打包 index.js (spv3.8.5)
+bb3ab5c fix: 统一所有请求路径使用buildCustomApiRequestBody_ACU，修复bodyParams附加参数不生效
+1964727 feature:内置地雷色主题
+52bb181 fix:修复按钮颜色被注入样式影响的问题
+db847cb fix:修复可视化编辑器加载大表时卡死
+cd5a0c5 fix:修复编辑列名时输入被打断
+c6253df fix:修复智能续写找不到酒馆输入框
+ff9d28f build: sync userscript bundle to root index.js on every build
+8a20aff fix: bodyParams JSON input support for custom API parameters
+cf7bcbe Merge pull request #11 from zero15498/port/ui-v2-spv3.8.1
+208b6ed port ui v2 to spv3.8.1
+717e40f fix: syncAllSettingsToUI_ACU 补充 rerankInstruction UI 写入 (spv3.8.1)
+29d66e2 feat: 移植 rerank 指令参数 + API 附加 body 参数机制 (spv3.7)
+27b0a9c spv3.6.12: 修复外置向量快照文件名含非法字符导致上传400错误
+368171a spv3.6.10 修复交火向量索引填表完成后外部文件不更新
+6f04bb5 spv3.6.8: 外置向量快照路径加入角色名前缀，方便识别
+72986c6 refactor: 简化外置向量快照路径为仅chatKey，添加旧路径向后兼容 (spv3.6.7)
+8c818f7 fix: 交火模式归档去重 + 消除saving阶段embedding阻塞 + 移除500ms人为延迟 (spv3.6.6)
+9b74314 fix: 填表完成后统一强制应用编码索引列AM序列锁定 (spv3.6.5)
+ae8212d fix: 纪要索引条目内容保护仅在交火门槛达标后生效，未达标时允许普通填表更新 (spv3.6.4)
+9b1aa3d fix: 关键词提示词覆盖改为版本驱动无条件替换，删除签名匹配死代码 (spv3.6.3)
+a8712a6 fix: 恢复函数多候选sourceTableKey防止动态键导致数据丢失 (spv3.6.2)
+a32241c feat: 自动从外部快照恢复丢失的向量索引state (spv3.6.1)
+acd2ee6 fix: 强化关键词提示词强制<keywords>标签+回退提取+一次性覆盖 (spv3.6.0)
+b44b47f fix: 修复单文件快照manifest热缓存始终为0 B (spv3.6)
+c754169 feat: crossfire recent-fixed-inject, keyword tags, default config update, remove health-check buttons (spv3.5.21)
+43eb896 refactor: single-file snapshot overwrite for vector index external storage (spv3.5.20)
+6e5c5f2 fix: separate vectorize from archive, debounce archive triggered by vector data change
+1f41893 fix: bypass flush queue and no-changes skip for direct archive after table refill
+eb68309 fix: flush vector index after table refill
+46c3fd6 fix: persist vector flush checkpoint
+45e15bf fix: add debounced vector flush queue
+90d7520 fix: add legacy vector migration and compatibility
+700644a fix: delete vector files after clearing local index
+8c48ed8 fix: publish bundled entry for vector health check
+d04a45c fix: expose vector health check in table tools
+cf56f79 fix: add vector health checks and safe gc
+c83a6b3 fix: adopt content-addressed vector chunks
+d4f1f09 fix: silence loading warnings during background saves
+00fb319 fix: block settings overwrite during startup load
+d4409f9 fix: reset auto update stop flag after abort
+cbb6aa5 fix: reduce redundant summary vector archives
+35de984 fix: scope summary vector cache stats
+83cc458 fix: restore zero tk summary index disable behavior
+d448dc7 feat: allow zero tk with summary vector index
+7efcfae fix: reuse summary vectors after row order shifts
+844c97d fix: persist summary vector archive only once
+e2b16d2 fix: archive summary vector changes without new embeddings
+fab0559 fix: save summary vector index once after archive
+4df5bfb fix: keep only latest summary vector snapshot
+2f4bf69 fix: retain versioned summary vector snapshots
+06f69b4 fix: version summary vector snapshot files
+13672a4 fix: coalesce summary vector archive uploads
+d3e6997 fix: harden table crud update notifications
+b89b22d fix: serialize summary vector index archive writes
+6adc37b fix: repair summary vector shard checksum drift
+c968823 fix: skip generation when summary vector shards are missing
+41f7e77 fix: invalidate vector cache when external files are missing
+486bcbc fix: restrict vector index scope deletion to current chat
+10f1d08 fix: delete summary vector index files reliably
+2e8bf97 fix: restore plot task api select after preset refresh
+859df05 fix: preserve plot task api overrides on task switching
+20ef177 fix: store plot task api presets globally by task
+9d1584e fix: keep plot task api preset per task
+fc03a1b fix: make plot task api preset global
+6376808 fix: persist plot task api preset and harden table crud api
+e85d5a8 fix: delete summary vector index files by scope
+2d704e2 fix: keep summary vector snapshot scope stable
+e8c11c3 fix: use upload-safe vector index filenames
+e93ce79 fix: preload summary vector cache on chat change
+19df796 fix: use stable vector snapshot files
+a1e5f32 fix: persist summary vector index incrementally
+c8e926c fix: correct vector file cleanup deletion paths
+1361133 release: spv3.3.1
+c4efd20 fix: improve callback diagnostics and vector file deletion
+4ff712e fix: hide merge summary ui
+401d8fe fix: restore regressed plot and manual update behavior
+6f180fe fix: use selected api preset for crossfire keywords
+d9a2d16 fix: populate crossfire keyword api presets
+445f5ac chore: rename crossfire vector ui label
+400ab25 fix: restore manual grouped parallel update
+fdf6e75 fix: restore manual extra hint runtime state
+88c3451 fix: restore auto update tracking gate
+fb908a4 rebuild: replay crossfire vector updates from ad6aa58
+ad6aa58 feat: resume summary vector archive
+1253fa7 feat: limit summary vector archive batches
+1e2e601 feat: add vector keyword prompt prefill
+699d3e4 docs: add spv3.1.2 keyword retry review
+c532996 feat: add vector keyword retry config
+3d9ae28 release: spv3.1.1 vector toggle fixes
+e2aacc5 release: spv3.1 plot global toggle fixes
+8177325 release: spv3.0 frequency gate and vector fixes
+8a367f5 docs: archive spv3 release analysis
+583ee6d release: spv3 vector hybrid crossfire enhancement
+0ec2aa4 chore: reduce vector summary prompt limit to 500tk
+677764f chore: reduce vector archive summary limit
+4b118bd chore: refresh default table template once
+1def591 chore: tune vector memory archive defaults
+bac724a 更新SP·数据库v2.1.3
+d91966d 更新SP·数据库v2.1.2
+e161e4c 更新SP·数据库v2.1.1
+70cff37 更新SP·数据库v2.1
+6e2c387 更新SP·数据库v2.0
+0eddfac 更新SP·数据库v2
+00bb33d 更新SP·数据库v1.7
+575224e 更新SP·数据库v1.6
+4c263c6 更新SP·数据库v1.6
+df950ff 解决 manifest.json 冲突
+54f0bc7 更新SP·数据库v1.5
+00254ec chore: 版本号升级至1.2
+25886fc 更新SP·数据库v1.
+11bbe54 更新SP·数据库v1.1
+5a4a46f 更新SP·数据库v1.0
+d7e2d7f Merge branch 'plus-assistantembeded' into main
+a463fd6 更新SP·数据库v1.0
+71c6cda Merge branch 'main' of https://github.com/AlbusKen/shujuku # Please enter a commit message to explain why this merge is necessary, # especially if it merges an updated upstream into a topic branch. # # Lines starting with '#' will be ignored, and an empty message aborts # the commit.
+1c2898b 更新SP·数据库v1.0
+32fbd72 feat: 支持在模板助手面板配置 maxRounds
+7b8dcab refactor: 收敛到标准 extension 发布链并完善 template assistant 交互
+986f694 chore: 更新插件名为SP·数据库，版本降为1.0
+ab0dc9e chore: 更新插件名为SP·数据库，版本降为1.0
+83b3161 更新SP·数据库v1
+ac0b826 更新星数据库v5.3
+242ccd8 更新星数据库v5.2
+0910fdb 更新星数据库v5.1
+2473b2e fix: 在 getLorebookEntriesByNames_ACU 中添加世界书存在性预验证，消除不存在世界书的 WARN 日志
+5c1dbcf Merge remote-tracking branch 'origin/main'
+d457f98 fix: 世界书注入目标存在性验证——静默跳过不存在的世界书
+730f3d3 更新星数据库v5.0
+d52d435 build: 新增 plus assistantembedded 打包配置
+7852b71 feat: 新增 visualizer assistant 外挂注入层
+e3d029a feat: 新增 visualizer 内嵌 assistant 面板
+0d63044 feat: 新增 visualizer assistant 草稿应用流程
+192524f feat: 新增 template assistant 草稿生成服务
+f8b94e2 feat: 新增 template assistant 编译器与测试
+f9476b1 更新星数据库v5
+69b3173 fix: SQLite模式下数据表头改用DDL英文列名，避免AI用中文属性名写SQL
+4251814 fix: 修复新开聊天第一楼未填表时SQLite表被提前建好的bug
+cc9f1e2 refactor: DDL纯解析函数从data层移至shared层，消除反向调用
+a6833f6 fix: 消除全部3条架构违规(presentation→data跨层引用+service层addEventListener)
+3eb11a0 fix: 8张内置表note提示词列索引从1开始(列0是row_id不显示)
+f7ae08e fix: 原生模式提示词列索引从1开始，与row_id(列0)语义对齐
+a727b2b fix: _ensureTablesFromTemplate 建表时只使用当前聊天模板预设
+5415462 fix: 修复新开卡建表时机——executeQuery不再触发建表
+525c96e fix: 修复全部28条TS类型错误，构建零警告通过
+43f5e9b docs: update syntax reference and table CRUD API
+8d7d838 fix: prevent guide DDL/header from being overwritten by stale chat history data
+9c0728e fix: refactor SQLite runtime DB lifecycle - init on load for existing chats, on-demand table creation for new tables
+401f653 fix: rename current_time to cur_time to avoid SQLite reserved word conflict
+b0671b1 chore: .gitignore 添加 .DS_Store
+fd55430 feat: 完善SQL编写原则+默认表DDL加UNIQUE约束+Note加SQL示例
+6827d9f docs: 更新重构计划 R5 状态为 Phase 1+2+3 全部完成
+afb0aeb feat: R5 Phase 3 组件化 - 新建 component-base.ts 定义 UIComponent_ACU 接口（render/mount/unmount/update） - 改造 table-selector.ts：引入 TableSelectorComponent 类实现 UIComponent_ACU - 消除 manual/import 两个选择器的 ~80 行重复代码 - 保留所有原有导出函数签名作为兼容层，调用方零修改 - 编译零错误
+90592a0 feat: R5 Phase 2 HTML模板化 - 新增 renderOption_ACU/renderStopButton_ACU/renderReoptButton_ACU 模板函数到 html-helpers.ts - 修复 settings-ui-api.ts 4处未转义的 p.name XSS 风险 - 修复 popup-helpers.ts 1处未转义的 preset.name XSS 风险 - 提取 update-trigger.ts/update-process.ts/optimization-ui-overlay.ts 的 stopButton 内联HTML为模板函数 - 提取 optimization-ui-diff.ts 的 reoptButton 内联HTML为模板函数 - 所有用户可控数据的HTML拼接点均已通过 escapeHtml_ACU 转义 - 编译零错误
+d613d89 feat: R2 service层耦合降低 + R5 Phase1 jQuery解耦 - R2: 新建 settings-readers.ts，提取 getCurrentCharSettings/getCurrentWorldbookConfig - R2: 将 buildDefaultContentOptimizationPromptGroup 移至 shared/defaults - R2: 迁移 8 个文件的 import 路径，settings-service 跨子模块依赖从 4 降至 3 - R5 Phase1: 新建 dom-utils.ts 作为 jQuery 唯一引入点 - R5 Phase1: 迁移 28 个 presentation 文件的 jQuery_API_ACU import 到 dom-utils - R5 Phase1: presentation 层零直接 host-api jQuery import（setter 除外） - 编译零错误
+bb86a28 feat: R3 类型安全提升完成 + R2 service层耦合降低 - R3: 开启 noImplicitAny，修复全部 1186 个类型错误（73个文件） - R3: 开启 strictBindCallApply, strictFunctionTypes, noImplicitThis - R2: 提取 settings-readers.ts（纯读取器，从 settings-service 分离） - R2: 将 buildDefaultContentOptimizationPromptGroup_ACU 移至 shared/defaults - R2: 迁移 8 个文件的 getCurrentWorldbookConfig_ACU import 到 settings-readers - R2: settings-service 跨子模块依赖从 4 降至 3，消除对 optimization 的依赖 - 编译零错误
+bc85d86 refactor: R1-R8架构改进 + R3类型安全提升阶段一
+e6c4fde fix: 全量ERROR修复 + 清理门面/孤儿/死代码 + 消除DI反模式
+4fdba0a P4-A：常量/默认值真正搬到shared层（presentation→data 51→30）
+44d9e54 P3完成：service→presentation B类全部清零（service→pres 仅剩3条C/D类re-export）
+3652de4 P3-B继续：import-process搬到presentation层（service→pres 10→7）
+838c653 P3-B继续：Auto Loop编排代码搬到presentation + helpers-remaining清净（service→pres 12→10）
+dc7b0ec P3-B进行中：5个B类文件提取UI副作用（service→pres 18→12）
+cb2f7b4 P3-A：3个A类编排文件搬到presentation层（service→pres 33→18）
+667f8dc P3进行中：toast迁移到service层 + 纯常量迁移到shared（69条违规）
+cb7a597 P2继续：template-preset桥接 + isEntryBlocked + formatPlotScopeUpdatedAt迁移（83条违规）
+34f347f P2进行中：纯逻辑函数桥接 + 状态变量迁移（91/112条违规）
+e7677cd P0+P1完成：state-manager拆分 + data层完全纯化
+34fabc1 阶段7E完成 + TS错误修复 + 架构违规分析
+b69fcb4 阶段10: service→presentation 反向调用清理（部分）
+44502a2 修复 data→service 反向依赖：真正的职责拆分
+587ac05 tasks.md: 阶段9全部打勾 (T170~T182 共13个任务)
+58df028 T180~T181 (9C+9D): helpers-remaining.ts 43处DOM清理 + 全量验证通过
+99968bf T178+T179 (9B完成): admin.ts(0处) + settings-service.ts(0处) DOM清理
+9462a17 tasks.md: 9A全部+9B T176~T177 打勾，剩余T178~T182待继续
+1b7f977 T177 (9B): init.ts DOM清理 — send_textarea读写 + visualizer触发 提取到 presentation
+13c38b8 T176 (9B): import-process.ts DOM清理 — handleTxtImportAndSplit + getImportWorldbookTarget 移到 presentation
