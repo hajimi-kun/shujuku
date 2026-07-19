@@ -456,7 +456,7 @@ describe('usePlotWorldbookAgentControl', () => {
     expect(settings.plotSettings.agentWorldbookControl.enabled).toBe(false);
     expect(settings.plotSettings.agentWorldbookControlSnapshot).toBeUndefined();
     expect(mockSaveSettings).toHaveBeenCalledTimes(2);
-    expect(toast.success).toHaveBeenCalledWith('已清理并初始化 Agent 世界书状态；Agent 模式已关闭，下次使用时会重新初始化。', { muteable: false });
+    expect(toast.success).toHaveBeenCalledWith('已清理 Agent 运行状态并恢复世界书条目；Agent 模式已关闭，世界书范围和 Skill 元数据已保留。', { muteable: false });
   });
 
   it('restore 恢复失败时保留 legacy snapshot，避免丢失恢复依据', async () => {

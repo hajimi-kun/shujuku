@@ -10,6 +10,8 @@ const harness = vi.hoisted(() => ({
   refreshControl: vi.fn(async () => undefined),
   loadEntries: vi.fn(async () => ['AgentBook']),
   refreshWorldbooks: vi.fn(async () => undefined),
+  skillifySelected: vi.fn(async () => true),
+  deselectAllForSkillify: vi.fn(),
 }));
 
 vi.mock('../../../src/presentation-v2/composables/usePlotWorldbookAgentControl', async () => {
@@ -20,7 +22,7 @@ vi.mock('../../../src/presentation-v2/composables/usePlotWorldbookAgentControl',
       refresh: harness.refreshControl,
       setWorldbookScope: harness.setScope,
       toggleWorldbookScopeBook: harness.toggleScopeBook,
-      skillifySelected: vi.fn(async () => false),
+      skillifySelected: harness.skillifySelected,
       syncAgentWorldbookTakeoverAfterSkillChange: vi.fn(async () => true),
     }),
   };
@@ -31,7 +33,8 @@ vi.mock('../../../src/presentation-v2/composables/useAgentWorldbookEntries', asy
     useAgentWorldbookEntries: () => ({
       groups: ref([]), status: ref('success'), error: ref(''),
       loadEntries: harness.loadEntries, toggleSkillifyEntry: vi.fn(), toggleGroupExpanded: vi.fn(),
-      selectAllForSkillify: vi.fn(), deselectAllForSkillify: vi.fn(), getSelectedSkillifyEntries: () => [],
+      selectAllForSkillify: vi.fn(), deselectAllForSkillify: harness.deselectAllForSkillify,
+      getSelectedSkillifyEntries: () => [{ bookName: 'AgentBook', uid: 1 }],
       saveEntrySkillMeta: vi.fn(), deleteEntrySkillMeta: vi.fn(),
     }),
   };
@@ -80,6 +83,29 @@ describe('AgentPage', () => {
     manual!.click();
     await Promise.resolve();
     expect(harness.setScope).toHaveBeenCalledWith('manual');
+
+    app.unmount();
+  });
+
+  it('Skill 化完成后清空选择并立即重新加载当前面板条目', async () => {
+    const Page = (await import('../../../src/presentation-v2/pages/AgentPage.vue')).default;
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const app = createApp(Page);
+    app.mount(el);
+    await Promise.resolve();
+    await Promise.resolve();
+    harness.loadEntries.mockClear();
+
+    const skillifyButton = Array.from(el.querySelectorAll<HTMLButtonElement>('.acu-v2-wb-entry-toolbar .acu-btn'))
+      .find(button => button.textContent?.trim() === '对所选 Skill 化');
+    skillifyButton!.click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(harness.skillifySelected).toHaveBeenCalledWith([{ bookName: 'AgentBook', uid: 1 }]);
+    expect(harness.deselectAllForSkillify).toHaveBeenCalledTimes(1);
+    expect(harness.loadEntries).toHaveBeenCalledTimes(1);
 
     app.unmount();
   });
