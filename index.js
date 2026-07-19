@@ -20332,6 +20332,32 @@ $CONTENT
             return true;
         return ['TavernDB-ACU-', '重要人物条目', '总结条目', '小总结条目'].some(prefix => comment.startsWith(prefix));
     }
+    /**
+     * Keep entries that already have dedicated recall pipelines out of Agent takeover.
+     * Other database exports remain eligible so Agent mode can suppress accidental
+     * native keyword/state-bar triggers and re-inject them only when relevant.
+     */
+    function isAgentSkillifyExcludedLorebookEntry_ACU(entry) {
+        const rawComment = String(entry?.comment || entry?.name || '').trim();
+        const marker = parseExternalCustomTableExportMarker_ACU(rawComment);
+        if (marker && isSummaryOrOutlineTable_ACU(marker.tableName))
+            return true;
+        const comment = rawComment
+            .replace(MARKER_PATTERN_ACU, '')
+            .trim()
+            .replace(/^ACU-\[[^\]]+\]-/, '')
+            .replace(/^外部导入-/, '');
+        if ([
+            'TavernDB-ACU-AgentWorldbookConfig',
+            'TavernDB-ACU-AgentWorldbookSnapshot',
+            'TavernDB-ACU-AgentFinalGenerationGreenlights',
+        ].some(prefix => comment.startsWith(prefix)))
+            return true;
+        // Legacy summary exports may not carry a custom-table marker. Their normal
+        // retrieval pipeline is more precise than Agent's generic worldbook gating.
+        return ['总结条目', '小总结条目', 'TavernDB-ACU-CustomExport-纪要', 'TavernDB-ACU-CustomExport-总结', 'TavernDB-ACU-CustomExport-总体大纲']
+            .some(prefix => comment.startsWith(prefix));
+    }
     function isSplitByRowTable_ACU(tableName, tableData) {
         const matches = Object.values(tableData || {}).filter((table) => table && typeof table === 'object' && String(table.name || '').trim() === String(tableName || '').trim());
         return matches.length === 1 && ensureExportConfigDefaults_ACU(matches[0].exportConfig, tableName).splitByRow === true;
@@ -22015,7 +22041,7 @@ $CONTENT
             return false;
         if (String(entry.type || '').trim().toLowerCase() === 'constant')
             return false;
-        if (isDatabaseGeneratedWorldbookEntryForAgent_ACU(entry))
+        if (isAgentSkillifyExcludedLorebookEntry_ACU(entry))
             return false;
         return true;
     }
