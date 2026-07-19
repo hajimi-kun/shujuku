@@ -174,6 +174,24 @@ describe('extractTableEditInner_ACU', () => {
     expect(result!.mode).toBe('full_last');
   });
 
+  it('useLastPairOnly 忽略前文未闭合的草稿标签', () => {
+    mockSettings = { tableEditLastPairOnly: true };
+    const text = [
+      '<thought>草稿 <tableEdit>',
+      'insertRow(0, {"0": "draft"})',
+      '</thought>',
+      '<tableEdit>',
+      'updateRow(0, 1, {"1": "final"})',
+      '</tableEdit>',
+    ].join('\n');
+
+    const result = extractTableEditInner_ACU(text, { useLastPairOnly: true });
+
+    expect(result).not.toBeNull();
+    expect(result!.inner.trim()).toBe('updateRow(0, 1, {"1": "final"})');
+    expect(result!.mode).toBe('full_last');
+  });
+
   it('HTML 注释中的指令（comment_fallback）', () => {
     const text = '<!-- insertRow(0, {0: "铁剑"}) -->';
     const result = extractTableEditInner_ACU(text, { allowNoTableEditTags: true });
@@ -414,6 +432,25 @@ describe('parseAndApplyTableEdits_ACU — DSL 分支', () => {
     expect(result).toHaveProperty('success');
     // updateRow(0, 1, {"1": "10"}) → content[rowIndex+1][colIndex+1] = content[2][2]
     // rowIndex=1 对应第2行数据行（content[2]），colIndex=1 对应第2列数据列（content[][2]）
+    expect(mockCurrentJsonTableData.sheet_0.content[2][2]).toBe('10');
+  });
+
+  it('最后正式块不受未闭合草稿标签和命令前说明文字污染', () => {
+    mockSettings = { tableEditLastPairOnly: true };
+    const aiResponse = [
+      '<thought>草稿 <tableEdit>',
+      'insertRow(0, {"0": "draft"})',
+      '</thought>',
+      '<tableEdit>',
+      '说明：以下是最终修改',
+      'updateRow(0, 1, {"1": "10"})',
+      '</tableEdit>',
+    ].join('\n');
+
+    const result = parseAndApplyTableEdits_ACU(aiResponse, 'standard');
+
+    expect(result).toHaveProperty('success');
+    expect(mockCurrentJsonTableData.sheet_0.content).toHaveLength(3);
     expect(mockCurrentJsonTableData.sheet_0.content[2][2]).toBe('10');
   });
 

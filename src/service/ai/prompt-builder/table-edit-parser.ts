@@ -30,15 +30,19 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
     const cleaned = normalizeAiResponseForTableEditParsing_ACU(text);
     if (!cleaned) return null;
 
+    const lowerCleaned = cleaned.toLowerCase();
+    const openTag = '<tableedit>';
+    const closeTag = '</tableedit>';
+
     if (useLastPairOnly) {
-      const fullRe = /<tableEdit>([\s\S]*?)<\/tableEdit>/ig;
-      let lastMatch = null;
-      let m;
-      while ((m = fullRe.exec(cleaned)) !== null) {
-        lastMatch = m;
-      }
-      if (lastMatch && typeof lastMatch[1] === 'string') {
-        return { inner: lastMatch[1], cleaned, mode: 'full_last' };
+      const closeIdx = lowerCleaned.lastIndexOf(closeTag);
+      const openIdx = closeIdx >= 0 ? lowerCleaned.lastIndexOf(openTag, closeIdx) : -1;
+      if (openIdx !== -1 && closeIdx > openIdx) {
+        return {
+          inner: cleaned.slice(openIdx + openTag.length, closeIdx),
+          cleaned,
+          mode: 'full_last'
+        };
       }
     } else {
       const fullMatch = cleaned.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i);
@@ -47,9 +51,6 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
       }
     }
 
-    const lowerCleaned = cleaned.toLowerCase();
-    const openTag = '<tableedit>';
-    const closeTag = '</tableedit>';
     const hasOpen = lowerCleaned.includes(openTag);
     const hasClose = lowerCleaned.includes(closeTag);
     const hasAnyTag = hasOpen || hasClose;
@@ -152,12 +153,15 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
         if (!isInJsonBlock && lineContent.includes('//')) lineContent = stripJsonCommentsPreservingStrings_ACU(lineContent).trim();
         if (lineContent === '') return;
 
-        if ((lineContent.startsWith('insertRow') || lineContent.startsWith('deleteRow') || lineContent.startsWith('updateRow')) && !isInJsonBlock) {
+        const startsWithCommand = lineContent.startsWith('insertRow')
+          || lineContent.startsWith('deleteRow')
+          || lineContent.startsWith('updateRow');
+        if (startsWithCommand && !isInJsonBlock) {
             if (commandReconstructor) {
                 commandLines.push(commandReconstructor);
             }
             commandReconstructor = lineContent;
-        } else {
+        } else if (commandReconstructor) {
             commandReconstructor += ' ' + lineContent;
         }
 

@@ -41,7 +41,7 @@ function resolveTableApiPresetOverride_ACU(tableName: any): string {
     return (typeof preset === 'string' && preset.trim()) ? preset.trim() : '';
 }
 import { checkIfFirstTimeInit_ACU, ensureLegacyStorageMigratedBeforeWrite_ACU } from './table-service';
-import { parseAndApplyTableEditsToData_ACU, prepareAIInput_ACU } from '../ai/prompt-builder';
+import { extractTableEditInner_ACU, parseAndApplyTableEditsToData_ACU, prepareAIInput_ACU } from '../ai/prompt-builder';
 import { extractStrictJsonTableFillResponse_ACU } from '../ai/prompt-builder/strict-json-table-fill';
 import { isSqlContent } from '../ai/prompt-builder/table-edit-parser';
 import { buildGuidedBaseDataFromSheetGuide_ACU, getSortedSheetKeys_ACU } from '../template/chat-scope';
@@ -743,10 +743,11 @@ export async function collectGroupFillResponse_ACU(
                 normalizedAiResponse = extracted.normalizedResponse || aiResponse;
                 tableEditText = (extracted.tableEditText || '').trim();
             } else {
-                if (!aiResponse || !aiResponse.includes('<tableEdit>') || !aiResponse.includes('</tableEdit>')) {
+                const extracted = extractTableEditInner_ACU(aiResponse, { allowNoTableEditTags: false });
+                if (!extracted?.inner) {
                     throw new Error('AI响应中未找到完整有效的 <tableEdit> 标签');
                 }
-                tableEditText = (aiResponse.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i)?.[1] || '').trim();
+                tableEditText = extracted.inner.trim();
             }
 
             return { job, success: true, attempt, aiResponse: normalizedAiResponse, tableEditText };
