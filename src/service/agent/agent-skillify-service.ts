@@ -19,7 +19,10 @@ import {
   readAgentWorldbookControlFromWorldbooks_ACU,
   resolveAgentWorldbookScopeBookNames_ACU,
 } from './agent-worldbook-config-meta';
-import { isDatabaseGeneratedLorebookEntry_ACU } from '../worldbook/worldbook-placeholder-classification';
+import {
+  isAgentSkillifyExcludedLorebookEntry_ACU,
+  isDatabaseGeneratedLorebookEntry_ACU,
+} from '../worldbook/worldbook-placeholder-classification';
 
 export interface AgentSkillifyWorldbookEntrySummary_ACU {
   bookName: string;
@@ -131,7 +134,7 @@ export function isDatabaseGeneratedWorldbookEntryForAgent_ACU(entry: Record<stri
 export function isWorldbookEntrySkillifyCandidate_ACU(entry: Record<string, any>): boolean {
   if (!entry || entry.enabled === false) return false;
   if (String(entry.type || '').trim().toLowerCase() === 'constant') return false;
-  if (isDatabaseGeneratedWorldbookEntryForAgent_ACU(entry)) return false;
+  if (isAgentSkillifyExcludedLorebookEntry_ACU(entry)) return false;
   return true;
 }
 

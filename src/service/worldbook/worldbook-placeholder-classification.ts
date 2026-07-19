@@ -1,4 +1,5 @@
 import { ensureExportConfigDefaults_ACU } from './injection-engine-config';
+import { isSummaryOrOutlineTable_ACU } from '../../shared/utils';
 
 export const EXTERNAL_CUSTOM_TABLE_EXPORT_MARKER_VERSION_ACU = 1;
 const MARKER_PATTERN_ACU = /<!--\s*ACU_CUSTOM_TABLE_EXPORT_V1\s+({[\s\S]*?})\s*-->/;
@@ -64,6 +65,34 @@ export function isDatabaseGeneratedLorebookEntry_ACU(entry: Record<string, any>)
   if (!comment || comment.startsWith('TavernDB-ACU-AgentGreenlight')) return false;
   if (['TavernDB-ACU-AgentWorldbookConfig', 'TavernDB-ACU-AgentWorldbookSnapshot', 'TavernDB-ACU-AgentFinalGenerationGreenlights'].some(prefix => comment.startsWith(prefix))) return true;
   return ['TavernDB-ACU-', '重要人物条目', '总结条目', '小总结条目'].some(prefix => comment.startsWith(prefix));
+}
+
+/**
+ * Keep entries that already have dedicated recall pipelines out of Agent takeover.
+ * Other database exports remain eligible so Agent mode can suppress accidental
+ * native keyword/state-bar triggers and re-inject them only when relevant.
+ */
+export function isAgentSkillifyExcludedLorebookEntry_ACU(entry: Record<string, any>): boolean {
+  const rawComment = String(entry?.comment || entry?.name || '').trim();
+  const marker = parseExternalCustomTableExportMarker_ACU(rawComment);
+  if (marker && isSummaryOrOutlineTable_ACU(marker.tableName)) return true;
+
+  const comment = rawComment
+    .replace(MARKER_PATTERN_ACU, '')
+    .trim()
+    .replace(/^ACU-\[[^\]]+\]-/, '')
+    .replace(/^外部导入-/, '');
+
+  if ([
+    'TavernDB-ACU-AgentWorldbookConfig',
+    'TavernDB-ACU-AgentWorldbookSnapshot',
+    'TavernDB-ACU-AgentFinalGenerationGreenlights',
+  ].some(prefix => comment.startsWith(prefix))) return true;
+
+  // Legacy summary exports may not carry a custom-table marker. Their normal
+  // retrieval pipeline is more precise than Agent's generic worldbook gating.
+  return ['总结条目', '小总结条目', 'TavernDB-ACU-CustomExport-纪要', 'TavernDB-ACU-CustomExport-总结', 'TavernDB-ACU-CustomExport-总体大纲']
+    .some(prefix => comment.startsWith(prefix));
 }
 
 export function isSplitByRowTable_ACU(tableName: string, tableData: Record<string, any>): boolean {

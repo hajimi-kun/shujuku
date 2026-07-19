@@ -75,13 +75,13 @@ describe('agent worldbook skillify candidate filtering', () => {
     }));
   });
 
-  it('excludes database-generated TavernDB entries from Agent candidates', () => {
+  it('keeps regular database-generated TavernDB entries as Agent candidates', () => {
     expect(isDatabaseGeneratedWorldbookEntryForAgent_ACU({ comment: 'TavernDB-ACU-ReadableDataTable', keys: ['db'] })).toBe(true);
-    expect(isWorldbookEntrySkillifyCandidate_ACU({ comment: 'TavernDB-ACU-ReadableDataTable', keys: ['db'] })).toBe(false);
+    expect(isWorldbookEntrySkillifyCandidate_ACU({ comment: 'TavernDB-ACU-ReadableDataTable', keys: ['db'] })).toBe(true);
   });
 
-  it('excludes isolated internal database-generated entries', () => {
-    expect(isWorldbookEntrySkillifyCandidate_ACU({ comment: 'ACU-[role-a]-TavernDB-ACU-WrapperStart', keys: ['wrap'] })).toBe(false);
+  it('keeps isolated database-generated entries as Agent candidates', () => {
+    expect(isWorldbookEntrySkillifyCandidate_ACU({ comment: 'ACU-[role-a]-TavernDB-ACU-WrapperStart', keys: ['wrap'] })).toBe(true);
   });
 
   it('keeps external import entries as normal keyword candidates', () => {
@@ -95,10 +95,20 @@ describe('agent worldbook skillify candidate filtering', () => {
     expect(isWorldbookEntrySkillifyCandidate_ACU({ ...importedEntry, type: 'constant' })).toBe(false);
   });
 
-  it('excludes Chinese summary and person database entries', () => {
-    expect(isWorldbookEntrySkillifyCandidate_ACU({ comment: '重要人物条目-张三', keys: ['张三'] })).toBe(false);
-    expect(isWorldbookEntrySkillifyCandidate_ACU({ comment: '外部导入-总结条目-1', keys: ['总结'] })).toBe(true);
+  it('keeps regular generated person entries but excludes dedicated summary recall entries', () => {
+    expect(isWorldbookEntrySkillifyCandidate_ACU({ comment: '重要人物条目-张三', keys: ['张三'] })).toBe(true);
+    expect(isWorldbookEntrySkillifyCandidate_ACU({ comment: '外部导入-总结条目-1', keys: ['总结'] })).toBe(false);
     expect(isWorldbookEntrySkillifyCandidate_ACU({ comment: 'ACU-[role-a]-小总结条目-2', keys: ['小总结'] })).toBe(false);
+  });
+
+  it('excludes marked chronicle exports because they use dedicated recall', () => {
+    const chronicleEntry = {
+      comment: 'TavernDB-ACU-CustomExport-纪要\n<!-- ACU_CUSTOM_TABLE_EXPORT_V1 {"version":1,"kind":"custom_table_export","sheetKey":"sheet_chronicle","tableName":"纪要表","entryName":"纪要","role":"main"} -->',
+      keys: ['状态栏意外关键词'],
+      type: 'keyword',
+    };
+    expect(isDatabaseGeneratedWorldbookEntryForAgent_ACU(chronicleEntry)).toBe(true);
+    expect(isWorldbookEntrySkillifyCandidate_ACU(chronicleEntry)).toBe(false);
   });
 
   it('keeps normal keyed user entries as Agent candidates', () => {
