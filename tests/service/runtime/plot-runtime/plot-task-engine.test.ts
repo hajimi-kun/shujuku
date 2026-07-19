@@ -52,6 +52,7 @@ const {
   mockResolveAgentWorldbookFilterAvailability,
   mockResolvePreTakeoverSnapshot,
   mockIsDatabaseGeneratedLorebookEntry,
+  mockIsAgentSkillifyExcludedLorebookEntry,
   mockResolveGeneratedEntriesForTable,
   mockCapturePlotRuntimeScope,
   mockIsSamePlotRuntimeScope,
@@ -136,6 +137,7 @@ const {
     mockResolveAgentWorldbookFilterAvailability: vi.fn(),
     mockResolvePreTakeoverSnapshot: vi.fn(),
     mockIsDatabaseGeneratedLorebookEntry: vi.fn(),
+    mockIsAgentSkillifyExcludedLorebookEntry: vi.fn(),
     mockResolveGeneratedEntriesForTable: vi.fn(),
     mockCapturePlotRuntimeScope: vi.fn(),
     mockIsSamePlotRuntimeScope: vi.fn(),
@@ -219,6 +221,7 @@ vi.mock('../../../../src/service/worldbook/pipeline', () => ({
 
 vi.mock('../../../../src/service/worldbook/worldbook-placeholder-classification', () => ({
   isDatabaseGeneratedLorebookEntry_ACU: mockIsDatabaseGeneratedLorebookEntry,
+  isAgentSkillifyExcludedLorebookEntry_ACU: mockIsAgentSkillifyExcludedLorebookEntry,
   resolveGeneratedEntriesForTable_ACU: mockResolveGeneratedEntriesForTable,
 }));
 
@@ -401,6 +404,15 @@ beforeEach(() => {
   mockIsDatabaseGeneratedLorebookEntry.mockImplementation((entry: any) => {
     const comment = String(entry?.comment || entry?.name || '');
     return comment.startsWith('TavernDB-ACU-') && !comment.startsWith('外部导入-');
+  });
+  mockIsAgentSkillifyExcludedLorebookEntry.mockImplementation((entry: any) => {
+    const comment = String(entry?.comment || entry?.name || '').trim();
+    return comment.startsWith('TavernDB-ACU-OutlineTable')
+      || comment.startsWith('TavernDB-ACU-CustomExport-纪要')
+      || comment.startsWith('TavernDB-ACU-AgentWorldbook')
+      || comment.startsWith('TavernDB-ACU-AgentFinalGenerationGreenlights')
+      || comment.startsWith('总结条目')
+      || comment.startsWith('小总结条目');
   });
   mockResolveGeneratedEntriesForTable.mockImplementation((entries: any[], tableName: string) => {
     if (tableName !== '关系档案') return [];

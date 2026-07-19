@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildExternalCustomTableExportComment_ACU,
+  isAgentSkillifyExcludedLorebookEntry_ACU,
   isDatabaseGeneratedLorebookEntry_ACU,
   isSplitByRowTable_ACU,
   parseExternalCustomTableExportMarker_ACU,
@@ -50,5 +51,11 @@ describe('worldbook placeholder classification', () => {
       sheet_other: { name: '另一张表', exportConfig: { enabled: true, splitByRow: false, entryName: '关系档案' } },
     };
     expect(resolveGeneratedEntriesForTable_ACU([{ comment: 'TavernDB-ACU-CustomExport-关系档案' }], '人物关系表', ambiguous)).toEqual([]);
+  });
+
+  it('only excludes dedicated summary-style database exports from Agent Skill candidates', () => {
+    expect(isAgentSkillifyExcludedLorebookEntry_ACU({ comment: 'TavernDB-ACU-CustomExport-关系档案-25' })).toBe(false);
+    expect(isAgentSkillifyExcludedLorebookEntry_ACU({ comment: 'TavernDB-ACU-CustomExport-纪要-337' })).toBe(true);
+    expect(isAgentSkillifyExcludedLorebookEntry_ACU({ comment: 'TavernDB-ACU-AgentWorldbookSnapshot' })).toBe(true);
   });
 });
