@@ -350,7 +350,10 @@ describe('agent worldbook takeover native trigger suppression', () => {
     expect(restoreResult.reason).toBe('native_worldbook_trigger_restored');
     expect(restoreResult.restored).toBe(1);
     expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)?.enabled).toBe(true);
-    expect(mockDeleteAgentWorldbookState).toHaveBeenCalledTimes(1);
+    expect(mockDeleteAgentWorldbookState).not.toHaveBeenCalled();
+    expect(mockWriteAgentWorldbookState).toHaveBeenLastCalledWith({
+      snapshot: expect.objectContaining({ active: false, selectionSignature: expect.any(String), books: {} }),
+    });
     expect(getPlotAgentWorldbookSnapshot_ACU().active).toBe(false);
   });
 
@@ -722,7 +725,10 @@ describe('agent worldbook takeover native trigger suppression', () => {
     expect(result.restored).toBe(1);
     expect(result.skipped).toBe(0);
     expect(result.failed).toBe(0);
-    expect(mockDeleteAgentWorldbookState).toHaveBeenCalledTimes(1);
+    expect(mockDeleteAgentWorldbookState).not.toHaveBeenCalled();
+    expect(mockWriteAgentWorldbookState).toHaveBeenLastCalledWith({
+      snapshot: expect.objectContaining({ active: false, selectionSignature, books: {} }),
+    });
     expect(mockStateSnapshot.current.active).toBe(false);
     expect(getPlotAgentWorldbookSnapshot_ACU().active).toBe(false);
   });
@@ -828,7 +834,10 @@ describe('agent worldbook takeover native trigger suppression', () => {
     expect(result.reason).toBe('native_worldbook_trigger_restored');
     expect(result.restored).toBe(1);
     expect(result.skipped).toBe(0);
-    expect(mockDeleteAgentWorldbookState).toHaveBeenCalledTimes(1);
+    expect(mockDeleteAgentWorldbookState).not.toHaveBeenCalled();
+    expect(mockWriteAgentWorldbookState).toHaveBeenLastCalledWith({
+      snapshot: expect.objectContaining({ active: false, selectionSignature, books: {} }),
+    });
     expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({
       enabled: true,
       keys: ['钥匙A'],
@@ -866,7 +875,10 @@ describe('agent worldbook takeover native trigger suppression', () => {
     expect(result.reason).toBe('native_worldbook_trigger_restored');
     expect(result.restored).toBe(1);
     expect(result.skipped).toBe(0);
-    expect(mockDeleteAgentWorldbookState).toHaveBeenCalledTimes(1);
+    expect(mockDeleteAgentWorldbookState).not.toHaveBeenCalled();
+    expect(mockWriteAgentWorldbookState).toHaveBeenLastCalledWith({
+      snapshot: expect.objectContaining({ active: false, selectionSignature, books: {} }),
+    });
     expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({
       enabled: true,
       keys: ['钥匙A'],

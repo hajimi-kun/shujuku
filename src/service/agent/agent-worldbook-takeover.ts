@@ -27,7 +27,6 @@ import {
   stripWorldbookSkillMetaBlock_ACU,
 } from './agent-worldbook-skill-meta';
 import {
-  deleteAgentWorldbookStateEntry_ACU,
   readAgentWorldbookStateFromWorldbooks_ACU,
   resolveAgentWorldbookScopeBookNames_ACU,
   writeAgentWorldbookStateToWorldbook_ACU,
@@ -746,13 +745,29 @@ export async function restoreWorldbookGreenlights_ACU(options: {
   const restoreResult = shouldRestoreSnapshot
     ? await restoreSnapshotEntries_ACU(snapshot)
     : { restored: 0, skipped: 0, failed: 0 };
-  const canCleanupPersistentSnapshot = cleanupMode === 'full' && shouldRestoreSnapshot && restoreResult.skipped === 0 && restoreResult.failed === 0;
+  // Canonical worldbook state entries also store the user's manual scope. Never delete
+  // the whole entry during cleanup, or the next read falls back to character bindings.
+  const canClearPersistentSnapshot = cleanupMode === 'full'
+    && shouldUseWorldbookSnapshot
+    && shouldRestoreSnapshot
+    && restoreResult.skipped === 0
+    && restoreResult.failed === 0;
   const canClearLegacySnapshot = cleanupMode === 'full' && shouldUseLegacySnapshot && restoreResult.skipped === 0 && restoreResult.failed === 0;
   const deletedFinalGreenlights = await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_FINAL_GENERATION_GREENLIGHT_COMMENT_ACU);
   const deletedSnapshots = cleanupMode === 'full' ? await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_WORLDBOOK_SNAPSHOT_COMMENT_ACU) : 0;
-  const deletedStateEntries = canCleanupPersistentSnapshot ? await deleteAgentWorldbookStateEntry_ACU() : 0;
+  let clearedPersistentSnapshot = 0;
+  if (canClearPersistentSnapshot) {
+    try {
+      const stateWrite = await writeAgentWorldbookStateToWorldbook_ACU({
+        snapshot: buildInactiveSnapshot_ACU(selectionSignature),
+      });
+      if (stateWrite.updated) clearedPersistentSnapshot = 1;
+    } catch (error) {
+      logWarn_ACU('[Agent世界书] 清理时无法清空持久化接管快照，已保留状态以便下次恢复。', error);
+    }
+  }
   const legacySnapshotCleared = canClearLegacySnapshot && clearLegacyPlotAgentWorldbookSnapshot_ACU() ? 1 : 0;
-  const cleaned = deletedFinalGreenlights + deletedSnapshots + deletedStateEntries + legacySnapshotCleared;
+  const cleaned = deletedFinalGreenlights + deletedSnapshots + clearedPersistentSnapshot + legacySnapshotCleared;
   const changed = restoreResult.restored + restoreResult.failed + cleaned;
   const shouldKeepSnapshotCache = shouldRestoreSnapshot && (cleanupMode === 'restore_only' || restoreResult.skipped > 0 || restoreResult.failed > 0);
   setPlotAgentWorldbookSnapshot_ACU(shouldKeepSnapshotCache

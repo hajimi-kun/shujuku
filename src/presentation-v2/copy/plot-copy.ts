@@ -56,11 +56,11 @@ export const plotCopy = {
       button: "清理并初始化",
       confirm: {
         title: "清理并初始化 Agent 世界书状态",
-        message: "将先按快照恢复被 Agent 改写的世界书条目状态，关闭 Agent 模式，然后删除 Agent 快照/设置内部条目。下次使用时会重新初始化。",
+        message: "将按快照恢复被 Agent 改写的世界书条目，关闭 Agent 模式并清空运行快照。已选择的世界书范围、Agent 设置和 Skill 元数据会保留。",
         confirmLabel: "确认清理并初始化",
         cancelLabel: "取消",
       },
-      success: () => "已清理并初始化 Agent 世界书状态；Agent 模式已关闭，下次使用时会重新初始化。",
+      success: () => "已清理 Agent 运行状态并恢复世界书条目；Agent 模式已关闭，世界书范围和 Skill 元数据已保留。",
       noop: "没有需要恢复的 Agent 快照或内部状态；Agent 模式已关闭。",
       error: "清理并初始化 Agent 世界书状态失败",
       reasons: {

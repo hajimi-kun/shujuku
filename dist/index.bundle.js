@@ -22877,13 +22877,31 @@ $CONTENT
         const restoreResult = shouldRestoreSnapshot
             ? await restoreSnapshotEntries_ACU(snapshot)
             : { restored: 0, skipped: 0, failed: 0 };
-        const canCleanupPersistentSnapshot = cleanupMode === 'full' && shouldRestoreSnapshot && restoreResult.skipped === 0 && restoreResult.failed === 0;
+        // Canonical worldbook state entries also store the user's manual scope. Never delete
+        // the whole entry during cleanup, or the next read falls back to character bindings.
+        const canClearPersistentSnapshot = cleanupMode === 'full'
+            && shouldUseWorldbookSnapshot
+            && shouldRestoreSnapshot
+            && restoreResult.skipped === 0
+            && restoreResult.failed === 0;
         const canClearLegacySnapshot = cleanupMode === 'full' && shouldUseLegacySnapshot && restoreResult.skipped === 0 && restoreResult.failed === 0;
         const deletedFinalGreenlights = await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_FINAL_GENERATION_GREENLIGHT_COMMENT_ACU);
         const deletedSnapshots = cleanupMode === 'full' ? await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_WORLDBOOK_SNAPSHOT_COMMENT_ACU) : 0;
-        const deletedStateEntries = canCleanupPersistentSnapshot ? await deleteAgentWorldbookStateEntry_ACU() : 0;
+        let clearedPersistentSnapshot = 0;
+        if (canClearPersistentSnapshot) {
+            try {
+                const stateWrite = await writeAgentWorldbookStateToWorldbook_ACU({
+                    snapshot: buildInactiveSnapshot_ACU(selectionSignature),
+                });
+                if (stateWrite.updated)
+                    clearedPersistentSnapshot = 1;
+            }
+            catch (error) {
+                logWarn_ACU('[Agent世界书] 清理时无法清空持久化接管快照，已保留状态以便下次恢复。', error);
+            }
+        }
         const legacySnapshotCleared = canClearLegacySnapshot && clearLegacyPlotAgentWorldbookSnapshot_ACU() ? 1 : 0;
-        const cleaned = deletedFinalGreenlights + deletedSnapshots + deletedStateEntries + legacySnapshotCleared;
+        const cleaned = deletedFinalGreenlights + deletedSnapshots + clearedPersistentSnapshot + legacySnapshotCleared;
         const changed = restoreResult.restored + restoreResult.failed + cleaned;
         const shouldKeepSnapshotCache = shouldRestoreSnapshot && (cleanupMode === 'restore_only' || restoreResult.skipped > 0 || restoreResult.failed > 0);
         setPlotAgentWorldbookSnapshot_ACU(shouldKeepSnapshotCache
@@ -93957,11 +93975,11 @@ Expected function or array of functions, received type ${typeof value}.`
                 button: "清理并初始化",
                 confirm: {
                     title: "清理并初始化 Agent 世界书状态",
-                    message: "将先按快照恢复被 Agent 改写的世界书条目状态，关闭 Agent 模式，然后删除 Agent 快照/设置内部条目。下次使用时会重新初始化。",
+                    message: "将按快照恢复被 Agent 改写的世界书条目，关闭 Agent 模式并清空运行快照。已选择的世界书范围、Agent 设置和 Skill 元数据会保留。",
                     confirmLabel: "确认清理并初始化",
                     cancelLabel: "取消",
                 },
-                success: () => "已清理并初始化 Agent 世界书状态；Agent 模式已关闭，下次使用时会重新初始化。",
+                success: () => "已清理 Agent 运行状态并恢复世界书条目；Agent 模式已关闭，世界书范围和 Skill 元数据已保留。",
                 noop: "没有需要恢复的 Agent 快照或内部状态；Agent 模式已关闭。",
                 error: "清理并初始化 Agent 世界书状态失败",
                 reasons: {
@@ -103615,8 +103633,16 @@ Expected function or array of functions, received type ${typeof value}.`
                     await refreshEntries();
             }
             async function onSkillifySelected() {
-                if (await agentControl.skillifySelected(entries.getSelectedSkillifyEntries()))
+                try {
+                    const completed = await agentControl.skillifySelected(entries.getSelectedSkillifyEntries());
+                    if (completed)
+                        entries.deselectAllForSkillify();
+                }
+                finally {
+                    // Skill 化和接管同步可能分别更新世界书；无论执行结果如何，都重新读取
+                    // 当前范围，避免面板继续展示操作前的条目对象。
                     await refreshEntries();
+                }
             }
             async function onSaveSkill(bookName, uid, draft) {
                 await entries.saveEntrySkillMeta(bookName, uid, draft, 'manual');
@@ -103634,8 +103660,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-agent-page[data-v-ba3c93cd] { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n.acu-v2-agent-page__hint[data-v-ba3c93cd] { margin: 12px 0 0; color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-agent-page__hint strong[data-v-ba3c93cd] { color: var(--acu-text-1); font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-agent-page[data-v-ba3c93cd] { padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/AgentPage.vue#style-0-ba3c93cd");
-    var AgentPage_vue_vue_type_style_index_0_scoped_ba3c93cd_lang = null;
+    injectSfcStyle("\n.acu-v2-agent-page[data-v-76202aa0] { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n.acu-v2-agent-page__hint[data-v-76202aa0] { margin: 12px 0 0; color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-agent-page__hint strong[data-v-76202aa0] { color: var(--acu-text-1); font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-agent-page[data-v-76202aa0] { padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/AgentPage.vue#style-0-76202aa0");
+    var AgentPage_vue_vue_type_style_index_0_scoped_76202aa0_lang = null;
 
     const _hoisted_1$l = { class: "acu-v2-agent-page" };
     const _hoisted_2$j = { class: "acu-v2-agent-page__hint" };
@@ -103707,7 +103733,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		_: 1
 	})]);
     }
-    var AgentPage = /*#__PURE__*/ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-ba3c93cd"]]);
+    var AgentPage = /*#__PURE__*/ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-76202aa0"]]);
 
     function setSendTextareaValue(text) {
         const input = getAcuHostDocument().querySelector('#send_textarea');

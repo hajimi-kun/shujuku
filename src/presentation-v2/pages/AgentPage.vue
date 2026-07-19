@@ -97,7 +97,14 @@ async function onScopeBookToggle(name: string, checked: boolean): Promise<void> 
 }
 
 async function onSkillifySelected(): Promise<void> {
-  if (await agentControl.skillifySelected(entries.getSelectedSkillifyEntries())) await refreshEntries();
+  try {
+    const completed = await agentControl.skillifySelected(entries.getSelectedSkillifyEntries());
+    if (completed) entries.deselectAllForSkillify();
+  } finally {
+    // Skill 化和接管同步可能分别更新世界书；无论执行结果如何，都重新读取
+    // 当前范围，避免面板继续展示操作前的条目对象。
+    await refreshEntries();
+  }
 }
 
 async function onSaveSkill(bookName: string, uid: number, draft: WorldbookSkillDraft): Promise<void> {
