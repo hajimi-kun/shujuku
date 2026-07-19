@@ -12,7 +12,7 @@ import { getPersonaDescription_ACU, getCharDescription_ACU } from '../../../data
 import { capturePlotRuntimeScope_ACU, isSamePlotRuntimeScope_ACU, isTransientLorebookNotFoundError_ACU, summarizePlotRuntimeError_ACU, summarizePlotRuntimeScope_ACU } from './plot-runtime-scope';
 import { buildCombinedWorldbookContentByStrategy_ACU, collectCombinedWorldbookEntriesByStrategy_ACU, createStrictLorebookReadError_ACU, formatCombinedWorldbookEntries_ACU, getLorebookEntriesStrict_ACU, isStrictLorebookReadError_ACU, summarizeStrictLorebookReadError_ACU, type StrictLorebookReadContext_ACU } from '../../worldbook/pipeline';
 import { createPlotWorldbookReadContext_ACU, type PlotWorldbookReadContext_ACU } from './plot-worldbook-read-context';
-import { isDatabaseGeneratedLorebookEntry_ACU, resolveGeneratedEntriesForTable_ACU } from '../../worldbook/worldbook-placeholder-classification';
+import { isAgentSkillifyExcludedLorebookEntry_ACU, isDatabaseGeneratedLorebookEntry_ACU, resolveGeneratedEntriesForTable_ACU } from '../../worldbook/worldbook-placeholder-classification';
 import { escapeRegExp_ACU, hashUserInput_ACU, isEntryBlocked_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, normalizeNonNegativeInteger_ACU, normalizePositiveInteger_ACU, normalizeExcludeRules_ACU, normalizeExtractRules_ACU } from '../../../shared/utils';
 import { ensurePlotTasksCompat_ACU, getPlotPromptContentByIdFromSettings_ACU, normalizePlotTask_ACU, normalizePlotTasks_ACU } from '../../plot/plot-logic';
 import { parseRandomTags_ACU, replaceRandomVariables_ACU, getLatestAIMessageContent_ACU, replaceDbSqlVariables } from '../template-vars';
@@ -24,7 +24,7 @@ import { getPlotFromHistory_ACU, savePlotToLatestMessage_ACU } from './plot-hist
 import { abortableDelay } from '../../../shared/abortable-delay';
 import { runAgentDecisionForPlot_ACU, type AgentDecisionResult_ACU, type AgentWorldbookRef_ACU } from '../../agent/agent-decision-engine';
 import { normalizeAgentContextSettings_ACU } from '../../agent/agent-prompt-template';
-import { getWorldbookEntryKeywordsForSkillify_ACU, isDatabaseGeneratedWorldbookEntryForAgent_ACU } from '../../agent/agent-skillify-service';
+import { getWorldbookEntryKeywordsForSkillify_ACU } from '../../agent/agent-skillify-service';
 import { clearFinalGenerationGreenlights_ACU, resolvePreTakeoverWorldbookSnapshot_ACU, writeFinalGenerationGreenlights_ACU } from '../../agent/agent-worldbook-takeover';
 import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailability_ACU } from '../../agent/agent-worldbook-skill-meta';
 
@@ -56,12 +56,12 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
   function isAgentControlledFinalPromptWorldbookEntry_ACU(entry: Record<string, any>): boolean {
     if (!entry) return false;
     if (String(entry.type || '').trim().toLowerCase() === 'constant') return false;
-    if (isDatabaseGeneratedWorldbookEntryForAgent_ACU(entry)) return false;
+    if (isAgentSkillifyExcludedLorebookEntry_ACU(entry)) return false;
     return getWorldbookEntryKeywordsForSkillify_ACU(entry).length > 0;
   }
 
   function isAgentControlledWorldbookEntryForPlot_ACU(entry: Record<string, any>): boolean {
-    if (!entry || isDatabaseGeneratedWorldbookEntryForAgent_ACU(entry)) return false;
+    if (!entry || isAgentSkillifyExcludedLorebookEntry_ACU(entry)) return false;
     return hasUsableWorldbookSkillMeta_ACU(entry?.comment || entry?.rawComment || entry?.name);
   }
 

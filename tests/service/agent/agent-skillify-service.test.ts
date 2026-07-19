@@ -78,6 +78,12 @@ describe('agent worldbook skillify candidate filtering', () => {
   it('keeps regular database-generated TavernDB entries as Agent candidates', () => {
     expect(isDatabaseGeneratedWorldbookEntryForAgent_ACU({ comment: 'TavernDB-ACU-ReadableDataTable', keys: ['db'] })).toBe(true);
     expect(isWorldbookEntrySkillifyCandidate_ACU({ comment: 'TavernDB-ACU-ReadableDataTable', keys: ['db'] })).toBe(true);
+    expect(isWorldbookEntrySkillifyCandidate_ACU({
+      comment: 'TavernDB-ACU-CustomExport-关系档案-25',
+      enabled: true,
+      type: 'selective',
+      keys: ['艾琳'],
+    })).toBe(true);
   });
 
   it('keeps isolated database-generated entries as Agent candidates', () => {
@@ -109,6 +115,12 @@ describe('agent worldbook skillify candidate filtering', () => {
     };
     expect(isDatabaseGeneratedWorldbookEntryForAgent_ACU(chronicleEntry)).toBe(true);
     expect(isWorldbookEntrySkillifyCandidate_ACU(chronicleEntry)).toBe(false);
+    expect(isWorldbookEntrySkillifyCandidate_ACU({
+      comment: 'TavernDB-ACU-CustomExport-纪要-337',
+      enabled: true,
+      type: 'selective',
+      keys: ['AM0337'],
+    })).toBe(false);
   });
 
   it('keeps normal keyed user entries as Agent candidates', () => {

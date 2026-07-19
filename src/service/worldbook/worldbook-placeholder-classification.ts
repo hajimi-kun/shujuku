@@ -91,7 +91,7 @@ export function isAgentSkillifyExcludedLorebookEntry_ACU(entry: Record<string, a
 
   // Legacy summary exports may not carry a custom-table marker. Their normal
   // retrieval pipeline is more precise than Agent's generic worldbook gating.
-  return ['总结条目', '小总结条目', 'TavernDB-ACU-CustomExport-纪要', 'TavernDB-ACU-CustomExport-总结', 'TavernDB-ACU-CustomExport-总体大纲']
+  return ['总结条目', '小总结条目', 'TavernDB-ACU-OutlineTable', 'TavernDB-ACU-CustomExport-纪要', 'TavernDB-ACU-CustomExport-总结', 'TavernDB-ACU-CustomExport-总体大纲']
     .some(prefix => comment.startsWith(prefix));
 }
 

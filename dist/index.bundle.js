@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SP·数据库 VII
 // @namespace    http://tampermonkey.net/
-// @version      2.0.0
+// @version      8.3.2
 // @description  SillyTavern 数据库自动更新与交火模式索引管理脚本。
 // @author       Cline (AI Assisted)
 // @match        */*
@@ -20355,7 +20355,7 @@ $CONTENT
             return true;
         // Legacy summary exports may not carry a custom-table marker. Their normal
         // retrieval pipeline is more precise than Agent's generic worldbook gating.
-        return ['总结条目', '小总结条目', 'TavernDB-ACU-CustomExport-纪要', 'TavernDB-ACU-CustomExport-总结', 'TavernDB-ACU-CustomExport-总体大纲']
+        return ['总结条目', '小总结条目', 'TavernDB-ACU-OutlineTable', 'TavernDB-ACU-CustomExport-纪要', 'TavernDB-ACU-CustomExport-总结', 'TavernDB-ACU-CustomExport-总体大纲']
             .some(prefix => comment.startsWith(prefix));
     }
     function isSplitByRowTable_ACU(tableName, tableData) {
@@ -25410,12 +25410,12 @@ $CONTENT
             return false;
         if (String(entry.type || '').trim().toLowerCase() === 'constant')
             return false;
-        if (isDatabaseGeneratedWorldbookEntryForAgent_ACU(entry))
+        if (isAgentSkillifyExcludedLorebookEntry_ACU(entry))
             return false;
         return getWorldbookEntryKeywordsForSkillify_ACU(entry).length > 0;
     }
     function isAgentControlledWorldbookEntryForPlot_ACU(entry) {
-        if (!entry || isDatabaseGeneratedWorldbookEntryForAgent_ACU(entry))
+        if (!entry || isAgentSkillifyExcludedLorebookEntry_ACU(entry))
             return false;
         return hasUsableWorldbookSkillMeta_ACU$1(entry?.comment || entry?.rawComment || entry?.name);
     }

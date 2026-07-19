@@ -26,7 +26,7 @@ const ACU_BUILD_VERSION = process.env.ACU_BUILD_VERSION || PACKAGE_VERSION;
 const USER_SCRIPT_BANNER = `// ==UserScript==
 // @name         SP·数据库 VII
 // @namespace    http://tampermonkey.net/
-// @version      2.0.0
+// @version      8.3.2
 // @description  SillyTavern 数据库自动更新与交火模式索引管理脚本。
 // @author       Cline (AI Assisted)
 // @match        */*
