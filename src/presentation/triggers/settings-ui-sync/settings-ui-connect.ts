@@ -1,0 +1,254 @@
+/**
+ * presentation/triggers/settings-ui-sync/settings-ui-connect.ts
+ */
+import { DEFAULT_CHAR_CARD_PROMPT_ACU } from '../../../shared/defaults-json.js';
+import { AUTO_UPDATE_FLOOR_INCREASE_DELAY_ACU } from '../../../shared/defaults';
+import { updateCardUpdateStatusDisplay_ACU } from '../../components/update-status-display';
+import { getCharCardPromptFromUI_ACU, isAutoUpdatingCard_ACU, manualExtraHint_ACU, newMessageDebounceTimer_ACU, renderPromptSegments_ACU, wasStoppedByUser_ACU , _set_isAutoUpdatingCard_ACU, _set_manualExtraHint_ACU, _set_newMessageDebounceTimer_ACU} from '../../components/plot-editors';
+import { showToastr_ACU } from '../../theme/toast';
+import { ACU_TOAST_CATEGORY_ACU } from '../../../shared/constants';
+import { SillyTavern_API_ACU, TavernHelper_API_ACU, toastr_API_ACU, _set_SillyTavern_API_ACU, _set_TavernHelper_API_ACU, _set_jQuery_API_ACU, _set_toastr_API_ACU } from '../../../shared/host-api';
+import { jQuery_API_ACU } from '../../dom-utils';
+import { isExtensionMode, getHostWindow } from '../../../shared/runtime-env';
+import { getChatArray_ACU, saveChatToHost_ACU } from '../../../service/chat/chat-service';
+import { getConnectionManagerProfiles_ACU, fetchAvailableModels_ACU } from '../../../service/ai/ai-service';
+import { getCurrentCharacterFallback_ACU } from '../../../service/host/host-state-service';
+import { NEW_MESSAGE_DEBOUNCE_DELAY_ACU, allChatMessages_ACU, coreApisAreReady_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, lastTotalAiMessages_ACU, settings_ACU , _set_coreApisAreReady_ACU, _set_lastTotalAiMessages_ACU} from '../../../service/runtime/state-manager';
+import { $popupInstance_ACU, $customApiUrlInput_ACU, $customApiKeyInput_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $maxTokensInput_ACU, $temperatureInput_ACU, $apiStatusDisplay_ACU, $charCardPromptSegmentsContainer_ACU, $autoUpdateThresholdInput_ACU, $autoUpdateTokenThresholdInput_ACU, $autoUpdateFrequencyInput_ACU, $updateBatchSizeInput_ACU, $maxConcurrentGroupsInput_ACU, $skipUpdateFloorsInput_ACU, $retainRecentLayersInput_ACU, $tableMaxRetriesInput_ACU, $manualExtraHintCheckbox_ACU } from '../../state/ui-refs';
+import { saveSettingsAndNotify_ACU, loadSettingsAndRefreshUI_ACU } from '../../components/settings-ui-helpers';
+import { checkAutoMergeTrigger_ACU, prepareAutoMergeBatches_ACU, executeAutoMergeBatch_ACU, finalizeAutoMerge_ACU } from '../../../service/summary/merge-logic';
+import { processUpdates_ACU } from '../update-process';
+import { getSortedSheetKeys_ACU } from '../../../service/template/chat-scope';
+import { loadAllChatMessages_ACU } from '../../../service/worldbook/pipeline';
+import { refreshMergedDataAndNotifyWithUI_ACU } from '../../components/pipeline-ui-helpers';
+import { SCRIPT_ID_PREFIX_ACU } from '../../../shared/constants';
+import { escapeHtml_ACU } from '../../../shared/html-helpers';
+import { topLevelWindow_ACU } from '../../../shared/env';
+import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../../shared/utils';
+import { executeContentOptimization_ACU } from '../../components/optimization-ui';
+import { maybeLiftWorldbookSuppression_ACU } from '../../../service/runtime/helpers-remaining';
+import { triggerAutomaticUpdateIfNeeded_ACU } from './settings-ui-trigger';
+import { evaluateNewMessageAction_ACU } from '../../../service/runtime/message-handler';
+
+  export async function fetchModelsAndConnect_ACU() {
+    if (
+      !$popupInstance_ACU ||
+      !$customApiUrlInput_ACU ||
+      !$customApiKeyInput_ACU ||
+      !$customApiModelSelect_ACU ||
+      !$apiStatusDisplay_ACU
+    ) {
+      logError_ACU('加载模型列表失败：UI元素未初始化。');
+      showToastr_ACU('error', 'UI未就绪。');
+      return;
+    }
+    const apiUrl = String($customApiUrlInput_ACU.val() || '').trim();
+    const apiKey = String($customApiKeyInput_ACU.val() || '');
+    if (!apiUrl) {
+      showToastr_ACU('warning', '请输入API基础URL。');
+      $apiStatusDisplay_ACU.text('状态:请输入API基础URL').css('color', 'orange');
+      return;
+    }
+    $apiStatusDisplay_ACU.text('状态: 正在检查API端点状态...').css('color', '#61afef');
+    showToastr_ACU('info', '正在检查自定义API端点状态...');
+
+    try {
+        // [重构] 调用 service 层获取模型列表
+        const result = await fetchAvailableModels_ACU(apiUrl, apiKey);
+
+        if (!result.success) {
+            throw new Error(result.error || '未知错误');
+        }
+
+        const models = result.models!;
+        const currentSelectedModel = settings_ACU.apiConfig.model || '';
+
+        // UI 操作：填充模型下拉列表
+        $customApiModelSelect_ACU.empty().append('<option value="">-- 请选择模型 --</option>');
+        models.forEach((modelName: string) => {
+            const selected = modelName === currentSelectedModel ? ' selected' : '';
+            $customApiModelSelect_ACU.append(`<option value="${escapeHtml_ACU(modelName)}"${selected}>${escapeHtml_ACU(modelName)}</option>`);
+        });
+
+        // 如果之前保存的模型不在列表中，也添加进去
+        if (currentSelectedModel && $customApiModelSelect_ACU.find(`option[value="${escapeHtml_ACU(currentSelectedModel)}"]`).length === 0) {
+            $customApiModelSelect_ACU.append(`<option value="${escapeHtml_ACU(currentSelectedModel)}" selected>${escapeHtml_ACU(currentSelectedModel)} (已保存)</option>`);
+        }
+        showToastr_ACU('success', `模型列表加载成功！共加载 ${models.length} 个模型。`);
+    } catch (error) {
+      logError_ACU('加载模型列表时出错:', error);
+      showToastr_ACU('error', `加载模型列表失败: ${error.message}`);
+      $apiStatusDisplay_ACU.text(`状态: 加载模型失败 - ${error.message}`).css('color', '#ff6b6b');
+    }
+    updateApiStatusDisplay_ACU();
+  }
+  export function updateApiStatusDisplay_ACU() {
+    if (!$popupInstance_ACU || !$apiStatusDisplay_ACU) return;
+    if (settings_ACU.apiConfig.url && settings_ACU.apiConfig.model)
+      $apiStatusDisplay_ACU.html(
+        `当前URL: <span style="color:lightgreen;word-break:break-all;">${escapeHtml_ACU(
+          settings_ACU.apiConfig.url,
+        )}</span><br>已选模型: <span style="color:lightgreen;">${escapeHtml_ACU(settings_ACU.apiConfig.model)}</span>`,
+      );
+    else if (settings_ACU.apiConfig.url)
+      $apiStatusDisplay_ACU.html(
+        `当前URL: ${escapeHtml_ACU(settings_ACU.apiConfig.url)} - <span style="color:orange;">请加载并选择模型</span>`,
+      );
+    else $apiStatusDisplay_ACU.html(`<span style="color:#ffcc80;">未配置自定义API。数据库更新功能可能不可用。</span>`);
+  }
+  export function attemptToLoadCoreApis_ACU() {
+    // 根据运行模式选择宿主窗口
+    const hostWin: any = getHostWindow();
+    const mode = isExtensionMode() ? '插件' : '油猴脚本';
+    logDebug_ACU(`[CoreAPI] 运行模式: ${mode}, hostWin === window: ${hostWin === window}`);
+
+    // ═══════════════════════════════════════════════════════════════
+    // 插件模式特殊处理：主窗口的 window.SillyTavern 只有 {libs, getContext}
+    // 所有真正的 API（chatId/eventSource/eventTypes/chat/saveChat 等）必须通过
+    // SillyTavern.getContext() 才能拿到，而且 getContext() 返回的是"当前快照"，
+    // 属性值会随酒馆状态变化。所以用 Proxy 包装：每次属性读取都重新调用 getContext()
+    // 取最新快照，这样既不用改所有消费者代码，又保证读到最新值。
+    //
+    // 油猴脚本模式下，iframe 的 window.SillyTavern 本身就是扁平化的 API 对象
+    // （由酒馆助手封装），保持原样直接赋值。
+    // ═══════════════════════════════════════════════════════════════
+    let stApi: any;
+    if (isExtensionMode()) {
+      const rawST = hostWin.SillyTavern || (window as any).SillyTavern;
+      if (rawST && typeof rawST.getContext === 'function') {
+        // Proxy：每次属性读取都通过 getContext() 拿当前快照
+        stApi = new Proxy({}, {
+          get(_target, prop: string | symbol) {
+            try {
+              const ctx = rawST.getContext();
+              if (!ctx) return undefined;
+              return (ctx as any)[prop as any];
+            } catch (e) {
+              // getContext 抛异常时静默返回 undefined，让调用方的空值检查生效
+              return undefined;
+            }
+          },
+          has(_target, prop: string | symbol) {
+            try {
+              const ctx = rawST.getContext();
+              return !!ctx && (prop as any) in (ctx as any);
+            } catch (e) {
+              return false;
+            }
+          },
+        });
+        logDebug_ACU('[CoreAPI] 插件模式：已用 Proxy 包装 SillyTavern API（每次读取都走 getContext()）');
+      } else {
+        // getContext 不存在，降级为直接使用 rawST（避免整个系统崩溃）
+        stApi = rawST;
+        logWarn_ACU('[CoreAPI] 插件模式：SillyTavern.getContext 不可用，降级为直接访问 SillyTavern 对象');
+      }
+    } else {
+      // ═══════════════════════════════════════════════════════════════
+      // 油猴脚本模式：运行在酒馆助手创建的 iframe 中。
+      //
+      // 关键事实：iframe 自身的 window.SillyTavern 是酒馆助手注入的
+      // 扁平化 API 对象（包含 chatId/eventSource/eventTypes 等），
+      // 而 window.parent（hostWin）上的 SillyTavern 只有
+      // {libs, getContext} 骨架，不含业务字段。
+      //
+      // 因此必须优先使用 iframe 自身的对象，把 parent 作为 fallback。
+      // 这与旧版 userscript 的行为一致：
+      //   SillyTavern_API_ACU = typeof SillyTavern !== 'undefined'
+      //     ? SillyTavern : parentWin.SillyTavern;
+      // ═══════════════════════════════════════════════════════════════
+      const iframeST = typeof (window as any).SillyTavern !== 'undefined' ? (window as any).SillyTavern : undefined;
+      const parentST = typeof hostWin.SillyTavern !== 'undefined' ? hostWin.SillyTavern : undefined;
+      // 优先使用 iframe 自身的扁平化 API（含 chatId 等业务字段），
+      // fallback 到 parent 的骨架对象
+      stApi = iframeST || parentST;
+      if (iframeST) {
+        logDebug_ACU('[CoreAPI] 油猴脚本模式：使用 iframe 自身的 SillyTavern 扁平 API');
+      } else if (parentST) {
+        logWarn_ACU('[CoreAPI] 油猴脚本模式：iframe 自身无 SillyTavern，降级使用 parent 的骨架对象（可能缺少 chatId 等字段）');
+      }
+    }
+
+    _set_SillyTavern_API_ACU(stApi);
+    // TavernHelper/jQuery/toastr 同理：优先 iframe 自身，fallback 到 parent
+    const iframeTH = typeof (window as any).TavernHelper !== 'undefined' ? (window as any).TavernHelper : undefined;
+    const parentTH = typeof hostWin.TavernHelper !== 'undefined' ? hostWin.TavernHelper : undefined;
+    _set_TavernHelper_API_ACU(iframeTH || parentTH);
+
+    const iframe$ = typeof (window as any).$ !== 'undefined' ? (window as any).$ : undefined;
+    const parent$ = typeof hostWin.$ !== 'undefined' ? hostWin.$ : undefined;
+    _set_jQuery_API_ACU(iframe$ || parent$);
+
+    _set_toastr_API_ACU((typeof (window as any).toastr !== 'undefined' ? (window as any).toastr : null) || hostWin.toastr || null);
+    _set_coreApisAreReady_ACU(!!(
+      SillyTavern_API_ACU &&
+      TavernHelper_API_ACU &&
+      jQuery_API_ACU &&
+      TavernHelper_API_ACU.getChatMessages &&
+      TavernHelper_API_ACU.getLastMessageId &&
+      TavernHelper_API_ACU.getCurrentCharPrimaryLorebook &&
+      TavernHelper_API_ACU.getLorebookEntries &&
+      typeof TavernHelper_API_ACU.triggerSlash === 'function'
+    ));
+    if (!toastr_API_ACU) logWarn_ACU('toastr_API_ACU is MISSING.');
+    if (coreApisAreReady_ACU) logDebug_ACU('Core APIs successfully loaded/verified for AutoCardUpdater.');
+    else logError_ACU('Failed to load one or more critical APIs for AutoCardUpdater.');
+    return coreApisAreReady_ACU;
+  }
+
+  export async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu') {
+    logDebug_ACU(
+      `New message event (${eventType}) detected for ACU, debouncing for ${NEW_MESSAGE_DEBOUNCE_DELAY_ACU}ms...`,
+    );
+    clearTimeout(newMessageDebounceTimer_ACU);
+    _set_newMessageDebounceTimer_ACU(setTimeout(async () => {
+      // [健全性] 如果用户已经开始对话，则解除"开场白阶段世界书注入抑制"
+      try { maybeLiftWorldbookSuppression_ACU(); } catch (e) {}
+
+      await loadAllChatMessages_ACU();
+
+      const liveChat = getChatArray_ACU();
+
+      // [重构] 调用 service 层的 evaluateNewMessageAction_ACU 进行决策
+      const result = evaluateNewMessageAction_ACU(
+          liveChat,
+          isAutoUpdatingCard_ACU,
+          coreApisAreReady_ACU,
+          wasStoppedByUser_ACU,
+          settings_ACU.contentOptimizationSettings
+      );
+
+      logDebug_ACU(`[NewMessage] Evaluation result: action=${result.action}, reason=${result.reason}`);
+
+      if (result.action === 'skip') {
+          logDebug_ACU(`ACU: ${result.reason}. Skipping.`);
+          return;
+      }
+
+      switch (result.action) {
+          case 'optimize_parallel':
+              logDebug_ACU('[正文优化] 并行模式已启用，正文优化与填表将同时进行...');
+              await Promise.all([
+                  executeContentOptimization_ACU(result.lastMessageIndex!),
+                  triggerAutomaticUpdateIfNeeded_ACU()
+              ]);
+              break;
+
+          case 'optimize_manual':
+              logDebug_ACU('[正文优化] 手动确认模式：等待用户确认后再填表...');
+              await executeContentOptimization_ACU(result.lastMessageIndex!);
+              break;
+
+          case 'optimize_then_update':
+              await executeContentOptimization_ACU(result.lastMessageIndex!);
+              await triggerAutomaticUpdateIfNeeded_ACU();
+              break;
+
+          case 'update_only':
+              await triggerAutomaticUpdateIfNeeded_ACU();
+              break;
+      }
+    }, NEW_MESSAGE_DEBOUNCE_DELAY_ACU));
+  }
+
+  // [重构] 核心触发逻辑：基于独立表格参数的触发检查

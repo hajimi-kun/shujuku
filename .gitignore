@@ -1,0 +1,22 @@
+# spec-kit 本地工具链（不上传 git）
+.codebuddy/
+.specify/
+.limcode/
+
+# Node.js
+node_modules/
+
+# 构建产物
+dist/
+
+# 本地 SillyTavern 参考源码
+SillyTavern-1.13.1/
+
+
+# 本地分析缓存/归档
+.analysis-cache.md
+.analysis-archive/
+.analysis-*.md
+
+# macOS
+.DS_Store
