@@ -202,7 +202,7 @@ export function usePlotWorldbookAgentControl() {
     agentSkillifyPromptSegments.value = clonePromptSegments_ACU(control.agentSkillifyPromptSegments);
   }
 
-  async function refresh(): Promise<void> {
+  async function refresh(options: { reconcileTakeover?: boolean } = {}): Promise<void> {
     const [result, nextSnapshot] = await Promise.all([
       readAgentWorldbookControlFromWorldbooks_ACU(),
       refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU(),
@@ -214,6 +214,10 @@ export function usePlotWorldbookAgentControl() {
     configReason.value = result.reason || '';
     applyControlToRefs(result.control);
     snapshot.value = nextSnapshot;
+    if (options.reconcileTakeover === true && mode.value === 'agent') {
+      await takeoverWorldbookGreenlights_ACU();
+      snapshot.value = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
+    }
   }
 
   async function writeControlPatch(patch: Partial<AgentWorldbookControl_ACU>): Promise<AgentWorldbookControlWriteResult_ACU | null> {

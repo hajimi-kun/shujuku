@@ -83,7 +83,7 @@ async function refreshEntries(): Promise<void> {
 }
 
 async function refreshAll(): Promise<void> {
-  await agentControl.refresh();
+  await agentControl.refresh({ reconcileTakeover: true });
   await worldbook.refresh();
   await refreshEntries();
 }

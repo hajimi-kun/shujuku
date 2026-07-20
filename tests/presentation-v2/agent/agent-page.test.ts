@@ -70,6 +70,7 @@ describe('AgentPage', () => {
     app.mount(el);
     await Promise.resolve();
 
+    expect(harness.refreshControl).toHaveBeenCalledWith({ reconcileTakeover: true });
     expect(el.textContent).toContain('Agent 世界书');
     expect(el.textContent).toContain('Skill 全选');
     const toolbarButtons = Array.from(el.querySelectorAll<HTMLButtonElement>('.acu-v2-wb-entry-toolbar .acu-btn'))

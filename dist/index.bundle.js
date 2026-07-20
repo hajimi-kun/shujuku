@@ -22604,10 +22604,11 @@ $CONTENT
                 if (!hasUsableWorldbookSkillMeta_ACU$1(entry?.comment))
                     continue;
                 const isNormalCandidate = isWorldbookEntrySkillifyCandidate_ACU(entry);
+                const isAlreadyControlled = recoveryUidSetByBook.get(bookName)?.has(String(entry?.uid)) === true;
+                const isUncontrolledDisabledSkill = entry?.enabled === false && !isAlreadyControlled;
                 const isOrphanedDisabledSkill = recoverySnapshot.active === true
-                    && entry?.enabled === false
-                    && !recoveryUidSetByBook.get(bookName)?.has(String(entry?.uid));
-                if (!isNormalCandidate && !isOrphanedDisabledSkill)
+                    && isUncontrolledDisabledSkill;
+                if (!isNormalCandidate && !isUncontrolledDisabledSkill)
                     continue;
                 const snapshotEntry = buildSnapshotEntry_ACU(entry);
                 if (!snapshotEntry)
@@ -103178,7 +103179,7 @@ Expected function or array of functions, received type ${typeof value}.`
             agentDecisionPromptSegments.value = clonePromptSegments_ACU(control.agentDecisionPromptSegments);
             agentSkillifyPromptSegments.value = clonePromptSegments_ACU(control.agentSkillifyPromptSegments);
         }
-        async function refresh() {
+        async function refresh(options = {}) {
             const [result, nextSnapshot] = await Promise.all([
                 readAgentWorldbookControlFromWorldbooks_ACU(),
                 refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU(),
@@ -103190,6 +103191,10 @@ Expected function or array of functions, received type ${typeof value}.`
             configReason.value = result.reason || '';
             applyControlToRefs(result.control);
             snapshot.value = nextSnapshot;
+            if (options.reconcileTakeover === true && mode.value === 'agent') {
+                await takeoverWorldbookGreenlights_ACU();
+                snapshot.value = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
+            }
         }
         async function writeControlPatch(patch) {
             if (!isReady.value) {
@@ -103654,7 +103659,7 @@ Expected function or array of functions, received type ${typeof value}.`
                     : '当前 Agent 世界书范围内无可 Skill 化的条目。';
             }
             async function refreshAll() {
-                await agentControl.refresh();
+                await agentControl.refresh({ reconcileTakeover: true });
                 await worldbook.refresh();
                 await refreshEntries();
             }
@@ -103694,8 +103699,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-agent-page[data-v-76202aa0] { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n.acu-v2-agent-page__hint[data-v-76202aa0] { margin: 12px 0 0; color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-agent-page__hint strong[data-v-76202aa0] { color: var(--acu-text-1); font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-agent-page[data-v-76202aa0] { padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/AgentPage.vue#style-0-76202aa0");
-    var AgentPage_vue_vue_type_style_index_0_scoped_76202aa0_lang = null;
+    injectSfcStyle("\n.acu-v2-agent-page[data-v-00f21dc7] { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n.acu-v2-agent-page__hint[data-v-00f21dc7] { margin: 12px 0 0; color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-agent-page__hint strong[data-v-00f21dc7] { color: var(--acu-text-1); font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-agent-page[data-v-00f21dc7] { padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/AgentPage.vue#style-0-00f21dc7");
+    var AgentPage_vue_vue_type_style_index_0_scoped_00f21dc7_lang = null;
 
     const _hoisted_1$l = { class: "acu-v2-agent-page" };
     const _hoisted_2$j = { class: "acu-v2-agent-page__hint" };
@@ -103767,7 +103772,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		_: 1
 	})]);
     }
-    var AgentPage = /*#__PURE__*/ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-76202aa0"]]);
+    var AgentPage = /*#__PURE__*/ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-00f21dc7"]]);
 
     function setSendTextareaValue(text) {
         const input = getAcuHostDocument().querySelector('#send_textarea');

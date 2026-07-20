@@ -459,10 +459,11 @@ async function collectTakeoverCandidates_ACU(
     for (const entry of entries || []) {
       if (!hasUsableWorldbookSkillMeta_ACU(entry?.comment)) continue;
       const isNormalCandidate = isWorldbookEntrySkillifyCandidate_ACU(entry);
+      const isAlreadyControlled = recoveryUidSetByBook.get(bookName)?.has(String(entry?.uid)) === true;
+      const isUncontrolledDisabledSkill = entry?.enabled === false && !isAlreadyControlled;
       const isOrphanedDisabledSkill = recoverySnapshot.active === true
-        && entry?.enabled === false
-        && !recoveryUidSetByBook.get(bookName)?.has(String(entry?.uid));
-      if (!isNormalCandidate && !isOrphanedDisabledSkill) continue;
+        && isUncontrolledDisabledSkill;
+      if (!isNormalCandidate && !isUncontrolledDisabledSkill) continue;
       const snapshotEntry = buildSnapshotEntry_ACU(entry);
       if (!snapshotEntry) continue;
       // Older builds could drop previous batches from the snapshot after already
