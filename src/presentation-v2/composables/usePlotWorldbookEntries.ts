@@ -13,7 +13,7 @@ import {
   getPlotAgentWorldbookSnapshot_ACU,
 } from '../../service/agent/agent-worldbook-takeover';
 import {
-  parseWorldbookSkillMetaFromComment_ACU,
+  buildWorldbookSkillMetaMapForEntries_ACU,
   stripWorldbookSkillMetaBlock_ACU,
 } from '../../service/agent/agent-worldbook-skill-meta';
 import { logError_ACU } from '../../shared/utils';
@@ -81,6 +81,7 @@ export function usePlotWorldbookEntries() {
 
       for (const bookName of unique) {
         const bookEntries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
+        const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(bookEntries);
         const visibleBookEntries = bookEntries.filter((entry: any) => isWorldbookEntryVisibleForPageUI_ACU(bookName, entry, snapshotEntryIndexByBook));
         const visibleUidSet = new Set(visibleBookEntries.map((entry: any) => String(entry?.uid)));
 
@@ -107,7 +108,7 @@ export function usePlotWorldbookEntries() {
 
         const buildItems = (entries: any[]): WorldbookEntryItem[] => entries.map((entry: any) => {
           const comment = String(entry?.comment || entry?.name || '');
-          const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+          const skillMeta = skillMetaByUid.get(String(entry?.uid)) || null;
           const snapshotEntry = getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry);
           const displayView = buildWorldbookEntryDisplayView_ACU(entry, snapshotEntry);
           return {

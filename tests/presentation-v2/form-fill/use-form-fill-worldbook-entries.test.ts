@@ -39,6 +39,11 @@ async function getComposable(presetConfig?: ReturnType<typeof createWorldbookCon
     getPlotAgentWorldbookSnapshot_ACU: mockGetAgentSnapshot,
   }));
   vi.doMock('../../../src/service/agent/agent-worldbook-skill-meta', () => ({
+    buildWorldbookSkillMetaMapForEntries_ACU: (entries: any[]) => new Map((entries || [])
+      .filter((entry: any) => String(entry.comment || '').includes('ACU_SKILL_META_START'))
+      .map((entry: any) => [String(entry.uid), {
+        description: '已 Skill 化', triggerWhen: '测试触发', tk: 0, updatedBy: 'manual', updatedAt: 1,
+      }])),
     parseWorldbookSkillMetaFromComment_ACU: (comment: unknown) => String(comment || '').includes('ACU_SKILL_META_START')
       ? { description: '已 Skill 化', triggerWhen: '测试触发', tk: 0, updatedBy: 'manual', updatedAt: 1 }
       : null,

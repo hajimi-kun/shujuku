@@ -13,7 +13,7 @@
 import { currentJsonTableData_ACU, pendingFinalGenerationGreenlights_ACU, settings_ACU } from './state-manager';
 import { logDebug_ACU } from '../../shared/utils';
 import { parseRandomTags_ACU, replaceRandomVariables_ACU, parseCalcTags_ACU, parseMaxTags_ACU, parseMinTags_ACU, replaceCalcVariables_ACU, replaceMaxVariables_ACU, replaceMinVariables_ACU, parseIfBlockRecursive_ACU, getLatestAIMessageContent_ACU, replaceDbSqlVariables } from './template-vars';
-import { getPlotFromHistory_ACU, getWorldbookContentForPlot_ACU, getAgentControlledWorldbookEntriesForFinalPrompt_ACU } from './plot-runtime';
+import { getPlotFromHistory_ACU, getWorldbookContentForPlot_ACU, getAgentControlledWorldbookEntriesForFinalPrompt_ACU, getAgentGreenlightWorldbookEntriesForPlot_ACU } from './plot-runtime';
 import { isWorldbookTakeoverActive_ACU } from '../agent/agent-worldbook-takeover';
 
 // ═══ 上下文标签提取/过滤 ═══
@@ -232,6 +232,28 @@ export {
     return totalRemoved;
   }
 
+  function isWorldbookEntryPresentInMessages_ACU(messages: any[], entry: any) {
+    const candidates = buildNativeWorldbookGreenlightRemovalCandidates_ACU(entry);
+    if (candidates.length === 0) return false;
+    for (const message of Array.isArray(messages) ? messages : []) {
+      if (!message || typeof message !== 'object') continue;
+      const allowRawContentOnly = isNativeWorldbookPromptMessage_ACU(message);
+      const texts = typeof message.content === 'string'
+        ? [message.content]
+        : (Array.isArray(message.content)
+          ? message.content
+            .filter((part: any) => part?.type === 'text' && typeof part.text === 'string')
+            .map((part: any) => part.text)
+          : []);
+      for (const text of texts) {
+        if (candidates.some(candidate => (candidate.requiresComment || allowRawContentOnly) && text.includes(candidate.text))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   function buildAgentWorldbookRefKeySet_ACU(refs: any[]) {
     const keySet = new Set<string>();
     for (const ref of Array.isArray(refs) ? refs : []) {
@@ -337,10 +359,6 @@ export {
   export async function handleChatCompletionReady_ACU(data: any) {
     logDebug_ACU('[提示词模板] handleChatCompletionReady_ACU 被调用');
     logDebug_ACU('[提示词模板] settings_ACU?.promptTemplateSettings:', settings_ACU?.promptTemplateSettings);
-    if (!settings_ACU?.promptTemplateSettings?.enabled) {
-      logDebug_ACU('[提示词模板] 功能未启用，跳过处理');
-      return;
-    }
     if (!data || !data.messages || !Array.isArray(data.messages)) {
       return;
     }
@@ -350,19 +368,34 @@ export {
     logDebug_ACU('[提示词模板] 开始处理酒馆提示词...');
     if (shouldHandleAgentWorldbookFinalPrompt) {
       try {
-        const allAgentSkillWorldbookEntries = await getAgentControlledWorldbookEntriesForFinalPrompt_ACU(
-          settings_ACU?.plotSettings || {},
-        );
+        const [allAgentSkillWorldbookEntries, allowedAgentWorldbookEntries] = await Promise.all([
+          getAgentControlledWorldbookEntriesForFinalPrompt_ACU(settings_ACU?.plotSettings || {}),
+          getAgentGreenlightWorldbookEntriesForPlot_ACU(
+            settings_ACU?.plotSettings || {},
+            finalGenerationGreenlights,
+          ),
+        ]);
         const allowedFinalGreenlightKeySet = buildAgentWorldbookRefKeySet_ACU(finalGenerationGreenlights);
-        const entriesToFilter = (Array.isArray(allAgentSkillWorldbookEntries) ? allAgentSkillWorldbookEntries : [])
+        const controlledEntries = Array.isArray(allAgentSkillWorldbookEntries) ? allAgentSkillWorldbookEntries : [];
+        const entriesToFilter = controlledEntries
           .filter(entry => !isAgentWorldbookEntryAllowed_ACU(entry, allowedFinalGreenlightKeySet));
         const filteredNativeCount = filterNativeWorldbookGreenlightsFromMessages_ACU(data.messages, entriesToFilter);
         if (filteredNativeCount > 0) {
           logDebug_ACU('[提示词模板] 已过滤酒馆原生正文世界书绿灯片段，数量:', filteredNativeCount);
         }
+        const entriesToInject = (Array.isArray(allowedAgentWorldbookEntries) ? allowedAgentWorldbookEntries : [])
+          .filter(entry => !isWorldbookEntryPresentInMessages_ACU(data.messages, entry));
+        const injectedMessageCount = injectAgentWorldbookEntriesIntoMessages_ACU(data.messages, entriesToInject);
+        if (injectedMessageCount > 0) {
+          logDebug_ACU('[提示词模板] 已补入 Agent 正文世界书绿灯消息，数量:', injectedMessageCount);
+        }
       } catch (e) {
-        logDebug_ACU('[提示词模板] 运行时 Agent 正文世界书绿灯过滤失败，已跳过本轮过滤:', e);
+        logDebug_ACU('[提示词模板] 运行时 Agent 正文世界书绿灯过滤或补入失败，已跳过本轮接管处理:', e);
       }
+    }
+    if (!settings_ACU?.promptTemplateSettings?.enabled) {
+      logDebug_ACU('[提示词模板] 功能未启用，跳过模板变量处理');
+      return;
     }
     const lastPlotContent = getPlotFromHistory_ACU();
     logDebug_ACU('[提示词模板] $6 最新一层推进数据:', lastPlotContent ? `长度=${lastPlotContent.length}` : '(空)');

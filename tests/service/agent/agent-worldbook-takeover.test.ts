@@ -60,6 +60,15 @@ vi.mock('../../../src/service/agent/agent-skillify-service', () => ({
 }));
 
 vi.mock('../../../src/service/agent/agent-worldbook-skill-meta', () => ({
+  buildWorldbookSkillMetaMapForEntries_ACU: vi.fn((entries: any[]) => {
+    const result = new Map<string, any>();
+    for (const entry of entries || []) {
+      const match = /<!--\s*ACU_SKILL_META_START\s*\n([\s\S]*?)\nACU_SKILL_META_END\s*-->/.exec(String(entry?.comment || ''));
+      if (!match) continue;
+      try { result.set(String(entry.uid), JSON.parse(match[1].trim())); } catch {}
+    }
+    return result;
+  }),
   resolveAgentWorldbookFilterAvailability_ACU: vi.fn(async () => {
     const bookNames = await mockResolveBookNames();
     return bookNames.length === 0

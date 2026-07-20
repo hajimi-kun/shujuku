@@ -15,8 +15,20 @@ async function getComposable(onSkillMetaChanged?: () => Promise<unknown>) {
   vi.doMock('../../../src/service/agent/agent-worldbook-config-meta', () => ({ resolveAgentWorldbookScopeBookNames_ACU: mockResolveScope }));
   vi.doMock('../../../src/service/agent/agent-worldbook-takeover', () => ({ getPlotAgentWorldbookSnapshot_ACU: mockSnapshot }));
   vi.doMock('../../../src/service/agent/agent-worldbook-skill-meta', () => ({
+    buildWorldbookSkillMetaMapForEntries_ACU: (entries: any[]) => new Map((entries || [])
+      .filter((entry: any) => String(entry.comment || '').includes('SKILL'))
+      .map((entry: any) => [String(entry.uid), { description: '已有', triggerWhen: '测试' }])),
+    listWorldbookSkillMetas_ACU: vi.fn(async () => []),
     parseWorldbookSkillMetaFromComment_ACU: (comment: string) => comment.includes('SKILL') ? { description: '已有', triggerWhen: '测试' } : null,
     stripWorldbookSkillMetaBlock_ACU: (comment: string) => comment.replace(' SKILL', ''),
+    normalizeWorldbookSkillMetaDraft_ACU: (draft: any, updatedBy = 'manual') => ({
+      version: 1,
+      description: String(draft.description || '').trim(),
+      triggerWhen: String(draft.triggerWhen || '').trim(),
+      tk: Number(draft.tk || 0),
+      updatedAt: Number(draft.updatedAt || 1),
+      updatedBy: draft.updatedBy || updatedBy,
+    }),
     saveWorldbookEntrySkillMeta_ACU: mockSaveSkill,
     deleteWorldbookEntrySkillMeta_ACU: mockDeleteSkill,
   }));

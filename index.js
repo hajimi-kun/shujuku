@@ -20328,7 +20328,7 @@ $CONTENT
         const comment = normalizeInternalComment_ACU(entry);
         if (!comment || comment.startsWith('TavernDB-ACU-AgentGreenlight'))
             return false;
-        if (['TavernDB-ACU-AgentWorldbookConfig', 'TavernDB-ACU-AgentWorldbookSnapshot', 'TavernDB-ACU-AgentFinalGenerationGreenlights'].some(prefix => comment.startsWith(prefix)))
+        if (['TavernDB-ACU-AgentWorldbookConfig', 'TavernDB-ACU-AgentWorldbookSnapshot', 'TavernDB-ACU-AgentFinalGenerationGreenlights', 'TavernDB-ACU-AgentWorldbookSkillRegistry'].some(prefix => comment.startsWith(prefix)))
             return true;
         return ['TavernDB-ACU-', '重要人物条目', '总结条目', '小总结条目'].some(prefix => comment.startsWith(prefix));
     }
@@ -20351,6 +20351,7 @@ $CONTENT
             'TavernDB-ACU-AgentWorldbookConfig',
             'TavernDB-ACU-AgentWorldbookSnapshot',
             'TavernDB-ACU-AgentFinalGenerationGreenlights',
+            'TavernDB-ACU-AgentWorldbookSkillRegistry',
         ].some(prefix => comment.startsWith(prefix)))
             return true;
         // Legacy summary exports may not carry a custom-table marker. Their normal
@@ -21776,7 +21777,9 @@ $CONTENT
 
     const ACU_SKILL_META_START_ACU = 'ACU_SKILL_META_START';
     const ACU_SKILL_META_END_ACU = 'ACU_SKILL_META_END';
+    const AGENT_WORLDBOOK_SKILL_REGISTRY_COMMENT_ACU = 'TavernDB-ACU-AgentWorldbookSkillRegistry';
     const SKILL_META_BLOCK_PATTERN_ACU = /\n?<!--\s*ACU_SKILL_META_START\s*\n([\s\S]*?)\nACU_SKILL_META_END\s*-->\n?/g;
+    const skillRegistryWriteQueues_ACU = new Map();
     function normalizeCommentText_ACU$1(comment) {
         return typeof comment === 'string' ? comment : '';
     }
@@ -21838,6 +21841,124 @@ $CONTENT
             updatedBy: isValidUpdatedBy_ACU(draft.updatedBy) ? draft.updatedBy : updatedBy,
         };
     }
+    function normalizeStoredSkillMeta_ACU(value) {
+        if (!value || typeof value !== 'object' || Array.isArray(value))
+            return null;
+        const source = value;
+        if (source.uid === null || source.uid === undefined || String(source.uid).trim() === '')
+            return null;
+        const comment = stripWorldbookSkillMetaBlock_ACU(source.comment).trim();
+        if (!comment)
+            return null;
+        const metaSource = source.meta && typeof source.meta === 'object' && !Array.isArray(source.meta)
+            ? source.meta
+            : {};
+        const meta = normalizeWorldbookSkillMetaDraft_ACU(metaSource, isValidUpdatedBy_ACU(metaSource.updatedBy) ? metaSource.updatedBy : 'manual');
+        if (!meta.description && !meta.triggerWhen && !meta.tk)
+            return null;
+        return { uid: source.uid, comment, meta };
+    }
+    function parseWorldbookSkillRegistry_ACU(entries) {
+        const entry = (Array.isArray(entries) ? entries : [])
+            .find(item => String(item?.comment || '').trim() === AGENT_WORLDBOOK_SKILL_REGISTRY_COMMENT_ACU) || null;
+        if (!entry)
+            return { entry: null, skills: [] };
+        try {
+            const raw = JSON.parse(String(entry.content || ''));
+            if (raw.version !== 1 || raw.kind !== 'agent_worldbook_skill_registry' || !Array.isArray(raw.skills)) {
+                return { entry, skills: [] };
+            }
+            const skills = raw.skills.map(normalizeStoredSkillMeta_ACU).filter(Boolean);
+            return { entry, skills };
+        }
+        catch {
+            return { entry, skills: [] };
+        }
+    }
+    function findStoredSkillMetaForEntry_ACU(entry, skills) {
+        const uid = String(entry?.uid ?? '');
+        const comment = stripWorldbookSkillMetaBlock_ACU(entry?.comment || entry?.name).trim();
+        return skills.find(skill => String(skill.uid) === uid)
+            || skills.find(skill => !!comment && skill.comment === comment)
+            || null;
+    }
+    function parseWorldbookSkillMetaFromEntry_ACU(entry, bookEntries = []) {
+        const legacy = parseWorldbookSkillMetaFromComment_ACU(entry?.comment || entry?.name);
+        if (legacy)
+            return legacy;
+        const { skills } = parseWorldbookSkillRegistry_ACU(bookEntries);
+        return findStoredSkillMetaForEntry_ACU(entry, skills)?.meta || null;
+    }
+    function buildWorldbookSkillMetaMapForEntries_ACU(entries) {
+        const result = new Map();
+        const list = Array.isArray(entries) ? entries : [];
+        for (const entry of list) {
+            if (String(entry?.comment || '').trim() === AGENT_WORLDBOOK_SKILL_REGISTRY_COMMENT_ACU)
+                continue;
+            const meta = parseWorldbookSkillMetaFromEntry_ACU(entry, list);
+            if (meta && entry?.uid !== null && entry?.uid !== undefined)
+                result.set(String(entry.uid), meta);
+        }
+        return result;
+    }
+    function runWithSkillRegistryWriteLock_ACU(bookName, operation) {
+        const previous = skillRegistryWriteQueues_ACU.get(bookName) || Promise.resolve();
+        const current = previous.catch(() => undefined).then(() => operation());
+        skillRegistryWriteQueues_ACU.set(bookName, current);
+        void current.finally(() => {
+            if (skillRegistryWriteQueues_ACU.get(bookName) === current)
+                skillRegistryWriteQueues_ACU.delete(bookName);
+        }).catch(() => undefined);
+        return current;
+    }
+    async function persistWorldbookSkillRegistry_ACU(bookName, registryEntry, skills) {
+        const registry = {
+            version: 1,
+            kind: 'agent_worldbook_skill_registry',
+            updatedAt: Date.now(),
+            skills,
+        };
+        const payload = {
+            comment: AGENT_WORLDBOOK_SKILL_REGISTRY_COMMENT_ACU,
+            content: JSON.stringify(registry, null, 2),
+            keys: [],
+            enabled: false,
+            type: 'selective',
+            order: Number.isFinite(Number(registryEntry?.order)) ? Number(registryEntry?.order) : 10001,
+            prevent_recursion: true,
+        };
+        if (registryEntry?.uid !== null && registryEntry?.uid !== undefined) {
+            await setLorebookEntries_ACU(bookName, [{ ...payload, uid: registryEntry.uid }]);
+        }
+        else {
+            await createLorebookEntries_ACU(bookName, [payload]);
+        }
+    }
+    function upsertStoredSkillMeta_ACU(skills, entry, meta) {
+        const comment = stripWorldbookSkillMetaBlock_ACU(entry?.comment || entry?.name).trim();
+        const next = skills.filter(skill => String(skill.uid) !== String(entry.uid) && skill.comment !== comment);
+        next.push({ uid: entry.uid, comment, meta });
+        return next;
+    }
+    async function migrateLegacyWorldbookSkillMetaBlocks_ACU(bookName) {
+        await runWithSkillRegistryWriteLock_ACU(bookName, async () => {
+            const entries = await getLorebookEntries_ACU(bookName);
+            const parsed = parseWorldbookSkillRegistry_ACU(entries);
+            let skills = parsed.skills;
+            const commentPatches = [];
+            for (const entry of entries) {
+                const legacyMeta = parseWorldbookSkillMetaFromComment_ACU(entry?.comment || entry?.name);
+                if (!legacyMeta)
+                    continue;
+                skills = upsertStoredSkillMeta_ACU(skills, entry, legacyMeta);
+                commentPatches.push({ uid: entry.uid, comment: stripWorldbookSkillMetaBlock_ACU(entry.comment) });
+            }
+            if (commentPatches.length === 0)
+                return;
+            await persistWorldbookSkillRegistry_ACU(bookName, parsed.entry, skills);
+            await setLorebookEntries_ACU(bookName, commentPatches);
+        });
+    }
     function buildWorldbookSkillMetaComment_ACU(comment, metaDraft) {
         const meta = normalizeWorldbookSkillMetaDraft_ACU(metaDraft);
         const baseComment = stripWorldbookSkillMetaBlock_ACU(comment);
@@ -21861,40 +21982,60 @@ $CONTENT
         const targetError = validateWorldbookSkillMetaTarget_ACU(bookName, uid);
         if (targetError)
             return { updated: false, reason: targetError };
-        const entries = await getLorebookEntries_ACU(bookName);
-        const entry = findWorldbookEntryByUid_ACU(entries, uid);
-        if (!entry)
-            return { updated: false, reason: '未找到世界书条目' };
-        const meta = normalizeWorldbookSkillMetaDraft_ACU(metaDraft, updatedBy);
-        const nextComment = buildWorldbookSkillMetaComment_ACU(entry.comment, meta);
-        if (nextComment === normalizeCommentText_ACU$1(entry.comment)) {
-            return { updated: false, reason: '世界书 Skill 元数据未变化', entry };
-        }
-        await setLorebookEntries_ACU(bookName, [{ uid: entry.uid, comment: nextComment }]);
-        return { updated: true, entry: { ...entry, comment: nextComment } };
+        return runWithSkillRegistryWriteLock_ACU(bookName, async () => {
+            const entries = await getLorebookEntries_ACU(bookName);
+            const entry = findWorldbookEntryByUid_ACU(entries, uid);
+            if (!entry)
+                return { updated: false, reason: '未找到世界书条目' };
+            const parsed = parseWorldbookSkillRegistry_ACU(entries);
+            const meta = normalizeWorldbookSkillMetaDraft_ACU(metaDraft, updatedBy);
+            const existing = parseWorldbookSkillMetaFromEntry_ACU(entry, entries);
+            const cleanComment = stripWorldbookSkillMetaBlock_ACU(entry.comment);
+            const unchanged = existing
+                && existing.description === meta.description
+                && existing.triggerWhen === meta.triggerWhen
+                && Number(existing.tk || 0) === Number(meta.tk || 0)
+                && existing.updatedBy === meta.updatedBy
+                && cleanComment === normalizeCommentText_ACU$1(entry.comment);
+            if (unchanged)
+                return { updated: false, reason: '世界书 Skill 元数据未变化', entry };
+            const skills = upsertStoredSkillMeta_ACU(parsed.skills, entry, meta);
+            await persistWorldbookSkillRegistry_ACU(bookName, parsed.entry, skills);
+            if (cleanComment !== normalizeCommentText_ACU$1(entry.comment)) {
+                await setLorebookEntries_ACU(bookName, [{ uid: entry.uid, comment: cleanComment }]);
+            }
+            return { updated: true, entry: { ...entry, comment: cleanComment } };
+        });
     }
     async function deleteWorldbookEntrySkillMeta_ACU(bookName, uid) {
         const targetError = validateWorldbookSkillMetaTarget_ACU(bookName, uid);
         if (targetError)
             return { updated: false, reason: targetError };
-        const entries = await getLorebookEntries_ACU(bookName);
-        const entry = findWorldbookEntryByUid_ACU(entries, uid);
-        if (!entry)
-            return { updated: false, reason: '未找到世界书条目' };
-        const currentComment = normalizeCommentText_ACU$1(entry.comment);
-        const nextComment = stripWorldbookSkillMetaBlock_ACU(currentComment);
-        if (nextComment === currentComment) {
-            return { updated: false, reason: '世界书条目没有 Skill 元数据', entry };
-        }
-        await setLorebookEntries_ACU(bookName, [{ uid: entry.uid, comment: nextComment }]);
-        return { updated: true, entry: { ...entry, comment: nextComment } };
+        return runWithSkillRegistryWriteLock_ACU(bookName, async () => {
+            const entries = await getLorebookEntries_ACU(bookName);
+            const entry = findWorldbookEntryByUid_ACU(entries, uid);
+            if (!entry)
+                return { updated: false, reason: '未找到世界书条目' };
+            const parsed = parseWorldbookSkillRegistry_ACU(entries);
+            const cleanComment = stripWorldbookSkillMetaBlock_ACU(entry.comment);
+            const stored = findStoredSkillMetaForEntry_ACU(entry, parsed.skills);
+            const hadLegacy = parseWorldbookSkillMetaFromComment_ACU(entry.comment) !== null;
+            if (!stored && !hadLegacy)
+                return { updated: false, reason: '世界书条目没有 Skill 元数据', entry };
+            const skills = parsed.skills.filter(skill => String(skill.uid) !== String(entry.uid) && skill.comment !== cleanComment);
+            if (parsed.entry)
+                await persistWorldbookSkillRegistry_ACU(bookName, parsed.entry, skills);
+            if (hadLegacy)
+                await setLorebookEntries_ACU(bookName, [{ uid: entry.uid, comment: cleanComment }]);
+            return { updated: true, entry: { ...entry, comment: cleanComment } };
+        });
     }
-    function buildWorldbookSkillMetaReadResult_ACU(bookName, entry) {
+    function buildWorldbookSkillMetaReadResult_ACU(bookName, entry, bookEntries = []) {
         const uid = entry?.uid;
         if (uid === null || uid === undefined || String(uid).trim() === '')
             return null;
         const comment = normalizeCommentText_ACU$1(entry?.comment || entry?.name);
-        const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+        const skillMeta = parseWorldbookSkillMetaFromEntry_ACU(entry, bookEntries);
         if (!skillMeta)
             return null;
         return {
@@ -21913,7 +22054,13 @@ $CONTENT
         const entry = findWorldbookEntryByUid_ACU(entries, uid);
         if (!entry)
             return null;
-        return buildWorldbookSkillMetaReadResult_ACU(bookName, entry);
+        if (parseWorldbookSkillMetaFromComment_ACU(entry.comment)) {
+            await migrateLegacyWorldbookSkillMetaBlocks_ACU(bookName);
+            const migratedEntries = await getLorebookEntries_ACU(bookName);
+            const migratedEntry = findWorldbookEntryByUid_ACU(migratedEntries, uid);
+            return migratedEntry ? buildWorldbookSkillMetaReadResult_ACU(bookName, migratedEntry, migratedEntries) : null;
+        }
+        return buildWorldbookSkillMetaReadResult_ACU(bookName, entry, entries);
     }
     async function getAgentRuntimeLorebookEntries_ACU$1(bookName, readContext) {
         if (!readContext)
@@ -21934,9 +22081,15 @@ $CONTENT
                 .filter(Boolean))];
         const results = [];
         for (const bookName of uniqueBookNames) {
-            const entries = await getAgentRuntimeLorebookEntries_ACU$1(bookName, readContext);
+            let entries = await getAgentRuntimeLorebookEntries_ACU$1(bookName, readContext);
+            if (!readContext && entries.some(entry => parseWorldbookSkillMetaFromComment_ACU(entry?.comment || entry?.name))) {
+                await migrateLegacyWorldbookSkillMetaBlocks_ACU(bookName);
+                entries = await getLorebookEntries_ACU(bookName);
+            }
             for (const entry of Array.isArray(entries) ? entries : []) {
-                const item = buildWorldbookSkillMetaReadResult_ACU(bookName, entry);
+                if (String(entry?.comment || '').trim() === AGENT_WORLDBOOK_SKILL_REGISTRY_COMMENT_ACU)
+                    continue;
+                const item = buildWorldbookSkillMetaReadResult_ACU(bookName, entry, entries);
                 if (item)
                     results.push(item);
             }
@@ -21944,25 +22097,39 @@ $CONTENT
         return results;
     }
     async function clearWorldbookSkillMetaBlocks_ACU(bookNames = []) {
-        const targets = await listWorldbookSkillMetas_ACU(bookNames);
         const result = {
-            total: targets.length,
+            total: 0,
             cleared: 0,
             skipped: 0,
             failed: 0,
             errors: [],
         };
-        for (const target of targets) {
+        const uniqueBookNames = [...new Set((Array.isArray(bookNames) ? bookNames : []).map(name => String(name || '').trim()).filter(Boolean))];
+        for (const bookName of uniqueBookNames) {
             try {
-                const deleteResult = await deleteWorldbookEntrySkillMeta_ACU(target.bookName, target.uid);
-                if (deleteResult.updated)
-                    result.cleared += 1;
-                else
-                    result.skipped += 1;
+                await runWithSkillRegistryWriteLock_ACU(bookName, async () => {
+                    const entries = await getLorebookEntries_ACU(bookName);
+                    const parsed = parseWorldbookSkillRegistry_ACU(entries);
+                    const legacyEntries = entries.filter(entry => parseWorldbookSkillMetaFromComment_ACU(entry?.comment || entry?.name));
+                    const targetKeys = new Set([
+                        ...parsed.skills.map(skill => `${String(skill.uid)}\u0000${skill.comment}`),
+                        ...legacyEntries.map(entry => `${String(entry.uid)}\u0000${stripWorldbookSkillMetaBlock_ACU(entry.comment)}`),
+                    ]);
+                    result.total += targetKeys.size;
+                    if (parsed.entry)
+                        await persistWorldbookSkillRegistry_ACU(bookName, parsed.entry, []);
+                    if (legacyEntries.length > 0) {
+                        await setLorebookEntries_ACU(bookName, legacyEntries.map(entry => ({
+                            uid: entry.uid,
+                            comment: stripWorldbookSkillMetaBlock_ACU(entry.comment),
+                        })));
+                    }
+                    result.cleared += targetKeys.size;
+                });
             }
             catch (error) {
                 result.failed += 1;
-                result.errors.push({ bookName: target.bookName, uid: target.uid, reason: error?.message || '清除 Skill 元数据失败' });
+                result.errors.push({ bookName, uid: '', reason: error?.message || '清除 Skill 元数据失败' });
             }
         }
         return result;
@@ -22045,12 +22212,11 @@ $CONTENT
             return false;
         return true;
     }
-    function buildEntrySummary_ACU(bookName, entry) {
+    function buildEntrySummary_ACU(bookName, entry, existingSkillMeta = null) {
         const rawComment = String(entry?.comment || entry?.name || '').trim();
         const strippedComment = stripWorldbookSkillMetaBlock_ACU(rawComment);
         const comment = strippedComment || String(entry?.name || '').trim();
         const content = String(entry?.content || '').trim();
-        const existingSkillMeta = parseWorldbookSkillMetaFromComment_ACU(rawComment);
         const estimatedTk = estimateTextTk_ACU(content || comment);
         const existingTk = Number(existingSkillMeta?.tk);
         return {
@@ -22208,12 +22374,13 @@ $CONTENT
         const summaries = [];
         for (const bookName of [...new Set(bookNames.map(name => String(name || '').trim()).filter(Boolean))]) {
             const entries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
+            const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(entries);
             for (const entry of entries) {
                 if (!isWorldbookEntrySkillifyCandidate_ACU(entry))
                     continue;
                 if (selectedKeys && !selectedKeys.has(getSkillifySelectionKey_ACU(bookName, entry.uid)))
                     continue;
-                summaries.push(buildEntrySummary_ACU(bookName, entry));
+                summaries.push(buildEntrySummary_ACU(bookName, entry, skillMetaByUid.get(String(entry.uid)) || null));
             }
         }
         const maxEntries = Number.isFinite(Number(options.maxEntries)) && Number(options.maxEntries) > 0
@@ -22599,9 +22766,10 @@ $CONTENT
         const recoveryUidSetByBook = buildSnapshotUidSetByBook_ACU(recoverySnapshot);
         for (const bookName of bookNames) {
             const entries = await getLorebookEntries_ACU(bookName);
+            const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(entries);
             const bookSnapshot = [];
             for (const entry of entries || []) {
-                if (!hasUsableWorldbookSkillMeta_ACU$1(entry?.comment))
+                if (!skillMetaByUid.has(String(entry?.uid)) && !hasUsableWorldbookSkillMeta_ACU$1(entry?.comment))
                     continue;
                 const isNormalCandidate = isWorldbookEntrySkillifyCandidate_ACU(entry);
                 const isAlreadyControlled = recoveryUidSetByBook.get(bookName)?.has(String(entry?.uid)) === true;
@@ -22637,11 +22805,14 @@ $CONTENT
                 continue;
             const currentEntries = await getLorebookEntries_ACU(normalizedBookName);
             const currentByUid = new Map((currentEntries || []).map(entry => [String(entry?.uid), entry]));
+            const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(currentEntries);
             for (const snapshotEntry of entriesToCheck) {
                 if (!hasValidWorldbookUid_ACU(snapshotEntry?.uid))
                     continue;
                 const currentEntry = currentByUid.get(String(snapshotEntry.uid));
-                const stillHasSkillMeta = currentEntry ? hasUsableWorldbookSkillMeta_ACU$1(currentEntry?.comment) : false;
+                const stillHasSkillMeta = currentEntry
+                    ? skillMetaByUid.has(String(snapshotEntry.uid)) || hasUsableWorldbookSkillMeta_ACU$1(currentEntry?.comment)
+                    : false;
                 if (stillHasSkillMeta) {
                     if (!keptBooks[normalizedBookName])
                         keptBooks[normalizedBookName] = [];
@@ -24973,6 +25144,7 @@ $CONTENT
         const allowedKeys = new Set();
         for (const [bookName, snapshotEntries] of Object.entries(snapshot.books || {})) {
             const entries = await getAgentRuntimeLorebookEntries_ACU(bookName, readContext);
+            const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(entries);
             const list = Array.isArray(snapshotEntries) ? snapshotEntries : [];
             for (const snapshotEntry of list) {
                 const uid = snapshotEntry?.uid;
@@ -24982,7 +25154,7 @@ $CONTENT
                 if (!entry)
                     continue;
                 const comment = String(entry.comment || entry.name || '');
-                const meta = parseWorldbookSkillMetaFromComment_ACU(comment);
+                const meta = skillMetaByUid.get(String(uid)) || parseWorldbookSkillMetaFromComment_ACU(comment);
                 const keys = getWorldbookEntryKeywordsForSkillify_ACU(entry);
                 const fallback = hasUsableWorldbookSkillMeta_ACU(meta) ? null : buildFallbackWorldbookSummaryText_ACU(entry, comment, keys);
                 allowedKeys.add(refKey_ACU(bookName, uid));
@@ -27148,6 +27320,29 @@ $CONTENT
         }
         return totalRemoved;
     }
+    function isWorldbookEntryPresentInMessages_ACU(messages, entry) {
+        const candidates = buildNativeWorldbookGreenlightRemovalCandidates_ACU(entry);
+        if (candidates.length === 0)
+            return false;
+        for (const message of Array.isArray(messages) ? messages : []) {
+            if (!message || typeof message !== 'object')
+                continue;
+            const allowRawContentOnly = isNativeWorldbookPromptMessage_ACU(message);
+            const texts = typeof message.content === 'string'
+                ? [message.content]
+                : (Array.isArray(message.content)
+                    ? message.content
+                        .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+                        .map((part) => part.text)
+                    : []);
+            for (const text of texts) {
+                if (candidates.some(candidate => (candidate.requiresComment || allowRawContentOnly) && text.includes(candidate.text))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
     function buildAgentWorldbookRefKeySet_ACU(refs) {
         const keySet = new Set();
         for (const ref of Array.isArray(refs) ? refs : []) {
@@ -27254,10 +27449,6 @@ $CONTENT
     async function handleChatCompletionReady_ACU(data) {
         logDebug_ACU('[提示词模板] handleChatCompletionReady_ACU 被调用');
         logDebug_ACU('[提示词模板] settings_ACU?.promptTemplateSettings:', settings_ACU?.promptTemplateSettings);
-        if (!settings_ACU?.promptTemplateSettings?.enabled) {
-            logDebug_ACU('[提示词模板] 功能未启用，跳过处理');
-            return;
-        }
         if (!data || !data.messages || !Array.isArray(data.messages)) {
             return;
         }
@@ -27267,18 +27458,32 @@ $CONTENT
         logDebug_ACU('[提示词模板] 开始处理酒馆提示词...');
         if (shouldHandleAgentWorldbookFinalPrompt) {
             try {
-                const allAgentSkillWorldbookEntries = await getAgentControlledWorldbookEntriesForFinalPrompt_ACU(settings_ACU?.plotSettings || {});
+                const [allAgentSkillWorldbookEntries, allowedAgentWorldbookEntries] = await Promise.all([
+                    getAgentControlledWorldbookEntriesForFinalPrompt_ACU(settings_ACU?.plotSettings || {}),
+                    getAgentGreenlightWorldbookEntriesForPlot_ACU(settings_ACU?.plotSettings || {}, finalGenerationGreenlights),
+                ]);
                 const allowedFinalGreenlightKeySet = buildAgentWorldbookRefKeySet_ACU(finalGenerationGreenlights);
-                const entriesToFilter = (Array.isArray(allAgentSkillWorldbookEntries) ? allAgentSkillWorldbookEntries : [])
+                const controlledEntries = Array.isArray(allAgentSkillWorldbookEntries) ? allAgentSkillWorldbookEntries : [];
+                const entriesToFilter = controlledEntries
                     .filter(entry => !isAgentWorldbookEntryAllowed_ACU(entry, allowedFinalGreenlightKeySet));
                 const filteredNativeCount = filterNativeWorldbookGreenlightsFromMessages_ACU(data.messages, entriesToFilter);
                 if (filteredNativeCount > 0) {
                     logDebug_ACU('[提示词模板] 已过滤酒馆原生正文世界书绿灯片段，数量:', filteredNativeCount);
                 }
+                const entriesToInject = (Array.isArray(allowedAgentWorldbookEntries) ? allowedAgentWorldbookEntries : [])
+                    .filter(entry => !isWorldbookEntryPresentInMessages_ACU(data.messages, entry));
+                const injectedMessageCount = injectAgentWorldbookEntriesIntoMessages_ACU(data.messages, entriesToInject);
+                if (injectedMessageCount > 0) {
+                    logDebug_ACU('[提示词模板] 已补入 Agent 正文世界书绿灯消息，数量:', injectedMessageCount);
+                }
             }
             catch (e) {
-                logDebug_ACU('[提示词模板] 运行时 Agent 正文世界书绿灯过滤失败，已跳过本轮过滤:', e);
+                logDebug_ACU('[提示词模板] 运行时 Agent 正文世界书绿灯过滤或补入失败，已跳过本轮接管处理:', e);
             }
+        }
+        if (!settings_ACU?.promptTemplateSettings?.enabled) {
+            logDebug_ACU('[提示词模板] 功能未启用，跳过模板变量处理');
+            return;
         }
         const lastPlotContent = getPlotFromHistory_ACU();
         logDebug_ACU('[提示词模板] $6 最新一层推进数据:', lastPlotContent ? `长度=${lastPlotContent.length}` : '(空)');
@@ -101257,6 +101462,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 const result = [];
                 for (const bookName of unique) {
                     const bookEntries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
+                    const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(bookEntries);
                     const visibleBookEntries = bookEntries.filter((entry) => isWorldbookEntryVisibleForPageUI_ACU(bookName, entry, snapshotEntryIndexByBook));
                     const visibleUidSet = new Set(visibleBookEntries.map((entry) => String(entry?.uid)));
                     if (typeof enabledEntries[bookName] === 'undefined') {
@@ -101278,7 +101484,7 @@ Expected function or array of functions, received type ${typeof value}.`
                         : [];
                     const visible = visibleBookEntries.map((entry) => {
                         const comment = String(entry?.comment || entry?.name || '');
-                        const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+                        const skillMeta = skillMetaByUid.get(String(entry?.uid)) || null;
                         const snapshotEntry = getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry);
                         const displayView = buildWorldbookEntryDisplayView_ACU(entry, snapshotEntry);
                         return {
@@ -101891,6 +102097,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 const result = [];
                 for (const bookName of unique) {
                     const bookEntries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
+                    const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(bookEntries);
                     const visibleBookEntries = bookEntries.filter((entry) => isWorldbookEntryVisibleForPageUI_ACU(bookName, entry, snapshotEntryIndexByBook));
                     const visibleUidSet = new Set(visibleBookEntries.map((entry) => String(entry?.uid)));
                     if (typeof cfg.enabledEntries[bookName] === 'undefined') {
@@ -101912,7 +102119,7 @@ Expected function or array of functions, received type ${typeof value}.`
                         : [];
                     const buildItems = (entries) => entries.map((entry) => {
                         const comment = String(entry?.comment || entry?.name || '');
-                        const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+                        const skillMeta = skillMetaByUid.get(String(entry?.uid)) || null;
                         const snapshotEntry = getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry);
                         const displayView = buildWorldbookEntryDisplayView_ACU(entry, snapshotEntry);
                         return {
@@ -102901,15 +103108,19 @@ Expected function or array of functions, received type ${typeof value}.`
                     status.value = 'success';
                     return [];
                 }
-                const entriesByBook = await getLorebookEntriesByNames_ACU(uniqueBookNames);
+                // listWorldbookSkillMetas also migrates legacy comment blocks into the
+                // hidden registry before this panel derives labels and takeover state.
+                await listWorldbookSkillMetas_ACU(uniqueBookNames);
+                const refreshedEntriesByBook = await getLorebookEntriesByNames_ACU(uniqueBookNames);
                 const snapshotUids = buildSnapshotUidSet_ACU();
                 const nextGroups = [];
                 const visibleSelections = new Set();
                 for (const bookName of uniqueBookNames) {
-                    const entries = Array.isArray(entriesByBook[bookName]) ? entriesByBook[bookName] : [];
+                    const entries = Array.isArray(refreshedEntriesByBook[bookName]) ? refreshedEntriesByBook[bookName] : [];
+                    const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(entries);
                     const items = entries.flatMap((entry) => {
                         const comment = String(entry?.comment || entry?.name || '');
-                        const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+                        const skillMeta = skillMetaByUid.get(String(entry?.uid)) || null;
                         if (!isAgentWorldbookEntryVisible_ACU(bookName, entry, skillMeta, snapshotUids)) {
                             return [];
                         }
@@ -102979,8 +103190,7 @@ Expected function or array of functions, received type ${typeof value}.`
         function getSelectedSkillifyEntries() {
             return Array.from(selected.value.values());
         }
-        function updateEntrySkillMetaLocal(bookName, uid, comment) {
-            const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+        function updateEntrySkillMetaLocal(bookName, uid, comment, skillMeta) {
             groups.value = groups.value.map(group => {
                 if (group.bookName !== bookName)
                     return group;
@@ -102994,7 +103204,7 @@ Expected function or array of functions, received type ${typeof value}.`
                             comment,
                             label: stripWorldbookSkillMetaBlock_ACU(comment).trim() || `条目 ${uid}`,
                             skillMeta,
-                            hasSkill: !!skillMeta,
+                            hasSkill: skillMeta !== null,
                         };
                     }),
                 };
@@ -103013,7 +103223,7 @@ Expected function or array of functions, received type ${typeof value}.`
         async function saveEntrySkillMeta(bookName, uid, draft, updatedBy = 'manual') {
             const result = await saveWorldbookEntrySkillMeta_ACU(bookName, uid, draft, updatedBy);
             if (result.entry && typeof result.entry.comment === 'string') {
-                updateEntrySkillMetaLocal(bookName, uid, result.entry.comment);
+                updateEntrySkillMetaLocal(bookName, uid, result.entry.comment, normalizeWorldbookSkillMetaDraft_ACU(draft, updatedBy));
             }
             if (result.updated)
                 await notifySkillMetaChanged();
@@ -103021,7 +103231,7 @@ Expected function or array of functions, received type ${typeof value}.`
         async function deleteEntrySkillMeta(bookName, uid) {
             const result = await deleteWorldbookEntrySkillMeta_ACU(bookName, uid);
             if (result.entry && typeof result.entry.comment === 'string') {
-                updateEntrySkillMetaLocal(bookName, uid, result.entry.comment);
+                updateEntrySkillMetaLocal(bookName, uid, result.entry.comment, null);
             }
             if (result.updated)
                 await notifySkillMetaChanged();

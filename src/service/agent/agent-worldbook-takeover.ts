@@ -22,6 +22,7 @@ import {
   isWorldbookEntrySkillifyCandidate_ACU,
 } from './agent-skillify-service';
 import {
+  buildWorldbookSkillMetaMapForEntries_ACU,
   hasUsableWorldbookSkillMeta_ACU,
   resolveAgentWorldbookFilterAvailability_ACU,
   stripWorldbookSkillMetaBlock_ACU,
@@ -455,9 +456,10 @@ async function collectTakeoverCandidates_ACU(
 
   for (const bookName of bookNames) {
     const entries = await getLorebookEntries_ACU(bookName);
+    const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(entries);
     const bookSnapshot: AgentWorldbookControlSnapshotEntry_ACU[] = [];
     for (const entry of entries || []) {
-      if (!hasUsableWorldbookSkillMeta_ACU(entry?.comment)) continue;
+      if (!skillMetaByUid.has(String(entry?.uid)) && !hasUsableWorldbookSkillMeta_ACU(entry?.comment)) continue;
       const isNormalCandidate = isWorldbookEntrySkillifyCandidate_ACU(entry);
       const isAlreadyControlled = recoveryUidSetByBook.get(bookName)?.has(String(entry?.uid)) === true;
       const isUncontrolledDisabledSkill = entry?.enabled === false && !isAlreadyControlled;
@@ -499,10 +501,13 @@ async function reconcileExistingTakeoverSnapshotWithSkillMeta_ACU(
     if (!normalizedBookName || entriesToCheck.length === 0) continue;
     const currentEntries = await getLorebookEntries_ACU(normalizedBookName);
     const currentByUid = new Map((currentEntries || []).map(entry => [String(entry?.uid), entry]));
+    const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(currentEntries);
     for (const snapshotEntry of entriesToCheck) {
       if (!hasValidWorldbookUid_ACU(snapshotEntry?.uid)) continue;
       const currentEntry = currentByUid.get(String(snapshotEntry.uid));
-      const stillHasSkillMeta = currentEntry ? hasUsableWorldbookSkillMeta_ACU(currentEntry?.comment) : false;
+      const stillHasSkillMeta = currentEntry
+        ? skillMetaByUid.has(String(snapshotEntry.uid)) || hasUsableWorldbookSkillMeta_ACU(currentEntry?.comment)
+        : false;
       if (stillHasSkillMeta) {
         if (!keptBooks[normalizedBookName]) keptBooks[normalizedBookName] = [];
         keptBooks[normalizedBookName].push(snapshotEntry);

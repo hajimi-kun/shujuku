@@ -34,6 +34,10 @@ vi.mock('../../../src/service/worldbook/pipeline', () => ({
 }));
 
 vi.mock('../../../src/service/agent/agent-worldbook-skill-meta', () => ({
+  buildWorldbookSkillMetaMapForEntries_ACU: vi.fn((entries: any[]) => new Map(
+    (entries || []).map((entry: any) => [String(entry.uid), mockParseWorldbookSkillMeta(entry.comment)])
+      .filter(([, meta]: any[]) => !!meta),
+  )),
   parseWorldbookSkillMetaFromComment_ACU: mockParseWorldbookSkillMeta,
   saveWorldbookEntrySkillMeta_ACU: mockSaveWorldbookEntrySkillMeta,
   stripWorldbookSkillMetaBlock_ACU: vi.fn((comment: unknown) => String(comment || '').replace(/\n?<!--\s*ACU_SKILL_META_START\s*\n[\s\S]*?\nACU_SKILL_META_END\s*-->\n?/g, '\n').trim()),

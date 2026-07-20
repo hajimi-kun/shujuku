@@ -5,7 +5,7 @@ import { getLorebookEntriesByNames_ACU } from '../worldbook/pipeline';
 import { estimateTextTk_ACU, normalizeTkBudgetNumber_ACU } from '../../shared/token-estimate';
 import { buildDefaultAgentWorldbookControl_ACU } from '../../shared/defaults';
 import {
-  parseWorldbookSkillMetaFromComment_ACU,
+  buildWorldbookSkillMetaMapForEntries_ACU,
   saveWorldbookEntrySkillMeta_ACU,
   stripWorldbookSkillMetaBlock_ACU,
   type WorldbookSkillMeta_ACU,
@@ -141,12 +141,12 @@ export function isWorldbookEntrySkillifyCandidate_ACU(entry: Record<string, any>
 function buildEntrySummary_ACU(
   bookName: string,
   entry: Record<string, any>,
+  existingSkillMeta: WorldbookSkillMeta_ACU | null = null,
 ): AgentSkillifyWorldbookEntrySummary_ACU {
   const rawComment = String(entry?.comment || entry?.name || '').trim();
   const strippedComment = stripWorldbookSkillMetaBlock_ACU(rawComment);
   const comment = strippedComment || String(entry?.name || '').trim();
   const content = String(entry?.content || '').trim();
-  const existingSkillMeta = parseWorldbookSkillMetaFromComment_ACU(rawComment);
   const estimatedTk = estimateTextTk_ACU(content || comment);
   const existingTk = Number(existingSkillMeta?.tk);
   return {
@@ -338,10 +338,11 @@ export async function collectWorldbookSkillifyCandidates_ACU(
 
   for (const bookName of [...new Set(bookNames.map(name => String(name || '').trim()).filter(Boolean))]) {
     const entries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
+    const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(entries);
     for (const entry of entries) {
       if (!isWorldbookEntrySkillifyCandidate_ACU(entry)) continue;
       if (selectedKeys && !selectedKeys.has(getSkillifySelectionKey_ACU(bookName, entry.uid))) continue;
-      summaries.push(buildEntrySummary_ACU(bookName, entry));
+      summaries.push(buildEntrySummary_ACU(bookName, entry, skillMetaByUid.get(String(entry.uid)) || null));
     }
   }
 

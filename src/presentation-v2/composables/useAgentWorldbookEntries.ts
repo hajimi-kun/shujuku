@@ -3,7 +3,9 @@ import { getLorebookEntriesByNames_ACU } from '../../service/worldbook/pipeline'
 import { getPlotAgentWorldbookSnapshot_ACU } from '../../service/agent/agent-worldbook-takeover';
 import {
   deleteWorldbookEntrySkillMeta_ACU,
-  parseWorldbookSkillMetaFromComment_ACU,
+  buildWorldbookSkillMetaMapForEntries_ACU,
+  listWorldbookSkillMetas_ACU,
+  normalizeWorldbookSkillMetaDraft_ACU,
   saveWorldbookEntrySkillMeta_ACU,
   stripWorldbookSkillMetaBlock_ACU,
   type WorldbookSkillMeta_ACU,
@@ -86,15 +88,19 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
         status.value = 'success';
         return [];
       }
-      const entriesByBook = await getLorebookEntriesByNames_ACU(uniqueBookNames) as Record<string, any[]>;
+      // listWorldbookSkillMetas also migrates legacy comment blocks into the
+      // hidden registry before this panel derives labels and takeover state.
+      await listWorldbookSkillMetas_ACU(uniqueBookNames);
+      const refreshedEntriesByBook = await getLorebookEntriesByNames_ACU(uniqueBookNames) as Record<string, any[]>;
       const snapshotUids = buildSnapshotUidSet_ACU();
       const nextGroups: AgentWorldbookEntryGroup[] = [];
       const visibleSelections = new Set<string>();
       for (const bookName of uniqueBookNames) {
-        const entries = Array.isArray(entriesByBook[bookName]) ? entriesByBook[bookName] : [];
+        const entries = Array.isArray(refreshedEntriesByBook[bookName]) ? refreshedEntriesByBook[bookName] : [];
+        const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(entries);
         const items = entries.flatMap((entry: any): AgentWorldbookEntryItem[] => {
           const comment = String(entry?.comment || entry?.name || '');
-          const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+          const skillMeta = skillMetaByUid.get(String(entry?.uid)) || null;
           if (!isAgentWorldbookEntryVisible_ACU(bookName, entry, skillMeta, snapshotUids)) {
             return [];
           }
@@ -167,8 +173,12 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
     return Array.from(selected.value.values());
   }
 
-  function updateEntrySkillMetaLocal(bookName: string, uid: number, comment: string): void {
-    const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+  function updateEntrySkillMetaLocal(
+    bookName: string,
+    uid: number,
+    comment: string,
+    skillMeta: WorldbookSkillMeta_ACU | null,
+  ): void {
     groups.value = groups.value.map(group => {
       if (group.bookName !== bookName) return group;
       return {
@@ -180,7 +190,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
             comment,
             label: stripWorldbookSkillMetaBlock_ACU(comment).trim() || `条目 ${uid}`,
             skillMeta,
-            hasSkill: !!skillMeta,
+            hasSkill: skillMeta !== null,
           };
         }),
       };
@@ -204,7 +214,12 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
   ): Promise<void> {
     const result = await saveWorldbookEntrySkillMeta_ACU(bookName, uid, draft, updatedBy);
     if (result.entry && typeof result.entry.comment === 'string') {
-      updateEntrySkillMetaLocal(bookName, uid, result.entry.comment);
+      updateEntrySkillMetaLocal(
+        bookName,
+        uid,
+        result.entry.comment,
+        normalizeWorldbookSkillMetaDraft_ACU(draft, updatedBy),
+      );
     }
     if (result.updated) await notifySkillMetaChanged();
   }
@@ -212,7 +227,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
   async function deleteEntrySkillMeta(bookName: string, uid: number): Promise<void> {
     const result = await deleteWorldbookEntrySkillMeta_ACU(bookName, uid);
     if (result.entry && typeof result.entry.comment === 'string') {
-      updateEntrySkillMetaLocal(bookName, uid, result.entry.comment);
+      updateEntrySkillMetaLocal(bookName, uid, result.entry.comment, null);
     }
     if (result.updated) await notifySkillMetaChanged();
   }

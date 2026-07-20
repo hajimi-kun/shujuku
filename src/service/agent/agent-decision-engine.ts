@@ -8,6 +8,7 @@ import { callAIWithPreset_ACU } from '../ai/api-call';
 import { normalizePlotTask_ACU } from '../plot/plot-logic';
 import { refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU } from './agent-worldbook-takeover';
 import {
+  buildWorldbookSkillMetaMapForEntries_ACU,
   parseWorldbookSkillMetaFromComment_ACU,
   stripWorldbookSkillMetaBlock_ACU,
 } from './agent-worldbook-skill-meta';
@@ -241,6 +242,7 @@ async function collectWorldbookSummariesFromSnapshot_ACU(
 
   for (const [bookName, snapshotEntries] of Object.entries(snapshot.books || {})) {
     const entries = await getAgentRuntimeLorebookEntries_ACU(bookName, readContext);
+    const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(entries);
     const list = Array.isArray(snapshotEntries) ? snapshotEntries : [];
     for (const snapshotEntry of list) {
       const uid = snapshotEntry?.uid;
@@ -248,7 +250,7 @@ async function collectWorldbookSummariesFromSnapshot_ACU(
       const entry = (entries || []).find(item => String(item?.uid) === String(uid));
       if (!entry) continue;
       const comment = String(entry.comment || entry.name || '');
-      const meta = parseWorldbookSkillMetaFromComment_ACU(comment);
+      const meta = skillMetaByUid.get(String(uid)) || parseWorldbookSkillMetaFromComment_ACU(comment);
       const keys = getWorldbookEntryKeywordsForSkillify_ACU(entry);
       const fallback = hasUsableWorldbookSkillMeta_ACU(meta) ? null : buildFallbackWorldbookSummaryText_ACU(entry, comment, keys);
       allowedKeys.add(refKey_ACU(bookName, uid));

@@ -63,7 +63,7 @@ export function isDatabaseGeneratedLorebookEntry_ACU(entry: Record<string, any>)
   if (isExternalImportLorebookEntry_ACU(entry)) return false;
   const comment = normalizeInternalComment_ACU(entry);
   if (!comment || comment.startsWith('TavernDB-ACU-AgentGreenlight')) return false;
-  if (['TavernDB-ACU-AgentWorldbookConfig', 'TavernDB-ACU-AgentWorldbookSnapshot', 'TavernDB-ACU-AgentFinalGenerationGreenlights'].some(prefix => comment.startsWith(prefix))) return true;
+  if (['TavernDB-ACU-AgentWorldbookConfig', 'TavernDB-ACU-AgentWorldbookSnapshot', 'TavernDB-ACU-AgentFinalGenerationGreenlights', 'TavernDB-ACU-AgentWorldbookSkillRegistry'].some(prefix => comment.startsWith(prefix))) return true;
   return ['TavernDB-ACU-', '重要人物条目', '总结条目', '小总结条目'].some(prefix => comment.startsWith(prefix));
 }
 
@@ -87,6 +87,7 @@ export function isAgentSkillifyExcludedLorebookEntry_ACU(entry: Record<string, a
     'TavernDB-ACU-AgentWorldbookConfig',
     'TavernDB-ACU-AgentWorldbookSnapshot',
     'TavernDB-ACU-AgentFinalGenerationGreenlights',
+    'TavernDB-ACU-AgentWorldbookSkillRegistry',
   ].some(prefix => comment.startsWith(prefix))) return true;
 
   // Legacy summary exports may not carry a custom-table marker. Their normal
