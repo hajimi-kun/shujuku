@@ -3,21 +3,14 @@
  * 世界书操作 + 正文优化 + AI 调用 API
  */
 
-import { topLevelWindow_ACU } from '../../../shared/env';
 import { logDebug_ACU, logError_ACU } from '../../../shared/utils';
-import { sendConnectionManagerRequest_ACU, generateRaw_ACU, isGenerateRawAvailable_ACU, getHostRequestHeaders_ACU } from '../../../service/ai/ai-service';
-import { buildCustomApiRequestBody_ACU } from '../../../service/ai/api-call';
+import { callAIWithPreset_ACU } from '../../../service/ai/api-call';
 import { getChatArray_ACU } from '../../../service/chat/chat-service';
-import {
-    settings_ACU,
-    currentJsonTableData_ACU,
-} from '../../../service/runtime/state-manager';
+import { currentJsonTableData_ACU } from '../../../service/runtime/state-manager';
 import { setZeroTkOccupyMode_ACU } from '../../../service/settings/settings-service';
 import { deleteAllGeneratedEntries_ACU, updateReadableLorebookEntry_ACU } from '../../../service/worldbook/pipeline';
 import { updateOutlineTableEntry_ACU } from '../../../service/worldbook/injection-engine';
 import { formatJsonToReadable_ACU } from '../../../service/runtime/helpers-remaining';
-import { getApiConfigByPreset_ACU } from '../../../service/ai/api-call';
-import { handleApiResponse_ACU } from '../../../service/ai/prompt-builder';
 import { cancelContentOptimization_ACU } from '../../../service/optimization/content-optimization';
 import { reoptimizeMessage_ACU } from '../../components/optimization-ui';
 import { refreshMergedDataAndNotifyWithUI_ACU } from '../../components/pipeline-ui-helpers';
@@ -153,82 +146,26 @@ export function createWorldbookAiApi(_ctx: ApiGroupContext): Record<string, Func
                     return null;
                 }
 
-                const presetName = options.presetName || '';
-                const apiPresetConfig = getApiConfigByPreset_ACU(presetName);
-                const effectiveApiMode = apiPresetConfig.apiMode;
-                const effectiveApiConfig = apiPresetConfig.apiConfig || {};
-                const effectiveTavernProfile = apiPresetConfig.tavernProfile;
-
-                logDebug_ACU(`[callAI] Calling AI with ${messages.length} messages, preset: ${presetName || '当前配置'}, mode: ${effectiveApiMode}`);
-
-                // options 层 override：调用方显式传入的 max_tokens（custom 路径专用，0 合法）
-                // tavern 路径 max_tokens 与其他入口统一使用 ?? 链，0 为合法值
-                const optionsMaxTokens = (options.max_tokens !== undefined || options.maxTokens !== undefined)
+                // 白名单：仅允许 presetName / max_tokens / maxTokens
+                const presetName = typeof options.presetName === 'string' ? options.presetName.trim() : '';
+                const maxTokensOverride = (options.max_tokens !== undefined || options.maxTokens !== undefined)
                     ? Number(options.max_tokens ?? options.maxTokens)
                     : undefined;
 
-                if (effectiveApiMode === 'tavern') {
-                    const profileId = effectiveTavernProfile || settings_ACU.tavernProfile;
-                    const tavernMaxTokens = effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096;
-                    const response = await sendConnectionManagerRequest_ACU(
-                        profileId, messages, tavernMaxTokens
-                    );
-                    if (response && response.result && response.result.choices && response.result.choices[0]) {
-                        return response.result.choices[0].message.content;
-                    }
-                    if (response && typeof response.content === 'string') {
-                        return response.content;
-                    }
-                    logError_ACU('[callAI] Invalid response from Tavern API:', response);
+                // 拒绝危险字段：不允许外部传入 apiConfig/apiKey/url/requestHeaders 等
+                const forbiddenKeys = ['apiConfig', 'apiKey', 'url', 'requestHeaders', 'bodyParams', 'excludeBodyParams', 'tavernProfile', 'model', 'temperature', 'stream'];
+                const passedKeys = Object.keys(options).filter(k => k !== 'presetName' && k !== 'max_tokens' && k !== 'maxTokens');
+                const hasForbidden = passedKeys.some(k => forbiddenKeys.includes(k));
+                if (hasForbidden) {
+                    logError_ACU('callAI: options 包含禁止的配置字段，已拒绝');
                     return null;
-                } else {
-                    if (effectiveApiConfig.useMainApi) {
-                        if (isGenerateRawAvailable_ACU()) {
-                            const response = await generateRaw_ACU({
-                                ordered_prompts: messages,
-                                should_stream: settings_ACU.streamingEnabled || false
-                            });
-                            if (typeof response === 'string') {
-                                return response.trim();
-                            }
-                            logError_ACU('[callAI] Main API did not return string');
-                            return null;
-                        }
-                        logError_ACU('[callAI] TavernHelper.generateRaw not available');
-                        return null;
-                    } else {
-                        if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
-                            logError_ACU('[callAI] Custom API URL or model not configured');
-                            return null;
-                        }
-
-                        const url = `/api/backends/chat-completions/generate`;
-                        const customOverrides: { maxTokens?: number; stripModelPrefix: boolean } = { stripModelPrefix: false };
-                        if (optionsMaxTokens !== undefined) customOverrides.maxTokens = optionsMaxTokens;
-                        const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, customOverrides));
-
-                        const headers = {
-                            ...getHostRequestHeaders_ACU(),
-                            'Content-Type': 'application/json'
-                        };
-                        const res = await fetch(url, { method: 'POST', headers, body });
-
-                        if (!res.ok) {
-                            const errTxt = await res.text();
-                            logError_ACU('[callAI] API request failed:', res.status, errTxt);
-                            return null;
-                        }
-
-                        const content = await handleApiResponse_ACU(res);
-                        if (content) {
-                            return content;
-                        }
-                        logError_ACU('[callAI] Invalid response from custom API');
-                        return null;
-                    }
                 }
+
+                // 委托给 service 层统一入口
+                return await callAIWithPreset_ACU(messages, presetName, maxTokensOverride);
             } catch (e) {
-                logError_ACU('[callAI] Failed:', e);
+                // 不打印原始错误对象以避免泄露上游响应正文
+                logError_ACU('[callAI] 调用失败，已返回 null');
                 return null;
             }
         },

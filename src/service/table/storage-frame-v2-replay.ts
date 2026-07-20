@@ -364,7 +364,11 @@ export function applyTablePatchV2_ACU(state: TableDataObject_ACU, patch: TablePa
   }
 
   if (patch.kind === 'row_delete') {
-    sheet.content = sheet.content.filter(row => !(Array.isArray(row) && row[0] === patch.rowId));
+    const targetRowId = String(patch.rowId ?? '').trim();
+    sheet.content = sheet.content.filter((row, index) => {
+      if (index === 0 || !Array.isArray(row)) return true;
+      return String(row[0] ?? '').trim() !== targetRowId;
+    });
     return;
   }
 

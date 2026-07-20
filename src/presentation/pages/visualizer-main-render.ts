@@ -35,6 +35,7 @@ import { closeACUWindow } from '../window/window-system';
 // 循环 import — 运行时安全
 import { renderVisualizerConfigMode_ACU } from './visualizer-main-config';
 import {
+    assertVisualizerDataOpsEditable_ACU,
     createVisualizerTempRowId_ACU,
     recordVisualizerCellUpdate_ACU,
     recordVisualizerRowDelete_ACU,
@@ -233,6 +234,7 @@ import {
           
           // Update temp data (rIdx + 1 because row 0 is header)
           if (sheet.content[rIdx + 1]) {
+              assertVisualizerDataOpsEditable_ACU(_acuVisState);
               const rowId = sheet.content[rIdx + 1][0];
               const columnName = headers[cIdx + 1];
               sheet.content[rIdx + 1][cIdx + 1] = val;
@@ -241,6 +243,7 @@ import {
       });
       
       $container.find('#acu-vis-add-row').on('click', () => {
+          assertVisualizerDataOpsEditable_ACU(_acuVisState);
           const newRow = new Array(headers.length).fill('');
           newRow[0] = createVisualizerTempRowId_ACU();
           sheet.content.push(newRow);
@@ -256,6 +259,7 @@ import {
           const rIdx = parseInt(jQuery_API_ACU(this).data('idx'));
           if (confirm('确定删除此行吗？')) {
               const rowId = sheet.content[rIdx + 1]?.[0];
+              assertVisualizerDataOpsEditable_ACU(_acuVisState);
               if (sheetKey) recordVisualizerRowDelete_ACU(_acuVisState, sheetKey, rowId);
               sheet.content.splice(rIdx + 1, 1);
               if (isSummaryTable && sheetKey && isSpecialIndexLockEnabled_ACU(sheetKey)) {

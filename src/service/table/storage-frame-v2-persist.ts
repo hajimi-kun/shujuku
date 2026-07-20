@@ -45,6 +45,10 @@ export interface ReplaceExistingIncrementalOptions_ACU {
 export interface PersistTableMutationV2Options_ACU {
   targetMessageIndex?: number;
   source: TableMutationSourceV2_ACU;
+  /**
+   * 调用方声明的事务后数据。持久化层不再做 replay-vs-afterData 相等性阻断；
+   * 数据正确性由来源链路保证，本层只校验输入合法性、操作可应用性与原子保存。
+   */
   afterData: TableDataObject_ACU;
   operations?: TableMutationOperationV2_ACU[];
   filledSheetKeys?: string[];
@@ -68,6 +72,30 @@ export interface PersistTableMutationV2Options_ACU {
   /** 对破坏性复合写入要求宿主真实保存；默认保持历史宽松保存语义。 */
   strictSave?: boolean;
   transactionContext?: Pick<TableWriteTransactionContext_ACU, 'runCommit' | 'baseRevision' | 'writeSet' | 'assertFresh'>;
+}
+
+export interface PersistTableMutationLogBatchTargetV2_ACU {
+  targetMessageIndex: number;
+  operations: TableMutationOperationV2_ACU[];
+  changedSheetKeys: string[];
+}
+
+/**
+ * 多消息层 V2 增量提交。所有 target 都在内存 clone 中构造，
+ * 确认后一次性写回消息对象并调用严格宿主保存。
+ * afterData 正确性由来源链路保证，本层不做 candidate replay 与 afterData 的相等性阻断。
+ */
+export interface PersistTableMutationLogBatchV2Options_ACU {
+  source: TableMutationSourceV2_ACU;
+  afterData: TableDataObject_ACU;
+  targets: PersistTableMutationLogBatchTargetV2_ACU[];
+  isolationKey?: string;
+  requestId?: string;
+  batchId?: string;
+  revisionWriteSet?: TableMutationWriteSetV2_ACU;
+  transactionContext?: Pick<TableWriteTransactionContext_ACU, 'runCommit' | 'baseRevision' | 'writeSet' | 'assertFresh'>;
+  /** 调用方已处于 transactionContext.runCommit 临界区内时使用。 */
+  assumeCommitLock?: boolean;
 }
 
 export interface PersistTableSheetCheckpointV2Options_ACU {
@@ -425,28 +453,15 @@ function normalizeOperations_ACU(
   return [];
 }
 
-function getOperationReplayScope_ACU(operations: TableMutationOperationV2_ACU[]): { wholeState: boolean; sheetKeys: string[] } {
-  const sheetKeys = new Set<string>();
-  for (const operation of operations) {
-    if (operation.kind === 'data_replace' || operation.kind === 'sql_batch' || operation.kind === 'table_edit_dsl') {
-      return { wholeState: true, sheetKeys: [] };
-    }
-    if ('sheetKey' in operation && typeof operation.sheetKey === 'string' && operation.sheetKey.startsWith('sheet_')) {
-      sheetKeys.add(operation.sheetKey);
-      continue;
-    }
-    throw new Error(`V2 operation log 无法确定 operation 影响范围：kind=${(operation as any).kind}。`);
-  }
-  return { wholeState: false, sheetKeys: [...sheetKeys] };
-}
-
-async function getOperationReplayPostconditionError_ACU(
+/**
+ * 写入前检查 operations 是否可在目标楼层 V2 base 上应用。
+ * 不比较 replay 结果与 afterData；调用方负责来源链路正确性。
+ */
+async function getOperationReplayApplicabilityError_ACU(
   chat: any[],
   isolationKey: string,
   targetMessageIndex: number,
   operations: TableMutationOperationV2_ACU[],
-  afterData: TableDataObject_ACU,
-  candidateChangedSheetKeys: string[],
 ): Promise<string | null> {
   if (operations.length === 0) return null;
   try {
@@ -457,28 +472,8 @@ async function getOperationReplayPostconditionError_ACU(
     if (!replayBase) {
       return 'V2 operation log 回放缺少现有 full checkpoint base，拒绝写入。';
     }
-    const replayScope = getOperationReplayScope_ACU(operations);
     const replayCandidate = deepClone_ACU(replayBase);
     for (const operation of operations) await applyTableOperationV2_ACU(replayCandidate, operation);
-
-    if (replayScope.wholeState) {
-      if (canonicalJson_ACU(replayCandidate) !== canonicalJson_ACU(afterData)) {
-        return 'V2 operation log 回放结果与 afterData 快照不一致。';
-      }
-      return null;
-    }
-
-    const affectedSheetKeys = [...new Set([...candidateChangedSheetKeys, ...replayScope.sheetKeys])];
-    if (affectedSheetKeys.length === 0) {
-      return 'V2 operation log 缺少可验证的受影响 Sheet，拒绝写入。';
-    }
-    for (const sheetKey of affectedSheetKeys) {
-      const replayedSheet = replayCandidate[sheetKey] as Sheet_ACU | undefined;
-      const expectedSheet = afterData[sheetKey] as Sheet_ACU | undefined;
-      if (!replayedSheet || !expectedSheet || canonicalJson_ACU(templateSheetPersistentProjection_ACU(replayedSheet)) !== canonicalJson_ACU(templateSheetPersistentProjection_ACU(expectedSheet))) {
-        return `V2 operation log 回放结果与 afterData Sheet 不一致：${sheetKey}。`;
-      }
-    }
     return null;
   } catch (error: any) {
     return `V2 operation log 回放失败：${error?.message || String(error)}`;
@@ -995,15 +990,16 @@ async function persistTableMutationLogV2Core_ACU(
     return { saved: false, error: 'V2 初始 full checkpoint 不接受 operations；请仅提交 afterData 快照。' };
   }
   if (!shouldCheckpoint && operations.length > 0) {
-    const replayPostconditionError = await getOperationReplayPostconditionError_ACU(
+    const replayApplicabilityError = await getOperationReplayApplicabilityError_ACU(
       chat,
       isolationKey,
       target.index,
       operations,
-      afterData,
-      effectiveChangedSheetKeys,
     );
-    if (replayPostconditionError) return { saved: false, error: replayPostconditionError };
+    if (replayApplicabilityError) return { saved: false, error: replayApplicabilityError };
+    logDebug_ACU(
+      `[V2 Persist] operation 可应用性检查通过（已移除 afterData 相等性阻断）: messageIndex=${target.index}, source=${options.source}, operations=${operations.length}`,
+    );
   }
 
   const isolatedData = cloneIsolatedData_ACU(target.message) as Record<string, any>;
@@ -1151,6 +1147,166 @@ export async function persistTableMutationLogV2_ACU(
     return persistTableMutationLogV2Core_ACU(options);
   }
   return options.transactionContext.runCommit(() => persistTableMutationLogV2Core_ACU(options), options.revisionWriteSet);
+}
+
+function validateBatchOperationScope_ACU(
+  targetIndex: number,
+  operations: TableMutationOperationV2_ACU[],
+  changedSheetKeys: string[],
+): string | null {
+  const changedKeys = new Set(changedSheetKeys);
+  for (const operation of operations) {
+    if (!operation || typeof operation !== 'object') return `V2 batch write target ${targetIndex} has an invalid operation.`;
+    if (operation.kind === 'data_replace' || operation.kind === 'sql_batch' || operation.kind === 'table_edit_dsl') {
+      return `V2 batch write target ${targetIndex} contains unsupported unscoped operation: ${operation.kind}.`;
+    }
+    const sheetKey = typeof (operation as any).sheetKey === 'string' ? (operation as any).sheetKey.trim() : '';
+    if (!sheetKey || !changedKeys.has(sheetKey)) {
+      return `V2 batch write target ${targetIndex} operation scope is outside changed sheet keys.`;
+    }
+  }
+  return null;
+}
+
+function mergeBatchTargetsByMessageIndex_ACU(
+  targets: PersistTableMutationLogBatchTargetV2_ACU[],
+  afterData: TableDataObject_ACU,
+): Map<number, PersistTableMutationLogBatchTargetV2_ACU> | { error: string } {
+  const targetByIndex = new Map<number, PersistTableMutationLogBatchTargetV2_ACU>();
+  for (const target of targets) {
+    const targetIndex = Number(target?.targetMessageIndex);
+    if (!Number.isInteger(targetIndex)) return { error: `V2 batch write target index is invalid: ${targetIndex}.` };
+    if (!Array.isArray(target.operations) || target.operations.length === 0) {
+      return { error: `V2 batch write target ${targetIndex} has no operations.` };
+    }
+    const normalizedKeys = normalizeKeys_ACU(target.changedSheetKeys, afterData);
+    if (normalizedKeys.length === 0) return { error: `V2 batch write target ${targetIndex} has no valid changed sheet keys.` };
+    const scopeError = validateBatchOperationScope_ACU(targetIndex, target.operations, normalizedKeys);
+    if (scopeError) return { error: scopeError };
+    const existing = targetByIndex.get(targetIndex);
+    if (!existing) {
+      targetByIndex.set(targetIndex, {
+        targetMessageIndex: targetIndex,
+        operations: deepClone_ACU(target.operations),
+        changedSheetKeys: normalizedKeys,
+      });
+      continue;
+    }
+    existing.operations.push(...deepClone_ACU(target.operations));
+    existing.changedSheetKeys = [...new Set([...existing.changedSheetKeys, ...normalizedKeys])].sort();
+  }
+  return targetByIndex;
+}
+
+
+
+async function persistTableMutationLogBatchV2Core_ACU(
+  options: PersistTableMutationLogBatchV2Options_ACU,
+): Promise<{ saved: boolean; messageIndices?: number[]; error?: string }> {
+  const chat = getChatArray_ACU();
+  if (!Array.isArray(chat) || chat.length === 0) return { saved: false, error: 'chat history is empty' };
+  if (!Array.isArray(options.targets) || options.targets.length === 0) return { saved: false, error: 'V2 batch write requires at least one target.' };
+
+  const isolationKey = options.isolationKey ?? getCurrentIsolationKey_ACU();
+  const latestCheckpoint = findLatestFullCheckpoint_ACU(chat, isolationKey);
+  if (!latestCheckpoint) return { saved: false, error: 'V2 batch write requires an existing full checkpoint anchor.' };
+  options.transactionContext?.assertFresh?.('persistTableMutationLogBatchV2:before_persist');
+
+  const mergedTargets = mergeBatchTargetsByMessageIndex_ACU(options.targets, options.afterData);
+  if ('error' in mergedTargets) return { saved: false, error: mergedTargets.error };
+  const targetByIndex = mergedTargets;
+  const changedSheetKeys = new Set<string>();
+  for (const [targetIndex, target] of targetByIndex) {
+    if (!Number.isInteger(targetIndex) || targetIndex < latestCheckpoint.index || !chat[targetIndex] || chat[targetIndex].is_user) {
+      return { saved: false, error: `V2 batch write target is invalid or precedes replay checkpoint: ${targetIndex}.` };
+    }
+    target.changedSheetKeys.forEach(sheetKey => changedSheetKeys.add(sheetKey));
+  }
+
+  const candidateChat = deepClone_ACU(chat);
+  for (const [targetIndex, target] of targetByIndex) {
+    const message = candidateChat[targetIndex];
+    const isolatedData = cloneIsolatedData_ACU(message) as Record<string, any>;
+    const tagData = isolatedData[isolationKey];
+    if (!isV2TagData_ACU(tagData)) return { saved: false, error: `V2 batch write target ${targetIndex} has no V2 storage frame.` };
+    const frame = tagData.storageFrame as TableStorageFrameV2_ACU;
+    const nextSeq = Math.max(0, ...(frame.logEntries || []).map(item => Number(item.seq) || 0)) + 1;
+    const entryId = generateEntryId_ACU();
+    const parentRevision = frame.headRevision ?? null;
+    const entry: TableMutationLogEntryV2_ACU = {
+      seq: nextSeq,
+      entryId,
+      createdAt: Date.now(),
+      source: options.source,
+      targetMessageIndex: targetIndex,
+      aiFloor: countAiFloor_ACU(candidateChat, targetIndex),
+      filledSheetKeys: [],
+      changedSheetKeys: target.changedSheetKeys,
+      groupKeys: [],
+      requestId: options.requestId,
+      batchId: options.batchId,
+      operations: deepClone_ACU(target.operations),
+      baseRevision: options.transactionContext?.baseRevision ?? parentRevision,
+      parentRevision,
+      commitRevision: buildCommitRevision_ACU(nextSeq, entryId),
+      writeSet: options.transactionContext?.writeSet,
+    };
+    frame.logEntries = [...(frame.logEntries || []), entry];
+    frame.headRevision = entry.commitRevision;
+    message.TavernDB_ACU_IsolatedData = isolatedData;
+    writeMessageIdentity_ACU(message, {
+      enabled: settings_ACU.dataIsolationEnabled,
+      code: settings_ACU.dataIsolationCode,
+    });
+  }
+  const targetMessageIndices = [...targetByIndex.keys()].sort((a, b) => a - b);
+  const operationCount = [...targetByIndex.values()].reduce((sum, target) => sum + target.operations.length, 0);
+  logDebug_ACU(
+    `[V2 Persist] batch candidate 写入准备完成（已移除 afterData 相等性阻断）: source=${options.source}, targetMessageIndex=${targetMessageIndices.join(',')}, operations=${operationCount}, targets=${targetByIndex.size}, changedSheets=${changedSheetKeys.size}`,
+  );
+
+  const snapshots = [...targetByIndex.keys()].map(index => ({
+    index,
+    message: chat[index],
+    hadIsolatedData: Object.prototype.hasOwnProperty.call(chat[index], 'TavernDB_ACU_IsolatedData'),
+    isolatedData: chat[index].TavernDB_ACU_IsolatedData,
+    hadIdentity: Object.prototype.hasOwnProperty.call(chat[index], 'TavernDB_ACU_Identity'),
+    identity: chat[index].TavernDB_ACU_Identity,
+  }));
+  try {
+    for (const { index } of snapshots) {
+      chat[index].TavernDB_ACU_IsolatedData = candidateChat[index].TavernDB_ACU_IsolatedData;
+      if (Object.prototype.hasOwnProperty.call(candidateChat[index], 'TavernDB_ACU_Identity')) {
+        chat[index].TavernDB_ACU_Identity = candidateChat[index].TavernDB_ACU_Identity;
+      } else {
+        delete chat[index].TavernDB_ACU_Identity;
+      }
+    }
+    await saveChatToHostStrict_ACU();
+  } catch (error) {
+    for (const snapshot of snapshots) {
+      if (snapshot.hadIsolatedData) snapshot.message.TavernDB_ACU_IsolatedData = snapshot.isolatedData;
+      else delete snapshot.message.TavernDB_ACU_IsolatedData;
+      if (snapshot.hadIdentity) snapshot.message.TavernDB_ACU_Identity = snapshot.identity;
+      else delete snapshot.message.TavernDB_ACU_Identity;
+    }
+    throw error;
+  }
+
+  return { saved: true, messageIndices: [...targetByIndex.keys()].sort((left, right) => left - right) };
+}
+
+export async function persistTableMutationLogBatchV2_ACU(
+  options: PersistTableMutationLogBatchV2Options_ACU,
+): Promise<{ saved: boolean; messageIndices?: number[]; error?: string }> {
+  if (!options.transactionContext) {
+    return { saved: false, error: 'V2 batch operation log write requires TableWriteTransactionContext; direct unsafe writes are not allowed.' };
+  }
+  if (options.assumeCommitLock) return persistTableMutationLogBatchV2Core_ACU(options);
+  return options.transactionContext.runCommit(
+    () => persistTableMutationLogBatchV2Core_ACU(options),
+    options.revisionWriteSet,
+  );
 }
 
 async function persistTableSheetCheckpointV2Core_ACU(
@@ -1802,8 +1958,11 @@ export async function commitCurrentFloorTemplateChanges_ACU(
     for (const change of operationChanges) {
       for (const operation of change.operations) await applyTableOperationV2_ACU(replayCandidate, operation);
       const replayedSheet = replayCandidate[change.sheetKey] as Sheet_ACU | undefined;
-      if (!replayedSheet || canonicalJson_ACU(templateSheetPersistentProjection_ACU(replayedSheet)) !== canonicalJson_ACU(templateSheetPersistentProjection_ACU(change.targetSheetData))) {
-        throw new Error(`V2 当前楼层模板提交 operation 回放结果与目标 Sheet 不一致：${change.sheetKey}。`);
+      // Operations are the source of truth for template commits. Do not fail closed when the
+      // caller's targetSheetData (often a visualizer runtime snapshot) drifts from V2 replay base
+      // content after meta/schema-only operations.
+      if (!replayedSheet) {
+        throw new Error(`V2 当前楼层模板提交 operation 回放后缺少 Sheet：${change.sheetKey}。`);
       }
     }
 

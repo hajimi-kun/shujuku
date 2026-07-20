@@ -21,6 +21,7 @@ import {
   normalizeLorebookPosition_ACU,
   normalizePlacementConfig_ACU,
 } from '../../../service/worldbook/injection-engine';
+import { assertVisualizerDataOpsEditable_ACU } from '../../../service/visualizer/visualizer-data-ops';
 import { useToastStore } from '../../stores/toast-store';
 import { useVisualizerStore } from '../../stores/visualizer-store';
 
@@ -170,6 +171,7 @@ export function useVisualizerConfigEditing() {
   function withSheet(mutator: (sheet: any) => void): void {
     const sheet = currentSheet.value;
     if (!sheet) return;
+    assertVisualizerDataOpsEditable_ACU(visualizer);
     mutator(sheet);
     markDirty();
   }
@@ -263,15 +265,14 @@ export function useVisualizerConfigEditing() {
     const key = visualizer.currentSheetKey;
     const info = specialIndex.value;
     if (!key || !info.enabled) return;
-    const lock = visualizer.getLockDraft(key);
-    lock.specialIndexLocked = enabled === true;
-    if (lock.specialIndexLocked && currentSheet.value && info.index >= 0) {
+    visualizer.applyLockChangesToDraft([{ sheetKey: key, specialIndexLocked: enabled === true }]);
+    if (enabled === true && currentSheet.value && info.index >= 0) {
       applySummaryIndexSequenceToTable_ACU(currentSheet.value, info.index);
     }
-    markDirty();
   }
 
   function setTableApiPreset(value: string): void {
+    assertVisualizerDataOpsEditable_ACU(visualizer);
     const sheetName = stringValue(currentSheet.value?.name).trim();
     if (!sheetName) return;
     if (!settings_ACU.tableApiPresetOverridesByName || typeof settings_ACU.tableApiPresetOverridesByName !== 'object') {
@@ -354,6 +355,7 @@ export function useVisualizerConfigEditing() {
 
   function updateGlobalPlacement(key: GlobalPlacementKey, field: keyof VisualizerPlacementDraft, value: string | number): void {
     if (!visualizer.tempData) return;
+    assertVisualizerDataOpsEditable_ACU(visualizer);
     const cfg = getGlobalInjectionConfigFromData_ACU(visualizer.tempData, { ensureWriteBack: true });
     const current = getGlobalPlacement(key);
     const next = {

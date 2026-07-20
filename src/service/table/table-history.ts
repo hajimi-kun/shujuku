@@ -62,13 +62,53 @@ function v2EntryAiFloor_ACU(entry: any, fallbackAiFloor: number): number {
     return Number.isFinite(value) && value > 0 ? value : fallbackAiFloor;
 }
 
-function v2OperationTouchesSheet_ACU(operation: any, sheetKey: string): boolean {
+/**
+ * 判断 V2 operation 是否可能修改某个 sheet。
+ *
+ * sql_batch 和 table_edit_dsl 缺少可靠的 sheet 归属信息。对于保存路由，
+ * 将其视为命中所有 sheet，宁可把新增量追加到更晚层，也不能插到未知 SQL 前面。
+ */
+export function v2OperationTouchesSheet_ACU(operation: any, sheetKey: string): boolean {
     if (!operation || typeof operation !== 'object') return false;
     if (operation.kind === 'sheet_replace') return operation.sheetKey === sheetKey;
     if (operation.kind === 'sheet_schema_migrate') return operation.sheetKey === sheetKey;
     if (operation.kind === 'row_upsert' || operation.kind === 'row_delete' || operation.kind === 'meta_update') return operation.sheetKey === sheetKey;
     if (operation.kind === 'data_replace') return !!operation.data?.[sheetKey];
-    return false;
+    if (operation.kind === 'sql_sheet_batch') return operation.sheetKey === sheetKey;
+    return operation.kind === 'sql_batch' || operation.kind === 'table_edit_dsl';
+}
+
+function v2EntryTouchesSheet_ACU(entry: any, sheetKey: string): boolean {
+    return v2EventTouchesSheetData_ACU(entry, sheetKey)
+        || (Array.isArray(entry?.operations) && entry.operations.some((operation: any) => v2OperationTouchesSheet_ACU(operation, sheetKey)))
+        || (Array.isArray(entry?.patches) && entry.patches.some((patch: any) => patch?.sheetKey === sheetKey));
+}
+
+/** 返回当前 replay anchor（最新 full checkpoint）所在消息层，没有则返回 -1。 */
+export function getLatestV2FullCheckpointMessageIndex_ACU(chat: ACUMessage[] | any[], isolationKey: string): number {
+    if (!Array.isArray(chat)) return -1;
+    for (let index = chat.length - 1; index >= 0; index -= 1) {
+        const tagData = readIsolatedTagData_ACU(chat[index], isolationKey) as any;
+        if (isV2TagData_ACU(tagData) && tagData.storageFrame.checkpoint?.kind === 'full') return index;
+    }
+    return -1;
+}
+
+/**
+ * 返回某个 sheet 在当前 replay 区间最后一次拥有显式增量/单表 checkpoint 的消息层。
+ * full checkpoint 是基底而不是增量记录，因此不会作为返回值；调用方据此决定追加日志或直接更新基底。
+ */
+export function getLatestV2SheetReplayMessageIndex_ACU(chat: ACUMessage[] | any[], isolationKey: string, sheetKey: string): number {
+    const checkpointIndex = getLatestV2FullCheckpointMessageIndex_ACU(chat, isolationKey);
+    if (checkpointIndex < 0 || !sheetKey.startsWith('sheet_')) return -1;
+    for (let index = chat.length - 1; index >= checkpointIndex; index -= 1) {
+        const tagData = readIsolatedTagData_ACU(chat[index], isolationKey) as any;
+        if (!isV2TagData_ACU(tagData)) continue;
+        const frame = tagData.storageFrame;
+        if (frame.perSheetCheckpoints?.[sheetKey]?.kind === 'sheet_full') return index;
+        if ((frame.logEntries || []).some((entry: any) => v2EntryTouchesSheet_ACU(entry, sheetKey))) return index;
+    }
+    return -1;
 }
 
 function v2FrameHasSheetData_ACU(tagData: any, sheetKey: string): boolean {
@@ -79,10 +119,7 @@ function v2FrameHasSheetData_ACU(tagData: any, sheetKey: string): boolean {
     if (tagData.storageFrame.perSheetCheckpoints?.[sheetKey]?.kind === 'sheet_full') {
         return true;
     }
-    return (tagData.storageFrame.logEntries || []).some((entry: any) =>
-        v2EventTouchesSheetData_ACU(entry, sheetKey)
-        || (Array.isArray(entry.operations) && entry.operations.some((operation: any) => v2OperationTouchesSheet_ACU(operation, sheetKey)))
-    );
+    return (tagData.storageFrame.logEntries || []).some((entry: any) => v2EntryTouchesSheet_ACU(entry, sheetKey));
 }
 
 function v2FrameTrackedUpdateFloor_ACU(tagData: any, sheetKey: string, messageAiFloor: number): number {

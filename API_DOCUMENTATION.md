@@ -1558,174 +1558,23 @@ window.AutoCardUpdaterAPI.clearManualSelectedTables();
 
 ## API 预设管理 API
 
-### `getApiPresets()`
+> **安全收敛公告（v1.7）**：本章节所列全部方法已从公开 API 中弃用。
+> 公开层不再允许外部读取、写入、删除或切换 API 预设（含 apiKey / apiConfig / tavernProfile 等敏感字段）。
+> 请改用 [AI 调用 API](#ai-调用-api) 中的 `callAI(messages, options)` 受限代理接口发起 AI 请求，
+> 并在 `options.presetName` 中指定要使用的预设名称。
+> 预设的管理（创建、编辑、删除）请通过数据库插件内部设置面板操作。
 
-获取所有 API 预设列表。
+### `getApiPresets()` [已弃用]
 
-**返回值**: `Array<Object>` - API 预设数组的深拷贝
+**状态**: 已弃用，始终返回空数组 `[]`。
 
-**返回结构**:
-```javascript
-[
-    {
-        name: '预设名称',
-        apiMode: 'custom',        // API 模式
-        apiConfig: {              // API 配置
-            customApiUrl: 'https://...',
-            customApiKey: '...',
-            customApiModel: 'gpt-4'
-        },
-        tavernProfile: ''         // Tavern Profile 名称
-    }
-]
-```
+**替代方案**: 使用 `callAI(messages, { presetName })` 发起 AI 请求。
 
-**示例**:
-```javascript
-const presets = window.AutoCardUpdaterAPI.getApiPresets();
-console.log('可用预设:', presets.map(p => p.name));
-```
+### `getTableApiPreset()` / `setTableApiPreset()` / `getPlotApiPreset()` / `setPlotApiPreset()` / `saveApiPreset()` / `loadApiPreset()` / `deleteApiPreset()` [已弃用]
 
----
+**状态**: 已弃用，始终返回 `false`（setter/loader/deleter）或 `''`（getter）。
 
-### `getTableApiPreset()`
-
-获取当前选中的填表 API 预设名称。
-
-**返回值**: `string` - 预设名称，如果使用当前配置则返回空字符串
-
-**示例**:
-```javascript
-const preset = window.AutoCardUpdaterAPI.getTableApiPreset();
-console.log('当前填表预设:', preset || '使用当前配置');
-```
-
----
-
-### `setTableApiPreset(presetName)`
-
-设置填表 API 预设。
-
-**参数**:
-| 参数名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| presetName | string | 是 | 预设名称，空字符串表示使用当前配置 |
-
-**返回值**: `boolean` - 设置是否成功
-
-**示例**:
-```javascript
-// 切换到指定预设
-window.AutoCardUpdaterAPI.setTableApiPreset('战斗场景API');
-
-// 恢复使用当前配置
-window.AutoCardUpdaterAPI.setTableApiPreset('');
-```
-
----
-
-### `getPlotApiPreset()`
-
-获取当前选中的剧情推进 API 预设名称。
-
-**返回值**: `string` - 预设名称，如果使用当前配置则返回空字符串
-
-**示例**:
-```javascript
-const preset = window.AutoCardUpdaterAPI.getPlotApiPreset();
-console.log('当前剧情推进预设:', preset || '使用当前配置');
-```
-
----
-
-### `setPlotApiPreset(presetName)`
-
-设置剧情推进 API 预设。
-
-**参数**:
-| 参数名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| presetName | string | 是 | 预设名称，空字符串表示使用当前配置 |
-
-**返回值**: `boolean` - 设置是否成功
-
-**示例**:
-```javascript
-window.AutoCardUpdaterAPI.setPlotApiPreset('日常对话API');
-```
-
----
-
-### `saveApiPreset(presetData)`
-
-保存或更新 API 预设。
-
-**参数**:
-| 参数名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| presetData | Object | 是 | 预设数据 |
-| presetData.name | string | 是 | 预设名称 |
-| presetData.apiMode | string | 否 | API 模式（如 'custom', 'proxy' 等） |
-| presetData.apiConfig | Object | 否 | API 配置对象 |
-| presetData.tavernProfile | string | 否 | Tavern Profile 名称 |
-
-**返回值**: `boolean` - 保存是否成功
-
-**示例**:
-```javascript
-const success = window.AutoCardUpdaterAPI.saveApiPreset({
-    name: '测试预设',
-    apiMode: 'custom',
-    apiConfig: {
-        customApiUrl: 'https://api.example.com/v1',
-        customApiKey: 'sk-xxx',
-        customApiModel: 'gpt-4o'
-    },
-    tavernProfile: ''
-});
-```
-
----
-
-### `loadApiPreset(presetName)`
-
-加载 API 预设（应用到当前配置）。
-
-**参数**:
-| 参数名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| presetName | string | 是 | 预设名称 |
-
-**返回值**: `boolean` - 加载是否成功
-
-**示例**:
-```javascript
-const success = window.AutoCardUpdaterAPI.loadApiPreset('测试预设');
-if (success) {
-    console.log('预设已应用到当前配置');
-}
-```
-
----
-
-### `deleteApiPreset(presetName)`
-
-删除 API 预设。
-
-**参数**:
-| 参数名 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| presetName | string | 是 | 预设名称 |
-
-**返回值**: `boolean` - 删除是否成功
-
-**说明**:
-- 如果删除的预设正在被使用（填表或剧情推进），相关引用会被自动清除
-
-**示例**:
-```javascript
-window.AutoCardUpdaterAPI.deleteApiPreset('测试预设');
-```
+**替代方案**: 通过插件内部设置面板管理预设；通过 `callAI(messages, { presetName, max_tokens })` 发起 AI 请求。
 
 ---
 
@@ -1733,29 +1582,31 @@ window.AutoCardUpdaterAPI.deleteApiPreset('测试预设');
 
 ### `callAI(messages, options)`
 
-调用 AI 生成内容，使用数据库当前配置的 API。
+通过数据库插件内部配置发起受限 AI 代理请求。外部不可读取或覆盖 API 密钥、URL、请求头等敏感配置。
 
 **参数**:
 | 参数名 | 类型 | 必填 | 说明 |
 |--------|------|------|------|
 | messages | Array | 是 | 消息数组，格式: `[{role: 'system'\|'user'\|'assistant', content: '...'}]` |
-| options.max_tokens / options.maxTokens | number \| string | 否 | 最大 token 数，默认使用数据库配置或 4096；数字字符串会被规范化 |
+| options.presetName | string | 否 | 指定要使用的 API 预设名称；不传则使用当前配置 |
+| options.max_tokens / options.maxTokens | number \| string | 否 | 最大 token 数，默认使用预设配置或 4096；数字字符串会被规范化 |
 
 **返回值**: `Promise<string|null>` - AI 返回的文本内容，失败返回 `null`
 
+**安全约束（v1.7）**:
+- `options` 中仅允许 `presetName`、`max_tokens`、`maxTokens` 三个字段。
+- 严禁传入以下字段，否则请求会被拒绝并返回 `null`：
+  `apiConfig`、`apiKey`、`url`、`requestHeaders`、`bodyParams`、`excludeBodyParams`、
+  `tavernProfile`、`model`、`temperature`、`stream`。
+- 外部无法通过 `callAI` 读取或修改任何 API 预设/配置内容。
+
 **说明**:
-- 使用数据库插件中配置的 API 设置（API URL、模型、密钥等）
-- 支持两种 API 模式：
-  - **酒馆 Profile 模式** (`apiMode === 'tavern'`)：使用酒馆的 Connection Manager
-  - **自定义 API 模式** (`apiMode === 'custom'`)：
-    - 如果启用 `useMainApi`，使用酒馆主 API（`TavernHelper.generateRaw`）
-    - 否则使用独立配置的 API（流式传输）
-- 前端插件可以通过此方法直接调用 AI，无需自行配置 API
+- 请求由数据库插件内部根据 `presetName`（或当前配置）选择 API 模式与凭据，外部仅提供消息和可选的 token 上限。
+- 错误与日志中不会出现 API 密钥、完整请求头或自定义 URL 等敏感信息。
 
 **使用场景**:
-- 前端插件需要调用 AI 生成内容（如地图生成、剧情分析等）
-- 避免在前端重复配置 API 信息
-- 统一使用数据库插件的 API 配置
+- 第三方插件需要调用 AI 生成内容（如地图生成、剧情分析等），但不应接触用户的 API 凭据。
+- 统一使用数据库插件的 API 配置，避免在各插件中重复配置和泄露密钥。
 
 **示例**:
 ```javascript
@@ -1766,7 +1617,10 @@ if (window.AutoCardUpdaterAPI && typeof window.AutoCardUpdaterAPI.callAI === 'fu
         { role: 'user', content: '请生成一个奇幻场景的描述。' }
     ];
     
-    const response = await window.AutoCardUpdaterAPI.callAI(messages, { max_tokens: 2000 });
+    // 使用指定预设
+    const response = await window.AutoCardUpdaterAPI.callAI(messages, { presetName: '我的GPT预设', max_tokens: 2000 });
+    
+    // 使用当前配置（不传 presetName）
     const response2 = await window.AutoCardUpdaterAPI.callAI(messages, { maxTokens: '2000' });
     
     if (response) {
@@ -1774,8 +1628,13 @@ if (window.AutoCardUpdaterAPI && typeof window.AutoCardUpdaterAPI.callAI === 'fu
     } else {
         console.error('AI 调用失败');
     }
+
+    // 以下调用会被拒绝并返回 null：
+    // const blocked = await window.AutoCardUpdaterAPI.callAI(messages, { apiKey: 'sk-xxx' });
+    // const blocked2 = await window.AutoCardUpdaterAPI.callAI(messages, { model: 'gpt-5' });
 }
 ```
+
 
 ---
 
@@ -1832,6 +1691,8 @@ const analysis = await window.AutoCardUpdaterAPI.callAI(messages);
 7. **数据隔离**: 切换预设后，`$6` 占位符会自动回溯查找匹配当前预设名称标签的历史数据，实现不同预设间的剧情规划隔离。
 
 8. **模板作用域**: `importTemplate()`、`exportTemplate()`、`resetTemplate()`、`switchTemplatePreset()`、`importTemplateFromData()` 都支持 `options.scope`。`global` 作用于当前 profile 的全局模板；`chat` 仅作用于当前聊天模板快照，不会改动全局模板库。
+9. **安全收敛 (v1.7)**: API 预设管理全部弃用，外部不可再通过 `getApiPresets` 等接口读取 apiKey / apiConfig 等敏感字段。请改用 `callAI(messages, { presetName, max_tokens })` 受限代理接口发起 AI 请求，外部仅提供消息和 token 上限，插件内部负责解析配置并代发请求。
+
 
 ---
 
@@ -1846,3 +1707,5 @@ const analysis = await window.AutoCardUpdaterAPI.callAI(messages);
 | 1.4 | 新增 AI 调用 API：`callAI(messages, options)` 使用数据库配置的 API 调用 AI；`getStoryContext(maxTurns)` 获取最近剧情上下文 |
 | 1.5 | 补充模板双作用域相关文档：`importTemplate(options)`、`exportTemplate(options)`、`resetTemplate(options)`、`getTemplatePresetNames()`、`switchTemplatePreset()`、`injectTemplatePresetToCurrentChat()`、`importTemplateFromData(templateData, options)` |
 | 1.6 | 新增外部导入 Headless API 与 Agent 世界书 API 文档：`importTxtTextAndSplit(text, options)`、结构化 `injectImportedSelected(options)`、`getAgentWorldbookControl()`、`setAgentWorldbookMode(mode, options)`、`runAgentWorldbookSkillify(options)` 及兼容别名 |
+| 1.7 | **安全收敛**：弃用全部 API 预设管理公开接口（`getApiPresets / saveApiPreset / loadApiPreset / deleteApiPreset / getTableApiPreset / setTableApiPreset / getPlotApiPreset / setPlotApiPreset`）；`callAI` 升级为受限代理接口，仅允许 `presetName + max_tokens`，禁止外部传入 `apiConfig / apiKey / url / requestHeaders / bodyParams / model / temperature / stream` 等敏感字段 |
+

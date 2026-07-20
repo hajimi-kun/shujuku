@@ -29,7 +29,12 @@ import { reloadStorageProvider } from '../../service/table/table-storage-strateg
 import { getLatestAiMessageIndexFromChat_ACU, getLatestTableAppendMessageIndexFromChat_ACU } from '../../service/table/table-history';
 import { getCurrentWorldbookConfig_ACU } from '../../service/settings/settings-readers';
 import { enqueueSummaryVectorIndexFlush_ACU } from '../../service/vector/summary-vector-index-flush-queue';
-import { applyVisualizerPendingDataOps_ACU, hasVisualizerPendingDataOps_ACU } from './visualizer-data-ops';
+import {
+    applyVisualizerPendingDataOps_ACU,
+    hasVisualizerPendingDataOps_ACU,
+    replaceVisualizerTemporaryRowIds_ACU,
+    resetVisualizerPendingDataOps_ACU,
+} from './visualizer-data-ops';
 import { validateSqliteTemplateDataStrict_ACU } from '../../service/table/sqlite-template-validation';
 import { validateDDLTextAgainstHeaders_ACU } from '../../shared/ddl-utils';
 
@@ -259,7 +264,9 @@ export async function saveVisualizerDataChanges_ACU(): Promise<void> {
     const latestAiIndex = getLatestAiMessageIndexFromChat_ACU(chat);
     const appendTargetIndex = getLatestTableAppendMessageIndexFromChat_ACU(chat, isolationKey, settings_ACU);
     await runPostSaveRefresh_ACU('visualizer_save_data', appendTargetIndex !== -1 ? appendTargetIndex : (latestAiIndex !== -1 ? latestAiIndex : undefined));
-    showToastr_ACU('success', '数据增量已通过批量 SQL 保存到当前消息。');
+    replaceVisualizerTemporaryRowIds_ACU(_acuVisState, result.insertedRowIds || {});
+    resetVisualizerPendingDataOps_ACU(_acuVisState);
+    showToastr_ACU('success', '数据增量已通过 V2 回放保存到当前消息。');
     closeACUWindow(`${SCRIPT_ID_PREFIX_ACU}-visualizer-window`);
 }
 

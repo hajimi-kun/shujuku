@@ -204,6 +204,50 @@ describe('useVisualizerAssistant', () => {
     expect(visualizer.currentSheet.content[1][2]).toBe('警觉');
   });
 
+  it('saving 状态下应用 AI 草稿会在任何草稿写入前拒绝', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerAssistant } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');
+    const visualizer = useVisualizerStore();
+    visualizer.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_a: { uid: 'sheet_a', name: 'A表', orderNo: 0, content: [[null, '姓名'], [null, 'A']] },
+    }, ['sheet_a']);
+    mockRunSession.mockImplementation(async (input: any) => buildResult(input, {
+      compileResult: {
+        candidateData: {
+          mate: { type: 'chatSheets', version: 1 },
+          sheet_a: { uid: 'sheet_a', name: 'A表', orderNo: 0, content: [[null, '姓名', '状态'], [null, 'A', '警觉']] },
+        },
+        orderedSheetKeys: ['sheet_a'],
+        deletedSheetKeys: ['sheet_old'],
+        lockChanges: [{ sheetKey: 'sheet_a', rows: [{ rowIndex: 0, locked: true }] }],
+      },
+    }));
+    const assistant = useVisualizerAssistant();
+    assistant.userRequest.value = '新增状态列';
+    await assistant.run();
+    visualizer.setSaving(true);
+    const before = JSON.stringify({
+      tempData: visualizer.tempData,
+      sheetOrder: visualizer.sheetOrder,
+      deletedSheetKeys: visualizer.deletedSheetKeys,
+      tableLockDrafts: visualizer.tableLockDrafts,
+      pendingLockChanges: visualizer.pendingLockChanges,
+      dirty: visualizer.dirty,
+    });
+
+    expect(() => assistant.applyLatestDraft()).toThrow('保存正在进行中');
+
+    expect(JSON.stringify({
+      tempData: visualizer.tempData,
+      sheetOrder: visualizer.sheetOrder,
+      deletedSheetKeys: visualizer.deletedSheetKeys,
+      tableLockDrafts: visualizer.tableLockDrafts,
+      pendingLockChanges: visualizer.pendingLockChanges,
+      dirty: visualizer.dirty,
+    })).toBe(before);
+  });
+
   it('schema/DDL 高风险项必须手动确认后才能应用', async () => {
     const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
     const { useVisualizerAssistant } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');

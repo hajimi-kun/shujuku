@@ -125,6 +125,23 @@ describe('useVisualizerConfigEditing', () => {
     expect(store.dirty).toBe(false);
   });
 
+  it('冻结状态下拒绝表级 API 预设持久化且不改变设置', async () => {
+    const store = await loadSheet();
+    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
+    const config = useVisualizerConfigEditing();
+    store.setSaving(true);
+
+    expect(() => config.setTableApiPreset('beta')).toThrow('保存正在进行中');
+    expect(runtimeMock.settings_ACU.tableApiPresetOverridesByName).toEqual({});
+    expect(saveSettingsMock.saveSettings_ACU).not.toHaveBeenCalled();
+
+    store.setSaving(false);
+    store.pendingDataOps.committed = { afterData: {}, insertedRowIds: {} };
+    expect(() => config.setTableApiPreset('beta')).toThrow('数据已持久化但本地刷新尚未完成');
+    expect(runtimeMock.settings_ACU.tableApiPresetOverridesByName).toEqual({});
+    expect(saveSettingsMock.saveSettings_ACU).not.toHaveBeenCalled();
+  });
+
   it('编码索引自动编号开关写入锁草稿，开启时立即重排当前表', async () => {
     const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
     const store = useVisualizerStore();
@@ -155,6 +172,58 @@ describe('useVisualizerConfigEditing', () => {
     expect(store.currentSheet.content[1][2]).toBe('AM0001');
     expect(helperMock.applySummaryIndexSequenceToTable_ACU).toHaveBeenCalledWith(store.currentSheet, 1);
     expect(store.dirty).toBe(true);
+  });
+
+  it('冻结状态下拒绝特殊索引锁编辑且不改变锁草稿或表内容', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const store = useVisualizerStore();
+    store.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_summary: {
+        uid: 'sheet_summary',
+        name: '总结表',
+        orderNo: 0,
+        content: [[null, '事件', '编码索引'], [null, '初遇', '手写编号']],
+      },
+    }, ['sheet_summary']);
+    store.loadLockDrafts({
+      sheet_summary: { rows: [], cols: [], cells: [], specialIndexLocked: false },
+    });
+    helperMock.getSummaryIndexColumnIndex_ACU.mockReturnValue(1);
+    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
+    const config = useVisualizerConfigEditing();
+    store.pendingDataOps.committed = { afterData: {}, insertedRowIds: {} };
+    const before = JSON.stringify({ content: store.currentSheet.content, locks: store.tableLockDrafts, dirty: store.dirty });
+
+    expect(() => config.setSpecialIndexLock(true)).toThrow('数据已持久化但本地刷新尚未完成');
+
+    expect(JSON.stringify({ content: store.currentSheet.content, locks: store.tableLockDrafts, dirty: store.dirty })).toBe(before);
+  });
+
+  it('saving 或 committed 状态下拒绝配置和特殊索引锁编辑且不改变草稿', async () => {
+    const store = await loadSheet();
+    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
+    const config = useVisualizerConfigEditing();
+    const actions = [
+      () => config.renameSheet('新表名'),
+      () => config.updateHeader(0, '新列名'),
+      () => config.addColumn('品质'),
+      () => config.deleteColumn(0),
+      () => config.updateUpdateConfig('batchSize', 2),
+      () => config.updateSourceData('note', '新备注'),
+      () => config.updateExportConfig('entryType', 'keyword'),
+      () => config.updateGlobalPlacement('wrapperPlacement', 'order', 90001),
+    ];
+    store.setSaving(true);
+    const beforeSaving = JSON.stringify(store.tempData);
+    actions.forEach(action => expect(action).toThrow('保存正在进行中'));
+    expect(JSON.stringify(store.tempData)).toBe(beforeSaving);
+
+    store.setSaving(false);
+    store.pendingDataOps.committed = { afterData: {}, insertedRowIds: {} };
+    const beforeCommitted = JSON.stringify(store.tempData);
+    actions.forEach(action => expect(action).toThrow('数据已持久化但本地刷新尚未完成'));
+    expect(JSON.stringify(store.tempData)).toBe(beforeCommitted);
   });
 
   it('世界书关键词条目类型沿用旧 service 识别的 keyword 枚举', async () => {
