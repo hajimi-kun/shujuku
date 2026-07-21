@@ -23035,19 +23035,6 @@ $CONTENT
                     }
                     const currentComment = typeof currentEntry.comment === 'string' ? currentEntry.comment : '';
                     const strippedComment = stripTakeoverMetaBlock_ACU(currentComment);
-                    if (isDatabaseGeneratedLorebookEntry_ACU(currentEntry)) {
-                        // Database exports are rewritten during normal runtime. Their comment and
-                        // content may legitimately change while takeover is active, but enabled,
-                        // type, and keys are still owned by takeover and must be restored.
-                        patches.push({
-                            uid: snapshotEntry.uid,
-                            enabled: snapshotEntry.previousEnabled !== false,
-                            keys: Array.isArray(snapshotEntry.previousKeys) ? snapshotEntry.previousKeys : [],
-                            type: snapshotEntry.previousType,
-                        });
-                        restoredInBook += 1;
-                        continue;
-                    }
                     if (!doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, currentComment)) {
                         logWarn_ACU(`[Agent世界书] 跳过恢复世界书条目：${normalizedBookName}#${snapshotEntry.uid} comment 已变化，避免覆盖用户修改。`);
                         if (strippedComment !== currentComment)
@@ -23159,7 +23146,11 @@ $CONTENT
                 updates: [],
             };
         }
-        const existingSnapshot = getPlotAgentWorldbookSnapshot_ACU();
+        // A page reload clears the in-memory cache while the canonical snapshot remains
+        // persisted in the worldbook state entry. Hydrate it before inspecting current
+        // disabled/constant entries, otherwise they are re-adopted as new candidates and
+        // their takeover state is incorrectly recorded as the user's original state.
+        const existingSnapshot = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
         const hasMatchingExistingSnapshot = existingSnapshot.active === true && existingSnapshot.selectionSignature === selectionSignature;
         const { snapshotBooks, updates } = await collectTakeoverCandidates_ACU(resolvedBookNames, hasMatchingExistingSnapshot ? existingSnapshot : buildInactiveSnapshot_ACU(selectionSignature));
         const newCandidateCount = updates.length || Object.values(snapshotBooks || {}).reduce((sum, entries) => sum + (Array.isArray(entries) ? entries.length : 0), 0);
