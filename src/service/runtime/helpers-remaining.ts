@@ -235,9 +235,14 @@ export {
   function isWorldbookEntryPresentInMessages_ACU(messages: any[], entry: any) {
     const candidates = buildNativeWorldbookGreenlightRemovalCandidates_ACU(entry);
     if (candidates.length === 0) return false;
+    const rawContent = String(entry?.content || '').trim();
+    const rawContentPattern = rawContent
+      ? new RegExp(`(?:^|\\n[ \\t]*\\n)${escapeAgentWorldbookRegExp_ACU(rawContent)}(?=\\n[ \\t]*\\n|$)`)
+      : null;
     for (const message of Array.isArray(messages) ? messages : []) {
       if (!message || typeof message !== 'object') continue;
       const allowRawContentOnly = isNativeWorldbookPromptMessage_ACU(message);
+      const isSystemPromptMessage = String(message.role || '').trim().toLowerCase() === 'system';
       const texts = typeof message.content === 'string'
         ? [message.content]
         : (Array.isArray(message.content)
@@ -247,6 +252,13 @@ export {
           : []);
       for (const text of texts) {
         if (candidates.some(candidate => (candidate.requiresComment || allowRawContentOnly) && text.includes(candidate.text))) {
+          return true;
+        }
+        // SillyTavern may merge an already activated constant entry into the main
+        // system prompt without its comment. Treat only a complete system/worldInfo
+        // paragraph as present so user text and incidental substrings cannot suppress
+        // the fallback injection.
+        if ((isSystemPromptMessage || allowRawContentOnly) && rawContentPattern?.test(text)) {
           return true;
         }
       }

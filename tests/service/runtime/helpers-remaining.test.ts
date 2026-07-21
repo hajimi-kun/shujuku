@@ -488,6 +488,48 @@ describe('handleChatCompletionReady_ACU', () => {
     ]);
   });
 
+  it('正文蓝灯已由酒馆合并进主 system prompt 时不会重复注入', async () => {
+    mockPendingFinalGenerationGreenlightsRef.value = [{ bookName: '数据库世界书', uid: 'native-constant' }];
+    mockGetAgentGreenlightWorldbookEntriesForPlot.mockResolvedValue([
+      { bookName: '数据库世界书', uid: 'native-constant', comment: '数据库导出条目', content: '已由酒馆原生注入的数据库内容' },
+    ]);
+    const data = {
+      messages: [
+        { role: 'system', content: '主系统提示词\n\n已由酒馆原生注入的数据库内容\n\n其余系统提示词' },
+        { role: 'user', content: '当前输入' },
+      ],
+    };
+
+    await handleChatCompletionReady_ACU(data);
+
+    expect(data.messages).toEqual([
+      { role: 'system', content: '主系统提示词\n\n已由酒馆原生注入的数据库内容\n\n其余系统提示词' },
+      { role: 'user', content: '当前输入' },
+    ]);
+    expect(mockLogDebug).not.toHaveBeenCalledWith('[提示词模板] 已补入 Agent 正文世界书绿灯消息，数量:', expect.any(Number));
+  });
+
+  it('用户消息包含相同正文时仍会补入正文蓝灯', async () => {
+    mockPendingFinalGenerationGreenlightsRef.value = [{ bookName: '世界书', uid: 'user-same-text' }];
+    mockGetAgentGreenlightWorldbookEntriesForPlot.mockResolvedValue([
+      { bookName: '世界书', uid: 'user-same-text', comment: '同文条目', content: '用户也输入了这段完整正文', depth: 1, role: 'system' },
+    ]);
+    const data = {
+      messages: [
+        { role: 'system', content: '主系统提示词' },
+        { role: 'user', content: '用户也输入了这段完整正文' },
+      ],
+    };
+
+    await handleChatCompletionReady_ACU(data);
+
+    expect(data.messages).toEqual([
+      { role: 'system', content: '主系统提示词' },
+      { role: 'system', content: '[ACU Agent Greenlight: 同文条目]\n用户也输入了这段完整正文', injected: true },
+      { role: 'user', content: '用户也输入了这段完整正文' },
+    ]);
+  });
+
 
   it('处理管线按正确顺序执行', async () => {
     const callOrder: string[] = [];
