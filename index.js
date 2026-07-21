@@ -27498,6 +27498,13 @@ $CONTENT
         }
         return keySet;
     }
+    function getAgentWorldbookRefKey_ACU(ref) {
+        const bookName = String(ref?.bookName || '').trim();
+        const uid = ref?.uid;
+        if (!bookName || uid === null || uid === undefined || String(uid).trim() === '')
+            return '';
+        return `${bookName}\u0000${String(uid).trim()}`;
+    }
     function isAgentWorldbookEntryAllowed_ACU(entry, allowedKeySet) {
         if (allowedKeySet.size === 0)
             return false;
@@ -27602,9 +27609,10 @@ $CONTENT
         logDebug_ACU('[提示词模板] 开始处理酒馆提示词...');
         if (shouldHandleAgentWorldbookFinalPrompt) {
             try {
-                const [allAgentSkillWorldbookEntries, allowedAgentWorldbookEntries] = await Promise.all([
+                const [allAgentSkillWorldbookEntries, allowedAgentWorldbookEntries, activeNativeGreenlights] = await Promise.all([
                     getAgentControlledWorldbookEntriesForFinalPrompt_ACU(settings_ACU?.plotSettings || {}),
                     getAgentGreenlightWorldbookEntriesForPlot_ACU(settings_ACU?.plotSettings || {}, finalGenerationGreenlights),
+                    readFinalGenerationGreenlights_ACU(),
                 ]);
                 const allowedFinalGreenlightKeySet = buildAgentWorldbookRefKeySet_ACU(finalGenerationGreenlights);
                 const controlledEntries = Array.isArray(allAgentSkillWorldbookEntries) ? allAgentSkillWorldbookEntries : [];
@@ -27614,7 +27622,13 @@ $CONTENT
                 if (filteredNativeCount > 0) {
                     logDebug_ACU('[提示词模板] 已过滤酒馆原生正文世界书绿灯片段，数量:', filteredNativeCount);
                 }
+                const activeNativeGreenlightKeySet = new Set((Array.isArray(activeNativeGreenlights) ? activeNativeGreenlights : [])
+                    .map(getAgentWorldbookRefKey_ACU)
+                    .filter(Boolean));
                 const entriesToInject = (Array.isArray(allowedAgentWorldbookEntries) ? allowedAgentWorldbookEntries : [])
+                    // The takeover writer has already enabled these entries as native constant
+                    // blue lights. Do not guess from the merged prompt and inject them again.
+                    .filter(entry => !activeNativeGreenlightKeySet.has(getAgentWorldbookRefKey_ACU(entry)))
                     .filter(entry => !isWorldbookEntryPresentInMessages_ACU(data.messages, entry));
                 const injectedMessageCount = injectAgentWorldbookEntriesIntoMessages_ACU(data.messages, entriesToInject);
                 if (injectedMessageCount > 0) {

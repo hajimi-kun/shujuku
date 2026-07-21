@@ -25,6 +25,7 @@ const {
   mockGetAgentControlledWorldbookEntriesForFinalPrompt,
   mockGetAgentGreenlightWorldbookEntriesForPlot,
   mockIsWorldbookTakeoverActive,
+  mockReadFinalGenerationGreenlights,
 } = vi.hoisted(() => {
   const mockPendingFinalGenerationGreenlightsRef = { value: [] as any[] };
   return {
@@ -50,6 +51,7 @@ const {
     mockGetAgentControlledWorldbookEntriesForFinalPrompt: vi.fn(),
     mockGetAgentGreenlightWorldbookEntriesForPlot: vi.fn(),
     mockIsWorldbookTakeoverActive: vi.fn(() => false),
+    mockReadFinalGenerationGreenlights: vi.fn(),
   };
 });
 
@@ -92,6 +94,7 @@ vi.mock('../../../src/service/runtime/plot-runtime', () => ({
 
 vi.mock('../../../src/service/agent/agent-worldbook-takeover', () => ({
   isWorldbookTakeoverActive_ACU: mockIsWorldbookTakeoverActive,
+  readFinalGenerationGreenlights_ACU: mockReadFinalGenerationGreenlights,
 }));
 
 vi.mock('../../../src/service/runtime/helpers-context-tags', () => ({
@@ -150,6 +153,7 @@ beforeEach(() => {
   mockGetWorldbookContentForPlot.mockResolvedValue('');
   mockGetAgentControlledWorldbookEntriesForFinalPrompt.mockResolvedValue([]);
   mockGetAgentGreenlightWorldbookEntriesForPlot.mockResolvedValue([]);
+  mockReadFinalGenerationGreenlights.mockResolvedValue([]);
 });
 
 describe('handleChatCompletionReady_ACU', () => {
@@ -504,6 +508,30 @@ describe('handleChatCompletionReady_ACU', () => {
 
     expect(data.messages).toEqual([
       { role: 'system', content: '主系统提示词\n\n已由酒馆原生注入的数据库内容\n\n其余系统提示词' },
+      { role: 'user', content: '当前输入' },
+    ]);
+    expect(mockLogDebug).not.toHaveBeenCalledWith('[提示词模板] 已补入 Agent 正文世界书绿灯消息，数量:', expect.any(Number));
+  });
+
+  it('正文蓝灯已成功写入真实世界书但 prompt 文本无法识别时不会重复注入', async () => {
+    mockPendingFinalGenerationGreenlightsRef.value = [{ bookName: '数据库世界书', uid: 'native-blue-light' }];
+    mockGetAgentGreenlightWorldbookEntriesForPlot.mockResolvedValue([
+      { bookName: '数据库世界书', uid: 'native-blue-light', comment: '数据库导出条目', content: '酒馆以未知格式合并的数据库内容' },
+    ]);
+    mockReadFinalGenerationGreenlights.mockResolvedValue([
+      { bookName: '数据库世界书', uid: 'native-blue-light' },
+    ]);
+    const data = {
+      messages: [
+        { role: 'system', content: '主系统提示词（酒馆已合并原生蓝灯）' },
+        { role: 'user', content: '当前输入' },
+      ],
+    };
+
+    await handleChatCompletionReady_ACU(data);
+
+    expect(data.messages).toEqual([
+      { role: 'system', content: '主系统提示词（酒馆已合并原生蓝灯）' },
       { role: 'user', content: '当前输入' },
     ]);
     expect(mockLogDebug).not.toHaveBeenCalledWith('[提示词模板] 已补入 Agent 正文世界书绿灯消息，数量:', expect.any(Number));
