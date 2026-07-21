@@ -27609,11 +27609,7 @@ $CONTENT
         logDebug_ACU('[提示词模板] 开始处理酒馆提示词...');
         if (shouldHandleAgentWorldbookFinalPrompt) {
             try {
-                const [allAgentSkillWorldbookEntries, allowedAgentWorldbookEntries, activeNativeGreenlights] = await Promise.all([
-                    getAgentControlledWorldbookEntriesForFinalPrompt_ACU(settings_ACU?.plotSettings || {}),
-                    getAgentGreenlightWorldbookEntriesForPlot_ACU(settings_ACU?.plotSettings || {}, finalGenerationGreenlights),
-                    readFinalGenerationGreenlights_ACU(),
-                ]);
+                const allAgentSkillWorldbookEntries = await getAgentControlledWorldbookEntriesForFinalPrompt_ACU(settings_ACU?.plotSettings || {});
                 const allowedFinalGreenlightKeySet = buildAgentWorldbookRefKeySet_ACU(finalGenerationGreenlights);
                 const controlledEntries = Array.isArray(allAgentSkillWorldbookEntries) ? allAgentSkillWorldbookEntries : [];
                 const entriesToFilter = controlledEntries
@@ -27622,21 +27618,9 @@ $CONTENT
                 if (filteredNativeCount > 0) {
                     logDebug_ACU('[提示词模板] 已过滤酒馆原生正文世界书绿灯片段，数量:', filteredNativeCount);
                 }
-                const activeNativeGreenlightKeySet = new Set((Array.isArray(activeNativeGreenlights) ? activeNativeGreenlights : [])
-                    .map(getAgentWorldbookRefKey_ACU)
-                    .filter(Boolean));
-                const entriesToInject = (Array.isArray(allowedAgentWorldbookEntries) ? allowedAgentWorldbookEntries : [])
-                    // The takeover writer has already enabled these entries as native constant
-                    // blue lights. Do not guess from the merged prompt and inject them again.
-                    .filter(entry => !activeNativeGreenlightKeySet.has(getAgentWorldbookRefKey_ACU(entry)))
-                    .filter(entry => !isWorldbookEntryPresentInMessages_ACU(data.messages, entry));
-                const injectedMessageCount = injectAgentWorldbookEntriesIntoMessages_ACU(data.messages, entriesToInject);
-                if (injectedMessageCount > 0) {
-                    logDebug_ACU('[提示词模板] 已补入 Agent 正文世界书绿灯消息，数量:', injectedMessageCount);
-                }
             }
             catch (e) {
-                logDebug_ACU('[提示词模板] 运行时 Agent 正文世界书绿灯过滤或补入失败，已跳过本轮接管处理:', e);
+                logDebug_ACU('[提示词模板] 运行时 Agent 正文世界书绿灯过滤失败，已跳过本轮接管处理:', e);
             }
         }
         if (!settings_ACU?.promptTemplateSettings?.enabled) {
