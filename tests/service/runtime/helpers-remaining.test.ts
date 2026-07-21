@@ -25,7 +25,6 @@ const {
   mockGetAgentControlledWorldbookEntriesForFinalPrompt,
   mockGetAgentGreenlightWorldbookEntriesForPlot,
   mockIsWorldbookTakeoverActive,
-  mockReadFinalGenerationGreenlights,
 } = vi.hoisted(() => {
   const mockPendingFinalGenerationGreenlightsRef = { value: [] as any[] };
   return {
@@ -51,7 +50,6 @@ const {
     mockGetAgentControlledWorldbookEntriesForFinalPrompt: vi.fn(),
     mockGetAgentGreenlightWorldbookEntriesForPlot: vi.fn(),
     mockIsWorldbookTakeoverActive: vi.fn(() => false),
-    mockReadFinalGenerationGreenlights: vi.fn(),
   };
 });
 
@@ -94,7 +92,6 @@ vi.mock('../../../src/service/runtime/plot-runtime', () => ({
 
 vi.mock('../../../src/service/agent/agent-worldbook-takeover', () => ({
   isWorldbookTakeoverActive_ACU: mockIsWorldbookTakeoverActive,
-  readFinalGenerationGreenlights_ACU: mockReadFinalGenerationGreenlights,
 }));
 
 vi.mock('../../../src/service/runtime/helpers-context-tags', () => ({
@@ -153,7 +150,6 @@ beforeEach(() => {
   mockGetWorldbookContentForPlot.mockResolvedValue('');
   mockGetAgentControlledWorldbookEntriesForFinalPrompt.mockResolvedValue([]);
   mockGetAgentGreenlightWorldbookEntriesForPlot.mockResolvedValue([]);
-  mockReadFinalGenerationGreenlights.mockResolvedValue([]);
 });
 
 describe('handleChatCompletionReady_ACU', () => {
@@ -164,7 +160,7 @@ describe('handleChatCompletionReady_ACU', () => {
     expect(mockParseRandomTags).not.toHaveBeenCalled();
   });
 
-  it('提示词模板未启用时仍执行 Agent 正文世界书过滤与补入', async () => {
+  it('提示词模板未启用时仍执行 Agent 正文世界书过滤但不手工补入', async () => {
     mockSettings.promptTemplateSettings = { enabled: false };
     mockPendingFinalGenerationGreenlightsRef.value = [{ bookName: '世界书', uid: 'allowed' }];
     mockGetAgentControlledWorldbookEntriesForFinalPrompt.mockResolvedValue([
@@ -184,7 +180,6 @@ describe('handleChatCompletionReady_ACU', () => {
 
     expect(data.messages).toEqual([
       { role: 'system', content: '系统提示' },
-      { role: 'system', content: '[ACU Agent Greenlight: Agent 选中]\nAgent 选中的正文设定', injected: true },
       { role: 'user', content: '当前输入' },
     ]);
     expect(mockParseRandomTags).not.toHaveBeenCalled();
@@ -337,7 +332,7 @@ describe('handleChatCompletionReady_ACU', () => {
     expect(mockLogDebug).not.toHaveBeenCalledWith('[提示词模板] 已补入 Agent 正文世界书绿灯消息，数量:', expect.any(Number));
   });
 
-  it('正文蓝灯 allowlist 条目未被酒馆原生触发时会补入当前请求', async () => {
+  it('正文蓝灯未出现在 hook 消息中时也不会手工注入破坏提示词结构', async () => {
     mockPendingFinalGenerationGreenlightsRef.value = [{ bookName: '世界书', uid: 'agent-only', reason: '正文需要' }];
     mockGetAgentGreenlightWorldbookEntriesForPlot.mockResolvedValue([
       { bookName: '世界书', uid: 'agent-only', comment: '仅 Agent 选中', content: '原生关键词未触发但正文需要的内容', depth: 1, role: 'system' },
@@ -353,10 +348,9 @@ describe('handleChatCompletionReady_ACU', () => {
 
     expect(data.messages).toEqual([
       { role: 'system', content: '系统提示' },
-      { role: 'system', content: '[ACU Agent Greenlight: 仅 Agent 选中]\n原生关键词未触发但正文需要的内容', injected: true },
       { role: 'user', content: '当前输入' },
     ]);
-    expect(mockLogDebug).toHaveBeenCalledWith('[提示词模板] 已补入 Agent 正文世界书绿灯消息，数量:', 1);
+    expect(mockGetAgentGreenlightWorldbookEntriesForPlot).not.toHaveBeenCalled();
   });
 
   it('正文蓝灯反向过滤只删除未被 Agent 放行的受控原生 skill 条目', async () => {
@@ -518,9 +512,6 @@ describe('handleChatCompletionReady_ACU', () => {
     mockGetAgentGreenlightWorldbookEntriesForPlot.mockResolvedValue([
       { bookName: '数据库世界书', uid: 'native-blue-light', comment: '数据库导出条目', content: '酒馆以未知格式合并的数据库内容' },
     ]);
-    mockReadFinalGenerationGreenlights.mockResolvedValue([
-      { bookName: '数据库世界书', uid: 'native-blue-light' },
-    ]);
     const data = {
       messages: [
         { role: 'system', content: '主系统提示词（酒馆已合并原生蓝灯）' },
@@ -537,7 +528,7 @@ describe('handleChatCompletionReady_ACU', () => {
     expect(mockLogDebug).not.toHaveBeenCalledWith('[提示词模板] 已补入 Agent 正文世界书绿灯消息，数量:', expect.any(Number));
   });
 
-  it('用户消息包含相同正文时仍会补入正文蓝灯', async () => {
+  it('用户消息包含相同正文时也不会建立第二条手工注入通道', async () => {
     mockPendingFinalGenerationGreenlightsRef.value = [{ bookName: '世界书', uid: 'user-same-text' }];
     mockGetAgentGreenlightWorldbookEntriesForPlot.mockResolvedValue([
       { bookName: '世界书', uid: 'user-same-text', comment: '同文条目', content: '用户也输入了这段完整正文', depth: 1, role: 'system' },
@@ -553,7 +544,6 @@ describe('handleChatCompletionReady_ACU', () => {
 
     expect(data.messages).toEqual([
       { role: 'system', content: '主系统提示词' },
-      { role: 'system', content: '[ACU Agent Greenlight: 同文条目]\n用户也输入了这段完整正文', injected: true },
       { role: 'user', content: '用户也输入了这段完整正文' },
     ]);
   });
