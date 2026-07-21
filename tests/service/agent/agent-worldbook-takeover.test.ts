@@ -45,6 +45,10 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   settings_ACU: { plotSettings: {} },
 }));
 
+vi.mock('../../../src/service/worldbook/worldbook-placeholder-classification', () => ({
+  isDatabaseGeneratedLorebookEntry_ACU: vi.fn((entry: any) => String(entry?.comment || entry?.name || '').startsWith('TavernDB-ACU-')),
+}));
+
 vi.mock('../../../src/service/agent/agent-skillify-service', () => ({
   isWorldbookEntrySkillifyCandidate_ACU: vi.fn((entry: any) => {
     const comment = String(entry?.comment || entry?.name || '').trim();
@@ -53,7 +57,8 @@ vi.mock('../../../src/service/agent/agent-skillify-service', () => ({
     if (comment.startsWith('TavernDB-ACU-AgentWorldbookConfig')) return false;
     if (comment.startsWith('TavernDB-ACU-AgentWorldbookSnapshot')) return false;
     if (comment.startsWith('TavernDB-ACU-AgentFinalGenerationGreenlights')) return false;
-    if (comment.startsWith('TavernDB-ACU-') && !comment.startsWith('TavernDB-ACU-AgentGreenlight')) return false;
+    if (['总结条目', '小总结条目', 'TavernDB-ACU-OutlineTable', 'TavernDB-ACU-CustomExport-纪要', 'TavernDB-ACU-CustomExport-总结', 'TavernDB-ACU-CustomExport-总体大纲']
+      .some(prefix => comment.startsWith(prefix))) return false;
     return true;
   }),
   getWorldbookEntryKeywordsForSkillify_ACU: vi.fn((entry: any) => entry?.keys || []),
@@ -671,6 +676,32 @@ describe('agent worldbook takeover native trigger suppression', () => {
     expect(entries.find(entry => entry.uid === 1)).toMatchObject({ enabled: false });
     expect(entries.find(entry => entry.uid === 2)).toMatchObject({ enabled: true, type: 'constant', keys: ['钥匙B'] });
     expect(await readFinalGenerationGreenlights_ACU()).toEqual([{ bookName: '角色A世界书', uid: 2 }]);
+  });
+
+  it('数据库条目接管期间被运行时更新后仍恢复原触发状态并保留最新内容', async () => {
+    const databaseComment = `TavernDB-ACU-CustomExport-关系档案-1\n\n${skillMetaBlock_ACU}`;
+    mockEntriesByBook.set('角色A世界书', [
+      { uid: 9, enabled: true, keys: ['关系档案'], type: 'selective', comment: databaseComment, content: '旧数据库内容' },
+    ]);
+    await takeoverWorldbookGreenlights_ACU();
+    await writeFinalGenerationGreenlights_ACU([{ bookName: '角色A世界书', uid: 9, reason: '正文需要' }]);
+    mockEntriesByBook.set('角色A世界书', [
+      { uid: 9, enabled: true, keys: ['运行时改写关键词'], type: 'constant', comment: `TavernDB-ACU-CustomExport-关系档案-2\n\n${skillMetaBlock_ACU}`, content: '最新数据库内容' },
+    ]);
+
+    const result = await restoreWorldbookGreenlights_ACU({ cleanupMode: 'full' });
+    const restored = mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 9);
+
+    expect(result.reason).toBe('native_worldbook_trigger_restored');
+    expect(result.restored).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(restored).toMatchObject({
+      enabled: true,
+      type: 'selective',
+      keys: ['关系档案'],
+      comment: `TavernDB-ACU-CustomExport-关系档案-2\n\n${skillMetaBlock_ACU}`,
+      content: '最新数据库内容',
+    });
   });
 
   it('清理正文绿灯只关闭当前蓝灯条目并清理旧版本隐藏状态条目', async () => {

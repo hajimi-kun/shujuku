@@ -21,6 +21,7 @@ import {
   getWorldbookEntryKeywordsForSkillify_ACU,
   isWorldbookEntrySkillifyCandidate_ACU,
 } from './agent-skillify-service';
+import { isDatabaseGeneratedLorebookEntry_ACU } from '../worldbook/worldbook-placeholder-classification';
 import {
   buildWorldbookSkillMetaMapForEntries_ACU,
   hasUsableWorldbookSkillMeta_ACU,
@@ -600,6 +601,19 @@ async function restoreSnapshotEntries_ACU(snapshot: AgentWorldbookControlSnapsho
         }
         const currentComment = typeof currentEntry.comment === 'string' ? currentEntry.comment : '';
         const strippedComment = stripTakeoverMetaBlock_ACU(currentComment);
+        if (isDatabaseGeneratedLorebookEntry_ACU(currentEntry)) {
+          // Database exports are rewritten during normal runtime. Their comment and
+          // content may legitimately change while takeover is active, but enabled,
+          // type, and keys are still owned by takeover and must be restored.
+          patches.push({
+            uid: snapshotEntry.uid,
+            enabled: snapshotEntry.previousEnabled !== false,
+            keys: Array.isArray(snapshotEntry.previousKeys) ? snapshotEntry.previousKeys : [],
+            type: snapshotEntry.previousType,
+          });
+          restoredInBook += 1;
+          continue;
+        }
         if (!doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, currentComment)) {
           logWarn_ACU(
             `[Agent世界书] 跳过恢复世界书条目：${normalizedBookName}#${snapshotEntry.uid} comment 已变化，避免覆盖用户修改。`,
