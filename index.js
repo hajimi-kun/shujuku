@@ -23146,6 +23146,16 @@ $CONTENT
         }
         return greenlights;
     }
+    async function reapplyFinalGenerationGreenlights_ACU(greenlights) {
+        let normalizedGreenlights = normalizeAgentWorldbookRefs_ACU(greenlights);
+        if (normalizedGreenlights.length === 0) {
+            normalizedGreenlights = await readFinalGenerationGreenlights_ACU();
+        }
+        if (normalizedGreenlights.length > 0) {
+            await writeFinalGenerationGreenlights_ACU(normalizedGreenlights);
+        }
+        return normalizedGreenlights;
+    }
     async function clearFinalGenerationGreenlights_ACU() {
         const snapshot = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
         const snapshotUidSetByBook = buildSnapshotUidSetByBook_ACU(snapshot);
@@ -66754,6 +66764,22 @@ $CONTENT
                             return;
                         const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
                         const shouldProcessPlot = shouldProcessPlotForGeneration_ACU(type, params, dryRun);
+                        if (type === 'regenerate' && !dryRun) {
+                            // Regenerate reuses the previous Agent decision, but the host may have
+                            // rebuilt worldbook state between swipes. Reapply the selected blue
+                            // lights before prompt construction without invoking Agent again.
+                            try {
+                                const greenlights = await reapplyFinalGenerationGreenlights_ACU(pendingFinalGenerationGreenlights_ACU);
+                                if (greenlights.length > 0) {
+                                    _set_pendingFinalGenerationGreenlights_ACU(greenlights);
+                                    logDebug_ACU(`[剧情推进] regenerate 重用上一轮 Agent 接管选择：${greenlights.length} 条。`);
+                                }
+                            }
+                            catch (error) {
+                                logWarn_ACU('[剧情推进] regenerate 恢复 Agent 接管蓝灯失败，继续宿主生成。', error);
+                            }
+                            return;
+                        }
                         const shouldEnsureInitialSeed = !dryRun
                             && type !== 'regenerate'
                             && !params?.automatic_trigger
@@ -66779,7 +66805,7 @@ $CONTENT
                         }
                         if (!shouldProcessPlot)
                             return;
-                        if (type === 'regenerate' || isProcessing_Plot_ACU)
+                        if (isProcessing_Plot_ACU)
                             return;
                         // [去重] 若同一文本刚被 TavernHelper.generate 钩子处理过，跳过
                         try {

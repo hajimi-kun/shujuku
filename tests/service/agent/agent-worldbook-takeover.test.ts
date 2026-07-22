@@ -110,6 +110,7 @@ import {
   clearFinalGenerationGreenlights_ACU,
   getPlotAgentWorldbookSnapshot_ACU,
   readFinalGenerationGreenlights_ACU,
+  reapplyFinalGenerationGreenlights_ACU,
   resolvePreTakeoverWorldbookSnapshot_ACU,
   refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU,
   restoreWorldbookGreenlights_ACU,
@@ -673,6 +674,21 @@ describe('agent worldbook takeover native trigger suppression', () => {
     expect(entries.find(entry => entry.uid === 1)).toMatchObject({ enabled: false });
     expect(entries.find(entry => entry.uid === 2)).toMatchObject({ enabled: true, type: 'constant', keys: ['钥匙B'] });
     expect(await readFinalGenerationGreenlights_ACU()).toEqual([{ bookName: '角色A世界书', uid: 2 }]);
+  });
+
+  it('重 roll 会复用上一轮选择并重新开启被宿主关闭的正文蓝灯', async () => {
+    await takeoverWorldbookGreenlights_ACU();
+    const selected = [{ bookName: '角色A世界书', uid: 1, reason: '上一轮正文需要' }];
+    await writeFinalGenerationGreenlights_ACU(selected);
+    await mockSetLorebookEntries('角色A世界书', [{ uid: 1, enabled: false }]);
+
+    const reapplied = await reapplyFinalGenerationGreenlights_ACU(selected);
+
+    expect(reapplied).toEqual(selected);
+    expect(mockEntriesByBook.get('角色A世界书')?.find(entry => entry.uid === 1)).toMatchObject({
+      enabled: true,
+      type: 'constant',
+    });
   });
 
   it('页面刷新后重新接管会先 hydration 持久化快照，不把残留蓝灯当成原始状态', async () => {

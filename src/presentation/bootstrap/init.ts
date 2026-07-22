@@ -8,7 +8,7 @@ import { showToastr_ACU } from '../theme/toast';
 import { attemptToLoadCoreApis_ACU } from '../triggers/settings-ui-sync';
 import { ensureInitialSeedCheckpoint_ACU, handleChatCompletionReady_ACU, loadPresetAndCleanCharacterData_ACU } from '../../service/runtime/helpers-remaining';
 import { SillyTavern_API_ACU } from '../../shared/host-api';
-import { currentChatFileIdentifier_ACU, generationGate_ACU, markUserSendIntent_ACU, isProcessing_Plot_ACU, isQuietLikeGeneration_ACU, isRecentUserSendIntent_ACU, loopState_ACU, recordGenerationContext_ACU, recordLastUserSend_ACU, settings_ACU, shouldProcessAutoTableUpdateForGenerationEnded_ACU, shouldProcessPlotForGeneration_ACU, shouldProcessSummaryVectorIndexForGeneration_ACU, _set_allChatMessages_ACU, _set_currentChatFileIdentifier_ACU, _set_currentJsonTableData_ACU, _set_independentTableStates_ACU, _set_isProcessing_Plot_ACU, _set_lastTotalAiMessages_ACU} from '../../service/runtime/state-manager';
+import { currentChatFileIdentifier_ACU, generationGate_ACU, markUserSendIntent_ACU, isProcessing_Plot_ACU, isQuietLikeGeneration_ACU, isRecentUserSendIntent_ACU, loopState_ACU, pendingFinalGenerationGreenlights_ACU, recordGenerationContext_ACU, recordLastUserSend_ACU, settings_ACU, shouldProcessAutoTableUpdateForGenerationEnded_ACU, shouldProcessPlotForGeneration_ACU, shouldProcessSummaryVectorIndexForGeneration_ACU, _set_allChatMessages_ACU, _set_currentChatFileIdentifier_ACU, _set_currentJsonTableData_ACU, _set_independentTableStates_ACU, _set_isProcessing_Plot_ACU, _set_lastTotalAiMessages_ACU, _set_pendingFinalGenerationGreenlights_ACU} from '../../service/runtime/state-manager';
 import { applyTemplateScopeForCurrentChat_ACU, loadSettings_ACU } from '../../service/settings/settings-service';
 import { resetScriptStateForNewChat_ACU } from '../../service/worldbook/injection-engine';
 import { reloadStorageProvider, disposeStorageProvider } from '../../service/table/table-storage-strategy';
@@ -28,6 +28,7 @@ import { preloadSummaryVectorIndexCacheForCurrentChat_ACU } from '../../service/
 import { restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU } from '../../service/vector/summary-vector-index-flush-queue';
 import { markSummaryVectorIndexDirtyForRealign_ACU } from '../../service/vector/summary-vector-index-realign-state';
 import { topLevelWindow_ACU } from '../../shared/env';
+import { reapplyFinalGenerationGreenlights_ACU } from '../../service/agent/agent-worldbook-takeover';
 
 // [从 state-manager.ts 搬入 presentation 层] 安装发送意图捕捉钩子（DOM 事件绑定）
 async function ensureInitialSeedCheckpointBeforeGeneration_ACU(reason: string, { allowPendingFirstUserMessage = true } = {}) {
@@ -342,6 +343,21 @@ export   function mainInitialize_ACU() {
             if (params?._qrf_processed_by_hook) return;
             const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
             const shouldProcessPlot = shouldProcessPlotForGeneration_ACU(type, params, dryRun);
+            if (type === 'regenerate' && !dryRun) {
+              // Regenerate reuses the previous Agent decision, but the host may have
+              // rebuilt worldbook state between swipes. Reapply the selected blue
+              // lights before prompt construction without invoking Agent again.
+              try {
+                const greenlights = await reapplyFinalGenerationGreenlights_ACU(pendingFinalGenerationGreenlights_ACU);
+                if (greenlights.length > 0) {
+                  _set_pendingFinalGenerationGreenlights_ACU(greenlights);
+                  logDebug_ACU(`[剧情推进] regenerate 重用上一轮 Agent 接管选择：${greenlights.length} 条。`);
+                }
+              } catch (error) {
+                logWarn_ACU('[剧情推进] regenerate 恢复 Agent 接管蓝灯失败，继续宿主生成。', error);
+              }
+              return;
+            }
             const shouldEnsureInitialSeed = !dryRun
               && type !== 'regenerate'
               && !params?.automatic_trigger
@@ -364,7 +380,7 @@ export   function mainInitialize_ACU() {
               }
             }
             if (!shouldProcessPlot) return;
-            if (type === 'regenerate' || isProcessing_Plot_ACU) return;
+            if (isProcessing_Plot_ACU) return;
 
             // [去重] 若同一文本刚被 TavernHelper.generate 钩子处理过，跳过
             try {
