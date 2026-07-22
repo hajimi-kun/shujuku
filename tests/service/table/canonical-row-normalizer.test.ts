@@ -38,6 +38,30 @@ describe('canonical-row-normalizer', () => {
     expect(result.removedRows).toEqual([{ sheetKey: 'sheet_0', rowIndex: 1, reason: 'empty_row_id' }]);
   });
 
+  it('清理旧版追加在表头之外的 auto_merged 尾标，并保持业务数据不变', () => {
+    const data: any = {
+      sheet_summary: {
+        content: [
+          ['row_id', '编码索引', '纪要'],
+          ['1', 'AM0001', '旧纪要', 'auto_merged'],
+          ['2', 'AM0002', '新纪要'],
+        ],
+      },
+    };
+
+    const result = normalizeCanonicalTableRows_ACU(data);
+
+    expect(data.sheet_summary.content).toEqual([
+      ['row_id', '编码索引', '纪要'],
+      ['1', 'AM0001', '旧纪要'],
+      ['2', 'AM0002', '新纪要'],
+    ]);
+    expect(result.strippedLegacyAutoMergedMarkers).toEqual([
+      { sheetKey: 'sheet_summary', rowIndex: 1 },
+    ]);
+    expect(result.changedSheetKeys).toEqual(['sheet_summary']);
+  });
+
   it('重复 row_id 与非数组行作为错误保留拒绝证据，不静默选择赢家', () => {
     const invalidRow = { secret: '不得进入错误文本' };
     const data: any = { sheet_0: { content: [['row_id', '名称'], ['1', '甲'], ['1', '乙'], invalidRow] } };

@@ -242,7 +242,7 @@ describe('executeAutoMergeBatch_ACU', () => {
   });
 
   it('AI 返回有效 tableEdit 时累积合并行', async () => {
-    mockExtractTableEditInner.mockReturnValue({ inner: 'insertRow(0, {"0": "合并纪要"})' });
+    mockExtractTableEditInner.mockReturnValue({ inner: 'insertRow(0, {"0": "AM0008", "1": "合并纪要", "2": "第12天"})' });
     mockSendConnectionManager.mockResolvedValue({
       ok: true,
       result: { choices: [{ message: { content: '<tableEdit>insertRow(0, {"0": "合并纪要"})</tableEdit>' } }] },
@@ -257,6 +257,8 @@ describe('executeAutoMergeBatch_ACU', () => {
     for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(6000);
     const result = await promise;
     expect(result.accumulatedSummary.length).toBeGreaterThan(0);
+    expect(result.accumulatedSummary[0]).toHaveLength(mockCurrentJsonTableData.sheet_0.content[0].length);
+    expect(result.accumulatedSummary[0]).not.toContain('auto_merged');
   }, 30000);
 
   it('AI 返回无效内容时抛出错误', async () => {
@@ -301,8 +303,8 @@ describe('finalizeAutoMerge_ACU', () => {
     mockRunTableUpdateCommit.mockClear();
 
     const accumulatedSummary = [
-      [null, '合并纪要1', 'auto_merged'],
-      [null, '合并纪要2', 'auto_merged'],
+      ['8', 'AM0008', '合并纪要1', '第12天'],
+      ['9', 'AM0009', '合并纪要2', '第13天'],
     ];
     const result = await finalizeAutoMerge_ACU(
       { summaryKey: 'sheet_0', endIndex: 3 } as any,
@@ -314,6 +316,8 @@ describe('finalizeAutoMerge_ACU', () => {
       targetSheetKeys: ['sheet_0'],
     }), expect.any(Function));
     expect(updateReadableLorebookEntry_ACU).toHaveBeenCalled();
+    expect(mockCurrentJsonTableData.sheet_0.content.every((row: any[]) => row.length === 4)).toBe(true);
+    expect(mockCurrentJsonTableData.sheet_0.content.flat()).not.toContain('auto_merged');
   });
 });
 

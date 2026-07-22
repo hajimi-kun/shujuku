@@ -1,3 +1,5 @@
+import { stripLegacyAutoMergedMarker_ACU } from './auto-merged-summary-row';
+
 export interface CanonicalRowIssue_ACU {
   sheetKey: string;
   rowIndex: number;
@@ -7,6 +9,7 @@ export interface CanonicalRowIssue_ACU {
 export interface CanonicalRowNormalizationResult_ACU {
   changedSheetKeys: string[];
   removedRows: CanonicalRowIssue_ACU[];
+  strippedLegacyAutoMergedMarkers: Array<{ sheetKey: string; rowIndex: number }>;
   errors: CanonicalRowIssue_ACU[];
 }
 
@@ -25,6 +28,7 @@ function normalizeRows_ACU(
   sheetKey: string,
   startIndex: number,
   result: CanonicalRowNormalizationResult_ACU,
+  headerWidth?: number,
 ): { rows: unknown[]; changed: boolean } {
   const usedRowIds = new Set<string>();
   const nextRows: unknown[] = [];
@@ -35,6 +39,10 @@ function normalizeRows_ACU(
       result.errors.push({ sheetKey, rowIndex, reason: 'invalid_row' });
       changed = true;
       return;
+    }
+    if (Number.isInteger(headerWidth) && stripLegacyAutoMergedMarker_ACU(row, headerWidth as number)) {
+      result.strippedLegacyAutoMergedMarkers.push({ sheetKey, rowIndex });
+      changed = true;
     }
     if (isEmptyCanonicalRowId_ACU(row[0])) {
       result.removedRows.push({ sheetKey, rowIndex, reason: 'empty_row_id' });
@@ -62,7 +70,12 @@ function normalizeRows_ACU(
  * explicit error because choosing a winner would silently lose data.
  */
 export function normalizeCanonicalTableRows_ACU(data: Record<string, any> | null | undefined): CanonicalRowNormalizationResult_ACU {
-  const result: CanonicalRowNormalizationResult_ACU = { changedSheetKeys: [], removedRows: [], errors: [] };
+  const result: CanonicalRowNormalizationResult_ACU = {
+    changedSheetKeys: [],
+    removedRows: [],
+    strippedLegacyAutoMergedMarkers: [],
+    errors: [],
+  };
   if (!data || typeof data !== 'object') return result;
 
   Object.entries(data).forEach(([sheetKey, sheet]) => {
@@ -74,7 +87,7 @@ export function normalizeCanonicalTableRows_ACU(data: Record<string, any> | null
       content[0][0] = 'row_id';
       changed = true;
     }
-    const normalizedContent = normalizeRows_ACU(content.slice(1), sheetKey, 1, result);
+    const normalizedContent = normalizeRows_ACU(content.slice(1), sheetKey, 1, result, content[0].length);
     if (normalizedContent.changed) changed = true;
     content.splice(1, content.length - 1, ...normalizedContent.rows);
 

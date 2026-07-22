@@ -588,13 +588,16 @@ export   async function refreshMergedDataAndNotify_ACU() {
         }
         // UI 选择器刷新由 presentation 层调用方负责
     } else {
-        // 更新内存中的数据
-        // [新增] 数据完整性检查：在加载数据时为AM编码的条目自动添加auto_merged标记
+        // 更新内存中的数据，并清理旧版本写入表头之外的 auto_merged 尾标。
         const normalization = normalizeCanonicalTableRows_ACU(mergedData);
         removedNullRowCount = normalization.removedRows.length;
         canonicalIssues = normalization.errors.map(issue => ({ ...issue }));
+        const normalizedSheetKeys = new Set([
+            ...normalization.removedRows.map(issue => issue.sheetKey),
+            ...normalization.strippedLegacyAutoMergedMarkers.map(issue => issue.sheetKey),
+        ]);
         const cleanupSheetDataByKey = Object.fromEntries(
-            [...new Set(normalization.removedRows.map(issue => issue.sheetKey))]
+            [...normalizedSheetKeys]
                 .filter(sheetKey => sheetKey.startsWith('sheet_') && mergedData[sheetKey])
                 .map(sheetKey => [sheetKey, JSON.parse(JSON.stringify(mergedData[sheetKey]))]),
         );
@@ -602,25 +605,15 @@ export   async function refreshMergedDataAndNotify_ACU() {
             logWarn_ACU(`[数据修复] 已移除 ${normalization.removedRows.length} 条缺少 row_id 的损坏数据行。`);
             integrityFixed = true;
         }
+        if (normalization.strippedLegacyAutoMergedMarkers.length > 0) {
+            logWarn_ACU(`[数据修复] 已清理 ${normalization.strippedLegacyAutoMergedMarkers.length} 个越界 auto_merged 尾标。`);
+            integrityFixed = true;
+        }
         if (normalization.errors.length > 0) {
             degraded = true;
             logWarn_ACU(`[数据修复] 发现 ${normalization.errors.length} 条无法自动合并的表格行问题。`);
         }
-        Object.keys(mergedData).forEach((sheetKey: string) => {
-            if (mergedData[sheetKey] && mergedData[sheetKey].content && Array.isArray(mergedData[sheetKey].content)) {
-                const table = mergedData[sheetKey];
-                table.content.slice(1).forEach((row: any, idx: number) => {
-                    if (Array.isArray(row) && row.length > 1 && typeof row[1] === 'string' && row[1].startsWith('AM') && row[row.length - 1] !== 'auto_merged') {
-                        // 发现AM开头的条目缺少auto_merged标记，自动修复
-                        row.push('auto_merged');
-                        integrityFixed = true;
-                        logDebug_ACU(`[数据修复] 为表格${sheetKey}的第${idx + 1}条AM开头的条目添加auto_merged标记`);
-                    }
-                });
-            }
-        });
-
-        if (normalization.removedRows.length > 0) {
+        if (normalization.removedRows.length > 0 || normalization.strippedLegacyAutoMergedMarkers.length > 0) {
             if (normalization.errors.length > 0) {
                 nullRowCleanupPersisted = 'skipped_invalid_data';
             } else {
@@ -635,14 +628,12 @@ export   async function refreshMergedDataAndNotify_ACU() {
                     degraded = true;
                 }
                 if (cleanupResult.status === 'failed') {
-                    logWarn_ACU('[数据修复] 空 row_id 已从内存数据移除，但 V2 shard 自愈持久化失败。', cleanupResult.error);
+                    logWarn_ACU('[数据修复] 内存数据已规范化，但 V2 shard 自愈持久化失败。', cleanupResult.error);
                 }
             }
         }
 
-        if (integrityFixed) {
-            logDebug_ACU('数据完整性已自动修复，添加了缺失的auto_merged标记');
-        }
+        if (integrityFixed) logDebug_ACU('数据完整性已自动修复。');
 
         // [修复] 强制稳定顺序（用户手动顺序优先，否则模板顺序）
         const stableKeys = getSortedSheetKeys_ACU(mergedData);

@@ -1167,7 +1167,7 @@ describe('refreshMergedDataAndNotify_ACU', () => {
     expect(result).toBeDefined();
   });
 
-  it('遇到空 row_id 和数值业务列时清理坏行且不调用 startsWith 造成崩溃', async () => {
+  it('遇到空 row_id 和 AM 业务编码时只清理坏行，不追加越界标记', async () => {
     const mergedData = {
       mate: { type: 'chatSheets', version: 1 },
       sheet_0: {
@@ -1189,13 +1189,42 @@ describe('refreshMergedDataAndNotify_ACU', () => {
     expect(mergedData.sheet_0.content).toEqual([
       ['row_id', '数值'],
       ['2', 30],
-      ['3', 'AM-有效记录', 'auto_merged'],
+      ['3', 'AM-有效记录'],
     ]);
     expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('缺少 row_id'));
     expect(mockPersistNullRowCleanupShards).toHaveBeenCalledWith(expect.objectContaining({
       sheetDataByKey: expect.objectContaining({ sheet_0: expect.objectContaining({ content: [['row_id', '数值'], ['2', 30], ['3', 'AM-有效记录']] }) }),
     }));
     expect(result).toMatchObject({ removedNullRowCount: 1, nullRowCleanupPersisted: 'persisted', nullRowCleanupMessageIndex: 3, degraded: false });
+  });
+
+  it('加载迁移数据时清理越界 auto_merged 尾标并持久化修复', async () => {
+    const mergedData = {
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_summary: {
+        name: '纪要表',
+        content: [
+          ['row_id', '编码索引', '纪要'],
+          ['1', 'AM0001', '旧纪要', 'auto_merged'],
+          ['2', 'AM0002', '新纪要'],
+        ],
+      },
+    };
+    mockMergeAllIndependentTables.mockResolvedValue(mergedData);
+    mockGetSortedSheetKeys.mockReturnValue(['sheet_summary']);
+    mockReorderDataBySheetKeys.mockImplementation((data: any) => data);
+
+    const result = await refreshMergedDataAndNotify_ACU();
+
+    expect(mergedData.sheet_summary.content).toEqual([
+      ['row_id', '编码索引', '纪要'],
+      ['1', 'AM0001', '旧纪要'],
+      ['2', 'AM0002', '新纪要'],
+    ]);
+    expect(mockPersistNullRowCleanupShards).toHaveBeenCalledWith(expect.objectContaining({
+      sheetDataByKey: expect.objectContaining({ sheet_summary: expect.any(Object) }),
+    }));
+    expect(result).toMatchObject({ integrityFixed: true, nullRowCleanupPersisted: 'persisted', degraded: false });
   });
 
   it('存在无法自动合并的 canonical issue 时只清理内存并跳过持久化', async () => {

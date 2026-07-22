@@ -9849,6 +9849,33 @@ $CONTENT
         return candidate;
     }
 
+    const LEGACY_AUTO_MERGED_MARKER_ACU = 'auto_merged';
+    function hasLegacyAutoMergedSummaryCode_ACU(row) {
+        return Array.isArray(row)
+            && typeof row[1] === 'string'
+            && row[1].trim().toUpperCase().startsWith('AM');
+    }
+    function hasLegacyAutoMergedMarker_ACU(row) {
+        return Array.isArray(row) && row[row.length - 1] === LEGACY_AUTO_MERGED_MARKER_ACU;
+    }
+    function isAutoMergedSummaryRow_ACU(row, knownRowIds = new Set()) {
+        if (!Array.isArray(row))
+            return false;
+        const rowId = row[0] === null || row[0] === undefined ? '' : String(row[0]).trim();
+        return hasLegacyAutoMergedMarker_ACU(row)
+            || hasLegacyAutoMergedSummaryCode_ACU(row)
+            || (rowId !== '' && knownRowIds.has(rowId));
+    }
+    function stripLegacyAutoMergedMarker_ACU(row, headerWidth) {
+        if (!Array.isArray(row)
+            || row.length !== headerWidth + 1
+            || !hasLegacyAutoMergedMarker_ACU(row)) {
+            return false;
+        }
+        row.pop();
+        return true;
+    }
+
     function isEmptyCanonicalRowId_ACU(value) {
         return value === null || value === undefined || (typeof value === 'string' && value.trim() === '');
     }
@@ -9857,7 +9884,7 @@ $CONTENT
             .map(issue => `${issue.sheetKey} 第 ${issue.rowIndex} 行：${issue.reason}`)
             .join('；');
     }
-    function normalizeRows_ACU$2(rows, sheetKey, startIndex, result) {
+    function normalizeRows_ACU$2(rows, sheetKey, startIndex, result, headerWidth) {
         const usedRowIds = new Set();
         const nextRows = [];
         let changed = false;
@@ -9867,6 +9894,10 @@ $CONTENT
                 result.errors.push({ sheetKey, rowIndex, reason: 'invalid_row' });
                 changed = true;
                 return;
+            }
+            if (Number.isInteger(headerWidth) && stripLegacyAutoMergedMarker_ACU(row, headerWidth)) {
+                result.strippedLegacyAutoMergedMarkers.push({ sheetKey, rowIndex });
+                changed = true;
             }
             if (isEmptyCanonicalRowId_ACU(row[0])) {
                 result.removedRows.push({ sheetKey, rowIndex, reason: 'empty_row_id' });
@@ -9894,7 +9925,12 @@ $CONTENT
      * explicit error because choosing a winner would silently lose data.
      */
     function normalizeCanonicalTableRows_ACU(data) {
-        const result = { changedSheetKeys: [], removedRows: [], errors: [] };
+        const result = {
+            changedSheetKeys: [],
+            removedRows: [],
+            strippedLegacyAutoMergedMarkers: [],
+            errors: [],
+        };
         if (!data || typeof data !== 'object')
             return result;
         Object.entries(data).forEach(([sheetKey, sheet]) => {
@@ -9908,7 +9944,7 @@ $CONTENT
                 content[0][0] = 'row_id';
                 changed = true;
             }
-            const normalizedContent = normalizeRows_ACU$2(content.slice(1), sheetKey, 1, result);
+            const normalizedContent = normalizeRows_ACU$2(content.slice(1), sheetKey, 1, result, content[0].length);
             if (normalizedContent.changed)
                 changed = true;
             content.splice(1, content.length - 1, ...normalizedContent.rows);
@@ -16174,17 +16210,12 @@ $CONTENT
                         const row = next.content[r];
                         if (!Array.isArray(row))
                             continue;
-                        const hasAutoMergedTag = row.length > 0 && row[row.length - 1] === 'auto_merged';
                         if (row.length < targetLen) {
                             while (row.length < targetLen)
                                 row.push('');
-                            if (hasAutoMergedTag && row[row.length - 1] !== 'auto_merged')
-                                row.push('auto_merged');
                         }
                         else if (row.length > targetLen) {
                             row.splice(targetLen);
-                            if (hasAutoMergedTag)
-                                row.push('auto_merged');
                         }
                     }
                 }
@@ -28240,36 +28271,30 @@ $CONTENT
             // UI 选择器刷新由 presentation 层调用方负责
         }
         else {
-            // 更新内存中的数据
-            // [新增] 数据完整性检查：在加载数据时为AM编码的条目自动添加auto_merged标记
+            // 更新内存中的数据，并清理旧版本写入表头之外的 auto_merged 尾标。
             const normalization = normalizeCanonicalTableRows_ACU(mergedData);
             removedNullRowCount = normalization.removedRows.length;
             canonicalIssues = normalization.errors.map(issue => ({ ...issue }));
-            const cleanupSheetDataByKey = Object.fromEntries([...new Set(normalization.removedRows.map(issue => issue.sheetKey))]
+            const normalizedSheetKeys = new Set([
+                ...normalization.removedRows.map(issue => issue.sheetKey),
+                ...normalization.strippedLegacyAutoMergedMarkers.map(issue => issue.sheetKey),
+            ]);
+            const cleanupSheetDataByKey = Object.fromEntries([...normalizedSheetKeys]
                 .filter(sheetKey => sheetKey.startsWith('sheet_') && mergedData[sheetKey])
                 .map(sheetKey => [sheetKey, JSON.parse(JSON.stringify(mergedData[sheetKey]))]));
             if (normalization.removedRows.length > 0) {
                 logWarn_ACU(`[数据修复] 已移除 ${normalization.removedRows.length} 条缺少 row_id 的损坏数据行。`);
                 integrityFixed = true;
             }
+            if (normalization.strippedLegacyAutoMergedMarkers.length > 0) {
+                logWarn_ACU(`[数据修复] 已清理 ${normalization.strippedLegacyAutoMergedMarkers.length} 个越界 auto_merged 尾标。`);
+                integrityFixed = true;
+            }
             if (normalization.errors.length > 0) {
                 degraded = true;
                 logWarn_ACU(`[数据修复] 发现 ${normalization.errors.length} 条无法自动合并的表格行问题。`);
             }
-            Object.keys(mergedData).forEach((sheetKey) => {
-                if (mergedData[sheetKey] && mergedData[sheetKey].content && Array.isArray(mergedData[sheetKey].content)) {
-                    const table = mergedData[sheetKey];
-                    table.content.slice(1).forEach((row, idx) => {
-                        if (Array.isArray(row) && row.length > 1 && typeof row[1] === 'string' && row[1].startsWith('AM') && row[row.length - 1] !== 'auto_merged') {
-                            // 发现AM开头的条目缺少auto_merged标记，自动修复
-                            row.push('auto_merged');
-                            integrityFixed = true;
-                            logDebug_ACU(`[数据修复] 为表格${sheetKey}的第${idx + 1}条AM开头的条目添加auto_merged标记`);
-                        }
-                    });
-                }
-            });
-            if (normalization.removedRows.length > 0) {
+            if (normalization.removedRows.length > 0 || normalization.strippedLegacyAutoMergedMarkers.length > 0) {
                 if (normalization.errors.length > 0) {
                     nullRowCleanupPersisted = 'skipped_invalid_data';
                 }
@@ -28285,13 +28310,12 @@ $CONTENT
                         degraded = true;
                     }
                     if (cleanupResult.status === 'failed') {
-                        logWarn_ACU('[数据修复] 空 row_id 已从内存数据移除，但 V2 shard 自愈持久化失败。', cleanupResult.error);
+                        logWarn_ACU('[数据修复] 内存数据已规范化，但 V2 shard 自愈持久化失败。', cleanupResult.error);
                     }
                 }
             }
-            if (integrityFixed) {
-                logDebug_ACU('数据完整性已自动修复，添加了缺失的auto_merged标记');
-            }
+            if (integrityFixed)
+                logDebug_ACU('数据完整性已自动修复。');
             // [修复] 强制稳定顺序（用户手动顺序优先，否则模板顺序）
             const stableKeys = getSortedSheetKeys_ACU(mergedData);
             mergedData = reorderDataBySheetKeys_ACU(mergedData, stableKeys);
@@ -39896,6 +39920,15 @@ $CONTENT
     }
 
     // merge-logic.ts
+    function getKnownAutoMergedRowIds_ACU(summaryKey) {
+        const rowIds = settings_ACU.autoMergedOrder?.[summaryKey];
+        return new Set((Array.isArray(rowIds) ? rowIds : [])
+            .map((rowId) => String(rowId ?? '').trim())
+            .filter(Boolean));
+    }
+    function isKnownAutoMergedRow_ACU(row, summaryKey) {
+        return isAutoMergedSummaryRow_ACU(row, getKnownAutoMergedRowIds_ACU(summaryKey));
+    }
     // ═══ 自动合并纪要：触发检查 ═══
     function checkAutoMergeTrigger_ACU() {
         if (!settings_ACU.autoMergeEnabled)
@@ -39906,7 +39939,7 @@ $CONTENT
             return { shouldTrigger: false };
         const summaryCount = (currentJsonTableData_ACU[summaryKey].content || [])
             .slice(1)
-            .filter((row) => !row || row[row.length - 1] !== 'auto_merged')
+            .filter((row) => !isKnownAutoMergedRow_ACU(row, summaryKey))
             .length;
         const threshold = settings_ACU.autoMergeThreshold || 20;
         const reserve = settings_ACU.autoMergeReserve || 0;
@@ -39926,7 +39959,7 @@ $CONTENT
             throw new Error('未找到纪要表');
         let allSummaryRows = (currentJsonTableData_ACU[summaryKey].content || [])
             .slice(1)
-            .filter((row) => !row || row[row.length - 1] !== 'auto_merged');
+            .filter((row) => !isKnownAutoMergedRow_ACU(row, summaryKey));
         allSummaryRows = allSummaryRows.slice(startIndex, endIndex);
         const batches = [];
         for (let i = 0; i < allSummaryRows.length; i += batchSize) {
@@ -39940,7 +39973,7 @@ $CONTENT
     }
     // ═══ 自动合并纪要：执行单个批次 ═══
     async function executeAutoMergeBatch_ACU(prepared, batch, accumulatedSummary) {
-        const { summaryKey, targetCount, promptTemplate, isAutoMode } = prepared;
+        const { summaryKey, targetCount, promptTemplate } = prepared;
         const { batchRows, globalStartOffset, batchIndex } = batch;
         const summaryTableObj = currentJsonTableData_ACU[summaryKey];
         const usedSummaryRowIds = new Set([
@@ -39984,7 +40017,7 @@ $CONTENT
             if (!tableObj || !tableObj.content)
                 return [];
             const allRows = tableObj.content.slice(1);
-            const autoMergedRows = allRows.filter((row) => row && row[row.length - 1] === 'auto_merged');
+            const autoMergedRows = allRows.filter((row) => isKnownAutoMergedRow_ACU(row, summaryKey));
             if (!autoMergedRows.length)
                 return [];
             const n = Number.isFinite(count) ? Math.max(0, count) : 0;
@@ -40090,9 +40123,6 @@ $CONTENT
                             if (!Array.isArray(rowData))
                                 throw new Error('insertRow 数据必须是对象或数组。');
                             rowData = [allocateSummaryRowId(), ...rowData];
-                            if (isAutoMode) {
-                                rowData.push('auto_merged');
-                            }
                             if (tableIdx === 0 && summaryKey)
                                 newSummaryRows.push(rowData);
                         }
@@ -40121,11 +40151,19 @@ $CONTENT
             return { mergedRows: 0 };
         const table = currentJsonTableData_ACU[summaryKey];
         const originalContent = table.content.slice(1);
+        const headerWidth = Array.isArray(table.content[0]) ? table.content[0].length : 0;
+        const canonicalAccumulatedSummary = accumulatedSummary.map((row) => {
+            if (!Array.isArray(row))
+                return row;
+            const nextRow = [...row];
+            stripLegacyAutoMergedMarker_ACU(nextRow, headerWidth);
+            return nextRow;
+        });
         let actualEndIndex = 0;
         let foundCount = 0;
         for (let i = 0; i < originalContent.length; i++) {
             const row = originalContent[i];
-            if (!row || row[row.length - 1] !== 'auto_merged') {
+            if (!isKnownAutoMergedRow_ACU(row, summaryKey)) {
                 foundCount++;
                 if (foundCount === endIndex) {
                     actualEndIndex = i + 1;
@@ -40133,12 +40171,12 @@ $CONTENT
                 }
             }
         }
-        const existingAutoMergedRows = originalContent.filter((row) => row && row[row.length - 1] === 'auto_merged');
+        const existingAutoMergedRows = originalContent.filter((row) => isKnownAutoMergedRow_ACU(row, summaryKey));
         const remainingRows = originalContent.slice(actualEndIndex);
         const newSummaryContent = [
             ...existingAutoMergedRows,
-            ...accumulatedSummary,
-            ...remainingRows.filter((row) => !row || row[row.length - 1] !== 'auto_merged')
+            ...canonicalAccumulatedSummary,
+            ...remainingRows.filter((row) => !isKnownAutoMergedRow_ACU(row, summaryKey))
         ];
         table.content = [table.content[0], ...newSummaryContent];
         if (!settings_ACU.autoMergedOrder)
@@ -40146,8 +40184,8 @@ $CONTENT
         if (!settings_ACU.autoMergedOrder[summaryKey])
             settings_ACU.autoMergedOrder[summaryKey] = [];
         const orderList = settings_ACU.autoMergedOrder[summaryKey];
-        accumulatedSummary.forEach((row) => {
-            if (row && row[row.length - 1] === 'auto_merged' && row[0] !== null && row[0] !== undefined && !orderList.includes(row[0])) {
+        canonicalAccumulatedSummary.forEach((row) => {
+            if (Array.isArray(row) && row[0] !== null && row[0] !== undefined && !orderList.includes(row[0])) {
                 orderList.push(row[0]);
             }
         });

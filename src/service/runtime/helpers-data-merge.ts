@@ -61,13 +61,10 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                   for (let r = 1; r < next.content.length; r++) {
                       const row = next.content[r];
                       if (!Array.isArray(row)) continue;
-                      const hasAutoMergedTag = row.length > 0 && row[row.length - 1] === 'auto_merged';
                       if (row.length < targetLen) {
                           while (row.length < targetLen) row.push('');
-                          if (hasAutoMergedTag && row[row.length - 1] !== 'auto_merged') row.push('auto_merged');
                       } else if (row.length > targetLen) {
                           row.splice(targetLen);
-                          if (hasAutoMergedTag) row.push('auto_merged');
                       }
                   }
               }
