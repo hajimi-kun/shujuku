@@ -1106,7 +1106,9 @@ export async function applyUnifiedGroupFillResponses_ACU(
         }
         const parseResultObject = typeof parseResult === 'object' && parseResult !== null ? parseResult : null;
         const parseSuccess = parseResultObject ? parseResultObject.success : !!parseResult;
-        const parsedKeys = parseResultObject ? (parseResultObject.modifiedKeys || []) : (response.job?.targetSheetKeys || []);
+        // 与单卡提交路径保持一致：bare `true`（未识别到 tableEdit 块）不得把目标表当作已修改键，
+        // 否则会把未变更快照当成真实更新写入，造成假保存。详见 executeCardUpdateCore_ACU 注释。
+        const parsedKeys = parseResultObject ? (parseResultObject.modifiedKeys || []) : [];
         const appliedEdits = parseResultObject && typeof parseResultObject.appliedEdits === 'number'
             ? parseResultObject.appliedEdits
             : (Array.isArray(parsedKeys) ? parsedKeys.length : 0);
@@ -1757,8 +1759,12 @@ export async function executeCardUpdateCore_ACU(
                         parseSuccess = parseResult.success;
                         parsedKeys = parseResult.modifiedKeys || [];
                     } else {
+                        // bare `true` 仅表示未识别到 <tableEdit> 块或块为空（strict JSON 下 extractStrict
+                        // 返回 ok 但归一化响应仍无块时会走到这里）。这并不代表目标表被成功填写，
+                        // 不得把 targetSheetKeys 当作已修改键，否则会把未变更的（通常只有表头/预置行
+                        // 的）快照当作真实更新写入，造成“成功横幅 + 未记录归零 + 表格无数据”的假保存。
                         parseSuccess = !!parseResult;
-                        parsedKeys = targetSheetKeys || [];
+                        parsedKeys = [];
                     }
 
                     if (!parseSuccess) {
@@ -1821,17 +1827,29 @@ export async function executeCardUpdateCore_ACU(
                     const keysToTrackAsUpdated = hasTargetSheetTracking
                         ? keysToPersist.filter((sheetKey: string) => targetTrackingKeys.includes(sheetKey))
                         : keysToPersist.filter((sheetKey: string) => keysToActuallySave.includes(sheetKey));
-                    const fillAttemptKeys = hasTargetSheetTracking
-                        ? targetTrackingKeys
-                        : keysToPersist;
-                    const updateGroupKeysToUse = Array.isArray(fillAttemptKeys)
-                        ? fillAttemptKeys.filter(sheetKey => {
-                            const table = workingTableData?.[sheetKey];
-                            if (!table || !isSummaryOrOutlineTable_ACU(table.name)) return true;
-                            return keysToTrackAsUpdated.includes(sheetKey);
-                        })
-                        : fillAttemptKeys;
+                    // A fill attempt is not a completed update unless it produced a
+                    // replayable table change. Advancing untouched target sheets here
+                    // makes the scheduler report zero unrecorded floors while replay
+                    // still contains no data for those sheets.
+                    const updateGroupKeysToUse = keysToTrackAsUpdated;
                     const operations = buildSheetReplaceOperationsFromData_ACU(workingTableData, keysToActuallySave, 'system');
+
+                    // 诊断哨兵：本轮提交既不写入任何 operation 也不写入任何目标表，但调用方期望
+                    // 填写目标表（hasTargetSheetTracking 且非首次初始化）。这正是“假保存”的签名——
+                    // AI 响应里没有可应用的表格编辑，却仍以 success 返回。把上下文打出来便于定位
+                    // 是 bare-true、空 modifiedKeys 还是 mode 过滤把指令全屏蔽了。
+                    if (operations.length === 0 && keysToActuallySave.length === 0
+                        && hasTargetSheetTracking && !isFirstTimeInit) {
+                        const appliedEditsForLog = typeof parseResult === 'object' && parseResult !== null
+                            ? (parseResult.appliedEdits ?? 0)
+                            : 'bare-true';
+                        logWarn_ACU(
+                            `[假保存哨兵] 本轮未写入任何表格数据但将以 success 返回：targetSheetKeys=[${(targetSheetKeys || []).join(',')}], `
+                            + `parsedKeys=[${parsedKeys.join(',')}], appliedEdits=${appliedEditsForLog}, `
+                            + `parseResultShape=${typeof parseResult === 'object' && parseResult !== null ? 'object' : 'bare'}, `
+                            + `updateMode=${updateMode}。若 AI 确有 insertRow 但 appliedEdits=0，检查 mode 过滤与总结/大纲同步门禁。`,
+                        );
+                    }
 
                     return {
                         success: true,

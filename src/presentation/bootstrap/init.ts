@@ -21,6 +21,7 @@ import { orchestrateTavernHelperHook_ACU, orchestrateAfterCommandsStrategy1_ACU,
 import { getSendTextareaValue_ACU, setSendTextareaValue_ACU } from '../components/status-display';
 import { updateCardUpdateStatusDisplay_ACU } from '../components/update-status-display';
 import { handleNewMessageDebounced_ACU } from '../triggers/settings-ui-sync';
+import { triggerAutomaticUpdateIfNeeded_ACU } from '../triggers/settings-ui-sync/settings-ui-trigger';
 import { enterLoopRetryFlow_ACU, onLoopGenerationEnded_ACU, stopAutoLoop_ACU } from '../triggers/auto-loop';
 import { runOptimizationLogicWithUI_ACU } from '../components/plot-planning-ui';
 import { processSummaryVectorIndexBeforeGenerationWithUI_ACU } from '../components/summary-vector-index-ui';
@@ -496,6 +497,9 @@ export   function mainInitialize_ACU() {
                         }
                         // [修复] 重新合并数据并更新UI和世界书
                         await refreshMergedDataAndNotifyWithUI_ACU();
+                        if (evName === 'MESSAGE_SWIPED') {
+                            await triggerAutomaticUpdateIfNeeded_ACU();
+                        }
                         const realignDirtyReason = evName === 'MESSAGE_DELETED'
                             ? 'chat_modified_deleted'
                             : 'chat_modified_swiped';

@@ -10,6 +10,8 @@ import { openAutoCardPopup_ACU } from '../../pages/main-popup';
 import { openNewVisualizer_ACU } from '../../pages/visualizer';
 import { showToastr_ACU } from '../../theme/toast';
 import { handleManualUpdate_ACU } from '../../triggers/update-process';
+import { triggerAutomaticUpdateIfNeeded_ACU } from '../../triggers/settings-ui-sync/settings-ui-trigger';
+import { refreshMergedDataAndNotifyWithUI_ACU } from '../../components/pipeline-ui-helpers';
 import { saveSettingsAndNotify_ACU } from '../../components/settings-ui-helpers';
 // deleteApiPreset_ACU / loadApiPreset_ACU 不再从公开 API 层直接导入；
 // 内部 UI 仍通过 settings-ui-sync 独立使用，不受公开 API 收敛影响。
@@ -125,6 +127,18 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
                 return await handleManualUpdate_ACU();
             } catch (e) {
                 logError_ACU('manualUpdate failed:', e);
+                return false;
+            }
+        },
+
+        // 按当前聊天状态重新执行自动更新调度，不切换到手动更新语义。
+        triggerAutoUpdate: async function() {
+            try {
+                await refreshMergedDataAndNotifyWithUI_ACU();
+                await triggerAutomaticUpdateIfNeeded_ACU();
+                return true;
+            } catch (e) {
+                logError_ACU('triggerAutoUpdate failed:', e);
                 return false;
             }
         },

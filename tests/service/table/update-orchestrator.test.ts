@@ -74,15 +74,21 @@ const mockApplySqlEditsToTableDataSnapshot = vi.fn();
 const mockPrepareAIInput = vi.fn();
 const mockReloadStorageProvider = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
-vi.mock('../../../src/service/ai/prompt-builder', () => ({
-  callCustomOpenAI_ACU: (...args: any[]) => mockCallCustomOpenAI(...args),
-  parseAndApplyTableEdits_ACU: (...args: any[]) => mockParseAndApplyTableEdits(...args),
-  parseAndApplyTableEditsToData_ACU: (...args: any[]) => {
-    const impl = mockParseAndApplyTableEditsToData.getMockImplementation();
-    return impl ? mockParseAndApplyTableEditsToData(...args) : mockParseAndApplyTableEdits(...args);
-  },
-  prepareAIInput_ACU: (...args: any[]) => mockPrepareAIInput(...args),
-}));
+vi.mock('../../../src/service/ai/prompt-builder', async (importOriginal) => {
+  // 保留真实导出（extractTableEditInner_ACU / extractStrictJsonTableFillResponse_ACU / isSqlContent 等），
+  // 这样 collectGroupFillResponse_ACU 的真实校验能在测试里跑通；只覆盖需要桩的四个函数。
+  const actual: any = await importOriginal();
+  return {
+    ...actual,
+    callCustomOpenAI_ACU: (...args: any[]) => mockCallCustomOpenAI(...args),
+    parseAndApplyTableEdits_ACU: (...args: any[]) => mockParseAndApplyTableEdits(...args),
+    parseAndApplyTableEditsToData_ACU: (...args: any[]) => {
+      const impl = mockParseAndApplyTableEditsToData.getMockImplementation();
+      return impl ? mockParseAndApplyTableEditsToData(...args) : mockParseAndApplyTableEdits(...args);
+    },
+    prepareAIInput_ACU: (...args: any[]) => mockPrepareAIInput(...args),
+  };
+});
 
 const { mockChatArrayForSeedStage, mockIndependentTableStates, mockGetChatArray_ACU, mockCaptureManualRefillSessionSnapshot, mockClearManualRefillIncrementalDataInRange, mockClearManualRefillSheetDataInRange, mockCommitManualRefillSheetSnapshot, mockRestoreManualRefillSessionSnapshot, mockEnsureManualRefillInitialBaseline, mockEnsureBoundaryCheckpoint, mockShouldRotateBoundaryCheckpoint, mockPurgeSheetKeysFromChatHistoryHard } = vi.hoisted(() => {
   const chatArray: any[] = [];
@@ -1000,7 +1006,7 @@ describe('executeCardUpdateCore_ACU', () => {
     expect(result.error).toContain('save failed');
   });
 
-  it('无实质数据改动但 targetSheetKeys 非空时记录填表尝试但不推进 changed tracking', async () => {
+  it('无实质数据改动但 targetSheetKeys 非空时不推进填表门禁或 changed tracking', async () => {
     mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>   </tableEdit>');
     mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: [] });
@@ -1017,10 +1023,37 @@ describe('executeCardUpdateCore_ACU', () => {
     expect(mockPersistTablesToChatMessage).toHaveBeenCalledWith(expect.objectContaining({
       targetMessageIndex: 0,
       targetSheetKeys: [],
-      updateGroupKeys: ['sheet_0'],
+      updateGroupKeys: [],
       trackingSheetKeys: [],
       source: 'group_fill',
     }));
+  });
+
+  it('parser 返回 bare true（未识别到 tableEdit 块）时不得把目标表当作已写入', async () => {
+    // 回归：strict JSON 下 extractStrict 返回 ok 但归一化响应仍无 <tableEdit> 块时，
+    // parseAndApplyTableEditsToData_ACU 会返回 bare `true`。旧逻辑把 targetSheetKeys
+    // 当作 parsedKeys，导致把未变更的（只有表头/预置行的）快照当成真实更新写入，
+    // 表现为“成功横幅 + 未记录归零 + 表格无数据”的假保存。修复后 bare true 必须等价于
+    // “无可写入改动”：不写入任何目标表、不推进填表门禁。
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit> </tableEdit>');
+    mockParseAndApplyTableEdits.mockReturnValue(true);
+    mockCheckIfFirstTimeInit.mockResolvedValue(false);
+    mockSaveIndependentTable.mockResolvedValue({ saved: true });
+
+    const result = await executeCardUpdateCore_ACU(
+      [], 0, false, 'auto_standard', false,
+      ['sheet_0'], null, new AbortController()
+    );
+
+    expect(result.success).toBe(true);
+    expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(1);
+    const persistCall = mockPersistTablesToChatMessage.mock.calls[0][0];
+    // 关键断言：不得把 sheet_0 当作已写入目标表，也不得推进填表门禁。
+    expect(persistCall.targetSheetKeys).toEqual([]);
+    expect(persistCall.updateGroupKeys).toEqual([]);
+    expect(persistCall.trackingSheetKeys).toEqual([]);
+    expect(persistCall.operations).toEqual([]);
   });
 
   it('目标表参与本轮但仅部分表有实质修改时，只按实质修改表推进 tracking', async () => {
@@ -1043,7 +1076,7 @@ describe('executeCardUpdateCore_ACU', () => {
     expect(mockPersistTablesToChatMessage).toHaveBeenCalledWith(expect.objectContaining({
       targetMessageIndex: 0,
       targetSheetKeys: ['sheet_0'],
-      updateGroupKeys: ['sheet_0', 'sheet_1'],
+      updateGroupKeys: ['sheet_0'],
       trackingSheetKeys: ['sheet_0'],
       source: 'group_fill',
     }));
