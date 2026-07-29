@@ -12585,9 +12585,16 @@ $CONTENT
         const hasExistingV2Frame = hasAnyV2Frame_ACU(chat, isolationKey, target.index);
         const operations = normalizeOperations_ACU(options.operations, afterData, options.source, hasExistingCheckpoint);
         const effectiveChangedSheetKeys = candidateChangedSheetKeys;
-        const hasMetadataOnlyFillEvent = filledSheetKeys.length > 0 || (Array.isArray(options.groupKeys) && options.groupKeys.length > 0);
+        const hasFillSheets = filledSheetKeys.length > 0 || (Array.isArray(options.groupKeys) && options.groupKeys.length > 0);
+        // [假保存修复] operations=0 时不得把 groupKeys/filledSheetKeys 视为"已填表"事件。
+        // 多条提交路径（统一 runtime-SQL / 快照、单条 SQL / 快照）在 AI 本轮无可应用编辑时，
+        // 仍会把目标表当作 fillAttemptKeys 传入 updateGroupKeys；若 persist 仍记录 metadata-only fill event，
+        // 会写入 operations=0 的条目并推进"未记录"门禁，但没有任何可重放数据 → 重载即回退到 checkpoint，
+        // 表现为"成功横幅 + 未记录归零 + 表格无数据"的假保存。仅当 operations>0 才允许 metadata-only 填表事件。
+        // isManualRefillProgressOnly 仍按 hasFillSheets 判定（语义未改动），manual refill 行为不变。
+        const hasMetadataOnlyFillEvent = operations.length > 0 && hasFillSheets;
         const hasManualRefillProgress = !!options.manualRefillProgress;
-        const isManualRefillProgressOnly = operations.length === 0 && !hasMetadataOnlyFillEvent && hasManualRefillProgress;
+        const isManualRefillProgressOnly = operations.length === 0 && !hasFillSheets && hasManualRefillProgress;
         if (!manualRefillProgressIsValidForIntroductionHistory_ACU(options.manualRefillProgress)) {
             return { saved: false, error: 'V2 manualRefillProgress 格式无效，已拒绝写入。' };
         }
@@ -45978,6 +45985,23 @@ $CONTENT
                 }
                 sqlTexts.push(sqlText);
             }
+            // [SQL假保存修复-统一路径] 与 executeCardUpdateCore 单条路径哨兵一致：统一提交前先校验
+            // 所有分组的 SQL 是否可拆分出可执行语句。applyEditsBatch 与 buildSqlSheetBatchOperationsFromText_ACU
+            // 共用同一 splitter；若全部分组 split 为 0，applyEditsBatch 返回 {success:true, appliedEdits:0, modifiedKeys:[]}，
+            // 但统一路径仍会把 fillAttemptKeys（=目标表）作为 updateGroupKeys 传入 persist。persist 层已加兜底
+            // （operations=0 不再写 metadata-only 条目），但此处静默跳过可避免统一提交的错误/重试风暴，并给出"未写入"提示。
+            if (!options.manualRefillProgress) {
+                const totalUnifiedSqlStatements = sqlTexts.reduce((sum, sqlText) => sum + normalizeSqlStatementsForRuntimeLog_ACU(sqlText || '').length, 0);
+                if (totalUnifiedSqlStatements === 0) {
+                    const unifiedFirstTimeInit = await checkIfFirstTimeInit_ACU();
+                    if (!unifiedFirstTimeInit) {
+                        logWarn_ACU(`[假保存哨兵-统一SQL] 统一提交的所有分组均无可执行 SQL 语句，静默跳过（不写入、不推进门禁、不报成功）。`
+                            + `groups=${sortedResponses.length}, targetSheets=[${[...allTargetSheetKeySet].join(',')}], `
+                            + `sqlTextCount=${sqlTexts.length}, totalStatements=${totalUnifiedSqlStatements}`);
+                        return { success: false, modifiedKeys: [], skippedNoSql: true };
+                    }
+                }
+            }
             const commitResult = await runTableUpdateCommit_ACU({
                 source: 'group_fill',
                 reason: 'applyUnifiedGroupFillResponses:runtime_sql',
@@ -46126,6 +46150,23 @@ $CONTENT
         }
         applySpecialIndexSequenceToSummaryTables_ACU(workingTableData);
         const modifiedKeys = [...modifiedKeySet].sort();
+        // [假保存修复-统一快照路径] 若所有分组均无可应用编辑（bare-true / 空 tableEdit），
+        // operations 与 modifiedKeys 均为空，且非首次初始化、非手动重填，则统一快照路径仍会把
+        // fillAttemptKeys（目标表）作为 updateGroupKeys 传入 persist。persist 层已加兜底，但此处静默
+        // 跳过可避免统一提交的错误/重试风暴，并给出"未写入"提示，与单条路径哨兵语义一致。
+        if (!options.isImportMode
+            && operations.length === 0
+            && modifiedKeys.length === 0
+            && initializedSheetKeys.size === 0
+            && !options.manualRefillProgress) {
+            const snapshotFirstTimeInit = await checkIfFirstTimeInit_ACU();
+            if (!snapshotFirstTimeInit) {
+                logWarn_ACU(`[假保存哨兵-统一快照] 统一提交的所有分组均无可应用表格编辑，静默跳过（不写入、不推进门禁、不报成功）。`
+                    + `groups=${sortedResponses.length}, targetSheets=[${[...allTargetSheetKeySet].join(',')}], `
+                    + `modifiedKeys=[], operations=[]`);
+                return { success: false, modifiedKeys: [], skippedNoSql: true };
+            }
+        }
         if (!options.isImportMode) {
             const isFirstTimeInit = await checkIfFirstTimeInit_ACU();
             const allUnifiedSheetKeys = getSortedSheetKeys_ACU(workingTableData);
@@ -46235,6 +46276,7 @@ $CONTENT
         const isStopped = () => options.abortController?.signal.aborted === true || (options.respectGlobalStop !== false && wasStoppedByUser_ACU$1);
         let committedBucketCount = 0;
         let aborted = false;
+        let anySkippedNoSql = false;
         for (let bucketIndex = 0; bucketIndex < orderedBuckets.length; bucketIndex++) {
             if (isStopped()) {
                 aborted = true;
@@ -46417,6 +46459,13 @@ $CONTENT
                     syncAfterCommit: options.syncAfterCommit,
                     baseRevision,
                 });
+                if (applyResult.skippedNoSql) {
+                    // [假保存修复] 本 bucket 被静默跳过（AI 无可执行产出）。不计失败、不重试、不推进门禁。
+                    anySkippedNoSql = true;
+                    bucketSucceeded = true;
+                    emitBucketProgress(bucketIndex, { phase: 'complete' });
+                    break;
+                }
                 if (applyResult.success) {
                     const nextCommittedBucketCount = committedBucketCount + 1;
                     options.onBucketCommitted?.({
@@ -46454,11 +46503,11 @@ $CONTENT
             }
         }
         if (aborted) {
-            return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount };
+            return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount, skippedNoSql: anySkippedNoSql };
         }
         return failedGroups.size > 0
-            ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount }
-            : { success: true, failedGroups: [], committedBucketCount };
+            ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount, skippedNoSql: anySkippedNoSql }
+            : { success: true, failedGroups: [], committedBucketCount, skippedNoSql: anySkippedNoSql };
     }
     /**
      * 执行单次卡片更新的核心逻辑（AI调用 + 重试 + 解析 + 保存）

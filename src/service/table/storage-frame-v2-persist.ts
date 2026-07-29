@@ -969,9 +969,16 @@ async function persistTableMutationLogV2Core_ACU(
   const hasExistingV2Frame = hasAnyV2Frame_ACU(chat, isolationKey, target.index);
   const operations = normalizeOperations_ACU(options.operations, afterData, options.source, hasExistingCheckpoint);
   const effectiveChangedSheetKeys = candidateChangedSheetKeys;
-  const hasMetadataOnlyFillEvent = filledSheetKeys.length > 0 || (Array.isArray(options.groupKeys) && options.groupKeys.length > 0);
+  const hasFillSheets = filledSheetKeys.length > 0 || (Array.isArray(options.groupKeys) && options.groupKeys.length > 0);
+  // [假保存修复] operations=0 时不得把 groupKeys/filledSheetKeys 视为"已填表"事件。
+  // 多条提交路径（统一 runtime-SQL / 快照、单条 SQL / 快照）在 AI 本轮无可应用编辑时，
+  // 仍会把目标表当作 fillAttemptKeys 传入 updateGroupKeys；若 persist 仍记录 metadata-only fill event，
+  // 会写入 operations=0 的条目并推进"未记录"门禁，但没有任何可重放数据 → 重载即回退到 checkpoint，
+  // 表现为"成功横幅 + 未记录归零 + 表格无数据"的假保存。仅当 operations>0 才允许 metadata-only 填表事件。
+  // isManualRefillProgressOnly 仍按 hasFillSheets 判定（语义未改动），manual refill 行为不变。
+  const hasMetadataOnlyFillEvent = operations.length > 0 && hasFillSheets;
   const hasManualRefillProgress = !!options.manualRefillProgress;
-  const isManualRefillProgressOnly = operations.length === 0 && !hasMetadataOnlyFillEvent && hasManualRefillProgress;
+  const isManualRefillProgressOnly = operations.length === 0 && !hasFillSheets && hasManualRefillProgress;
   if (!manualRefillProgressIsValidForIntroductionHistory_ACU(options.manualRefillProgress)) {
     return { saved: false, error: 'V2 manualRefillProgress 格式无效，已拒绝写入。' };
   }

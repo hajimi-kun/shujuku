@@ -3832,7 +3832,7 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     }));
   });
 
-  it('非空 tableEdit 未形成实质性操作时仍视为成功但不登记参与表', async () => {
+  it('非空 tableEdit 未形成实质性操作时静默跳过（不写入、不推进门禁、不报成功）', async () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
     const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
     vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: true }, { is_user: false, mes: 'AI回复' }]);
@@ -3856,19 +3856,17 @@ describe('processGroupedRuntimeChunk_ACU', () => {
       { key: 'group_b', groupId: 1, indices: [1], batchSize: 2, sheetKeys: ['sheet_1'], requestOptions: null },
     ], 'manual_independent');
 
+    // [假保存修复] 两分组均无可应用编辑（modifiedKeys=[]、operations=[]）→ 静默跳过：
+    // 不调用 persist（不写 operations=0 的 metadata-only 条目）、不推进门禁、不报成功/失败。
     expect(result.success).toBe(true);
+    expect(result.skippedNoSql).toBe(true);
     expect(result.failedGroups).toEqual([]);
     expect(result.error).toBeUndefined();
     expect(capturedTableDataTexts).toHaveLength(2);
     expect(capturedTableDataTexts[0]).not.toContain('UNIFIED_GROUP_ERROR_FEEDBACK');
     expect(capturedTableDataTexts[1]).not.toContain('UNIFIED_GROUP_ERROR_FEEDBACK');
     expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(2);
-    expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(1);
-    expect(mockPersistTablesToChatMessage).toHaveBeenCalledWith(expect.objectContaining({
-      targetSheetKeys: [],
-      updateGroupKeys: ['sheet_0', 'sheet_1'],
-      trackingSheetKeys: [],
-    }));
+    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
   });
 
 

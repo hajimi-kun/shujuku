@@ -253,6 +253,64 @@ describe('manualRefillProgress V2 validation', () => {
   });
 });
 
+describe('persistTableMutationLogV2_ACU 假保存哨兵（operations=0 不得写 metadata-only fill event）', () => {
+  beforeEach(() => { mocks.saveChat.mockClear(); mocks.saveChatStrict.mockClear(); });
+
+  it('operations=[] + groupKeys=目标表 + 已有 checkpoint 时拒绝写入 metadata-only 条目（不推进门禁）', async () => {
+    const { persistTableMutationLogV2_ACU } = await import('../../../src/service/table/storage-frame-v2-persist');
+    const message = seedFrame();
+    const frameBefore = JSON.parse(JSON.stringify(message.TavernDB_ACU_IsolatedData[''].storageFrame));
+    mocks.loadReplayState.mockResolvedValue(frameBefore.checkpoint.data);
+
+    const result = await persistTableMutationLogV2_ACU({
+      targetMessageIndex: 0,
+      source: 'group_fill',
+      afterData: frameBefore.checkpoint.data,
+      filledSheetKeys: ['sheet_a', 'sheet_b'],
+      candidateChangedSheetKeys: [],
+      groupKeys: ['sheet_a', 'sheet_b'],
+      operations: [],
+      trackAsUpdate: true,
+      transactionContext: makeTransaction(),
+      assumeCommitLock: true,
+    });
+
+    // 假保存修复：operations=0 时即使 groupKeys/filledSheetKeys 非空，也不得追加 metadata-only 条目。
+    expect(result.saved).toBe(false);
+    expect(result.error).toContain('requires explicit operations');
+    const frameAfter = message.TavernDB_ACU_IsolatedData[''].storageFrame;
+    expect(frameAfter.logEntries).toHaveLength(frameBefore.logEntries.length);
+    expect(frameAfter.headRevision).toBe(frameBefore.headRevision);
+    expect(frameAfter.checkpoint).toEqual(frameBefore.checkpoint);
+    expect(mocks.saveChat).not.toHaveBeenCalled();
+    expect(mocks.saveChatStrict).not.toHaveBeenCalled();
+  });
+
+  it('operations>0 + groupKeys=目标表 时正常追加含数据的条目（回归：不误伤合法填表）', async () => {
+    const { persistTableMutationLogV2_ACU } = await import('../../../src/service/table/storage-frame-v2-persist');
+    const message = seedFrame({ logEntries: [] });
+    const sheetAUpdated = { ...sheetA, content: [['row_id', 'value'], ['1', 'updated']] };
+    const result = await persistTableMutationLogV2_ACU({
+      targetMessageIndex: 0,
+      source: 'group_fill',
+      afterData: { mate: { type: 'acu' }, sheet_a: sheetAUpdated, sheet_b: sheetB } as any,
+      filledSheetKeys: ['sheet_a'],
+      candidateChangedSheetKeys: ['sheet_a'],
+      groupKeys: ['sheet_a'],
+      operations: [{ kind: 'sheet_replace', sheetKey: 'sheet_a', sheet: sheetAUpdated, reason: 'system' }],
+      trackAsUpdate: true,
+      transactionContext: makeTransaction(),
+      assumeCommitLock: true,
+    });
+
+    expect(result.saved).toBe(true);
+    const frameAfter = message.TavernDB_ACU_IsolatedData[''].storageFrame;
+    expect(frameAfter.logEntries).toHaveLength(1);
+    expect(frameAfter.logEntries[0].operations).toHaveLength(1);
+    expect(frameAfter.logEntries[0].groupKeys).toEqual(['sheet_a']);
+  });
+});
+
 describe('persistTableMutationLogV2_ACU incremental replacement', () => {
   beforeEach(() => {
     mocks.chat.length = 0;

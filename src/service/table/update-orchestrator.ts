@@ -986,6 +986,29 @@ export async function applyUnifiedGroupFillResponses_ACU(
             sqlTexts.push(sqlText);
         }
 
+        // [SQL假保存修复-统一路径] 与 executeCardUpdateCore 单条路径哨兵一致：统一提交前先校验
+        // 所有分组的 SQL 是否可拆分出可执行语句。applyEditsBatch 与 buildSqlSheetBatchOperationsFromText_ACU
+        // 共用同一 splitter；若全部分组 split 为 0，applyEditsBatch 返回 {success:true, appliedEdits:0, modifiedKeys:[]}，
+        // 但统一路径仍会把 fillAttemptKeys（=目标表）作为 updateGroupKeys 传入 persist。persist 层已加兜底
+        // （operations=0 不再写 metadata-only 条目），但此处静默跳过可避免统一提交的错误/重试风暴，并给出"未写入"提示。
+        if (!options.manualRefillProgress) {
+            const totalUnifiedSqlStatements = sqlTexts.reduce(
+                (sum, sqlText) => sum + normalizeSqlStatementsForRuntimeLog_ACU(sqlText || '').length,
+                0,
+            );
+            if (totalUnifiedSqlStatements === 0) {
+                const unifiedFirstTimeInit = await checkIfFirstTimeInit_ACU();
+                if (!unifiedFirstTimeInit) {
+                    logWarn_ACU(
+                        `[假保存哨兵-统一SQL] 统一提交的所有分组均无可执行 SQL 语句，静默跳过（不写入、不推进门禁、不报成功）。`
+                        + `groups=${sortedResponses.length}, targetSheets=[${[...allTargetSheetKeySet].join(',')}], `
+                        + `sqlTextCount=${sqlTexts.length}, totalStatements=${totalUnifiedSqlStatements}`,
+                    );
+                    return { success: false, modifiedKeys: [], skippedNoSql: true };
+                }
+            }
+        }
+
         const commitResult = await runTableUpdateCommit_ACU<{ modifiedKeys: string[] }>({
             source: 'group_fill',
             reason: 'applyUnifiedGroupFillResponses:runtime_sql',
@@ -1144,6 +1167,25 @@ export async function applyUnifiedGroupFillResponses_ACU(
     applySpecialIndexSequenceToSummaryTables_ACU(workingTableData);
 
     const modifiedKeys = [...modifiedKeySet].sort();
+    // [假保存修复-统一快照路径] 若所有分组均无可应用编辑（bare-true / 空 tableEdit），
+    // operations 与 modifiedKeys 均为空，且非首次初始化、非手动重填，则统一快照路径仍会把
+    // fillAttemptKeys（目标表）作为 updateGroupKeys 传入 persist。persist 层已加兜底，但此处静默
+    // 跳过可避免统一提交的错误/重试风暴，并给出"未写入"提示，与单条路径哨兵语义一致。
+    if (!options.isImportMode
+        && operations.length === 0
+        && modifiedKeys.length === 0
+        && initializedSheetKeys.size === 0
+        && !options.manualRefillProgress) {
+        const snapshotFirstTimeInit = await checkIfFirstTimeInit_ACU();
+        if (!snapshotFirstTimeInit) {
+            logWarn_ACU(
+                `[假保存哨兵-统一快照] 统一提交的所有分组均无可应用表格编辑，静默跳过（不写入、不推进门禁、不报成功）。`
+                + `groups=${sortedResponses.length}, targetSheets=[${[...allTargetSheetKeySet].join(',')}], `
+                + `modifiedKeys=[], operations=[]`,
+            );
+            return { success: false, modifiedKeys: [], skippedNoSql: true };
+        }
+    }
     if (!options.isImportMode) {
         const isFirstTimeInit = await checkIfFirstTimeInit_ACU();
         const allUnifiedSheetKeys = getSortedSheetKeys_ACU(workingTableData);
@@ -1216,7 +1258,7 @@ export async function processGroupedRuntimeChunk_ACU(
         onProgress?: (event: CardUpdateProgressEvent) => void;
         respectGlobalStop?: boolean;
     } = {}
-): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number }> {
+): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number; skippedNoSql?: boolean }> {
     if (!Array.isArray(groups) || groups.length === 0) {
         return { success: true, failedGroups: [], committedBucketCount: 0 };
     }
@@ -1289,6 +1331,7 @@ export async function processGroupedRuntimeChunk_ACU(
     const isStopped = () => options.abortController?.signal.aborted === true || (options.respectGlobalStop !== false && wasStoppedByUser_ACU);
     let committedBucketCount = 0;
     let aborted = false;
+    let anySkippedNoSql = false;
     for (let bucketIndex = 0; bucketIndex < orderedBuckets.length; bucketIndex++) {
         if (isStopped()) {
             aborted = true;
@@ -1494,6 +1537,13 @@ export async function processGroupedRuntimeChunk_ACU(
                 syncAfterCommit: options.syncAfterCommit,
                 baseRevision,
             });
+            if (applyResult.skippedNoSql) {
+                // [假保存修复] 本 bucket 被静默跳过（AI 无可执行产出）。不计失败、不重试、不推进门禁。
+                anySkippedNoSql = true;
+                bucketSucceeded = true;
+                emitBucketProgress(bucketIndex, { phase: 'complete' });
+                break;
+            }
             if (applyResult.success) {
                 const nextCommittedBucketCount = committedBucketCount + 1;
                 options.onBucketCommitted?.({
@@ -1533,11 +1583,11 @@ export async function processGroupedRuntimeChunk_ACU(
     }
 
     if (aborted) {
-        return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount };
+        return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount, skippedNoSql: anySkippedNoSql };
     }
     return failedGroups.size > 0
-        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount }
-        : { success: true, failedGroups: [], committedBucketCount };
+        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount, skippedNoSql: anySkippedNoSql }
+        : { success: true, failedGroups: [], committedBucketCount, skippedNoSql: anySkippedNoSql };
 }
 
 /**
