@@ -820,7 +820,6 @@ export async function collectGroupFillResponse_ACU(
                 } catch (error: any) {
                     throw new ModelOutputRetryError_ACU(error?.message || 'SQLite 填表 SQL 无效。');
                 }
->>>>>>> upgrade/spv8.7-maintenance
             }
 
             return { job, success: true, attempt, aiResponse: normalizedAiResponse, tableEditText };

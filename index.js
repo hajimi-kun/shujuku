@@ -2463,7 +2463,7 @@ $CONTENT
     /**
      * 判断表格是否是总结表、总体大纲表或纪要表
      */
-    function isSummaryOrOutlineTable_ACU$1(tableName) {
+    function isSummaryOrOutlineTable_ACU(tableName) {
         if (!tableName || typeof tableName !== 'string')
             return false;
         const trimmedName = tableName.trim();
@@ -2473,7 +2473,7 @@ $CONTENT
      * 判断表格是否是标准表（非总结表和总体大纲表）
      */
     function isStandardTable_ACU(tableName) {
-        return !isSummaryOrOutlineTable_ACU$1(tableName);
+        return !isSummaryOrOutlineTable_ACU(tableName);
     }
     // 标签列表解析：支持英文逗号/中文逗号/空格分隔
     function parseTagList_ACU(input) {
@@ -4575,7 +4575,7 @@ $CONTENT
     let abortController_ACU = null;
     let isProcessing_Plot_ACU = false;
     let tempPlotToSave_ACU = null;
-    let pendingFinalGenerationGreenlights_ACU$1 = [];
+    let pendingFinalGenerationGreenlights_ACU = [];
     const USER_SEND_TRIGGER_TTL_MS_ACU = 12000;
     const generationGate_ACU = {
         lastUserMessageId: null,
@@ -4769,7 +4769,7 @@ $CONTENT
     function _set_isProcessing_Plot_ACU(v) { isProcessing_Plot_ACU = v; }
     function _set_abortController_ACU(v) { abortController_ACU = v; }
     function _set_tempPlotToSave_ACU(v) { tempPlotToSave_ACU = v; }
-    function _set_pendingFinalGenerationGreenlights_ACU$1(v) { pendingFinalGenerationGreenlights_ACU$1 = Array.isArray(v) ? v : []; }
+    function _set_pendingFinalGenerationGreenlights_ACU(v) { pendingFinalGenerationGreenlights_ACU = Array.isArray(v) ? v : []; }
     function _set_pendingBaseStatePlacement_ACU(v) { pendingBaseStatePlacement_ACU = v; }
     function _set_suppressWorldbookInjectionInGreeting_ACU(v) { suppressWorldbookInjectionInGreeting_ACU = v; }
     function _set_independentTableStates_ACU(v) { independentTableStates_ACU = v; }
@@ -18655,7 +18655,7 @@ $CONTENT
                     const table = sheets[tableIndex];
                     if (!table || !table.name)
                         return;
-                    if (!isSummaryOrOutlineTable_ACU$1(table.name))
+                    if (!isSummaryOrOutlineTable_ACU(table.name))
                         return;
                     if (table.name === '总结表')
                         summaryInsertCount++;
@@ -18718,7 +18718,7 @@ $CONTENT
                         }
                         materializeSeedRowsIfNeeded_ACU(table);
                         const sheetKey = sheetKeysForIndexing[tableIndex];
-                        const isSummaryTable = isSummaryOrOutlineTable_ACU$1(table.name);
+                        const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
                         const isUnifiedMode = (updateMode === 'full' || updateMode === 'manual_unified' || updateMode === 'auto_unified');
                         const isStandardMode = (updateMode === 'standard' || updateMode === 'auto_standard' || updateMode === 'manual_standard');
                         const isSummaryMode = (updateMode === 'summary' || updateMode === 'auto_summary' || updateMode === 'auto_summary_silent' || updateMode === 'manual_summary');
@@ -18774,7 +18774,7 @@ $CONTENT
                             break;
                         }
                         materializeSeedRowsIfNeeded_ACU(table);
-                        const isSummaryTable = isSummaryOrOutlineTable_ACU$1(table.name);
+                        const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
                         if (isSummaryTable) {
                             logDebug_ACU(`[屏蔽] 总结表/总体大纲忽略 deleteRow 操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
                             break;
@@ -18815,7 +18815,7 @@ $CONTENT
                         }
                         materializeSeedRowsIfNeeded_ACU(table);
                         const sheetKey = sheetKeysForIndexing[tableIndex];
-                        const isSummaryTable = isSummaryOrOutlineTable_ACU$1(table.name);
+                        const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
                         if (isSummaryTable) {
                             logDebug_ACU(`[屏蔽] 总结表/总体大纲忽略 updateRow 操作 (tableIndex: ${tableIndex}, tableName: ${table.name})`);
                             break;
@@ -20781,7 +20781,7 @@ $CONTENT
                         if (!templateSheetKeySet.has(k)) {
                             return;
                         }
-                        if (k.startsWith('sheet_') && !foundSheets[k] && standardData[k].name && !isSummaryOrOutlineTable_ACU$1(standardData[k].name)) {
+                        if (k.startsWith('sheet_') && !foundSheets[k] && standardData[k].name && !isSummaryOrOutlineTable_ACU(standardData[k].name)) {
                             mergedData[k] = JSON.parse(JSON.stringify(standardData[k]));
                             foundSheets[k] = true;
                             if (!independentTableStates_ACU[k])
@@ -20799,7 +20799,7 @@ $CONTENT
                         if (!templateSheetKeySet.has(k)) {
                             return;
                         }
-                        if (k.startsWith('sheet_') && !foundSheets[k] && summaryData[k].name && isSummaryOrOutlineTable_ACU$1(summaryData[k].name)) {
+                        if (k.startsWith('sheet_') && !foundSheets[k] && summaryData[k].name && isSummaryOrOutlineTable_ACU(summaryData[k].name)) {
                             mergedData[k] = JSON.parse(JSON.stringify(summaryData[k]));
                             foundSheets[k] = true;
                             if (!independentTableStates_ACU[k])
@@ -26303,7 +26303,7 @@ $CONTENT
         const comment = normalizeInternalComment_ACU(entry);
         if (!comment || comment.startsWith('TavernDB-ACU-AgentGreenlight'))
             return false;
-        if (['TavernDB-ACU-AgentWorldbookConfig', 'TavernDB-ACU-AgentWorldbookSnapshot', 'TavernDB-ACU-AgentFinalGenerationGreenlights'].some(prefix => comment.startsWith(prefix)))
+        if (['TavernDB-ACU-AgentWorldbookConfig', 'TavernDB-ACU-AgentWorldbookSnapshot', 'TavernDB-ACU-AgentFinalGenerationGreenlights', 'TavernDB-ACU-AgentWorldbookSkillRegistry'].some(prefix => comment.startsWith(prefix)))
             return true;
         return ['TavernDB-ACU-', '重要人物条目', '总结条目', '小总结条目'].some(prefix => comment.startsWith(prefix));
     }
@@ -26326,6 +26326,7 @@ $CONTENT
             'TavernDB-ACU-AgentWorldbookConfig',
             'TavernDB-ACU-AgentWorldbookSnapshot',
             'TavernDB-ACU-AgentFinalGenerationGreenlights',
+            'TavernDB-ACU-AgentWorldbookSkillRegistry',
         ].some(prefix => comment.startsWith(prefix)))
             return true;
         // Legacy summary exports may not carry a custom-table marker. Their normal
@@ -27759,7 +27760,9 @@ $CONTENT
 
     const ACU_SKILL_META_START_ACU = 'ACU_SKILL_META_START';
     const ACU_SKILL_META_END_ACU = 'ACU_SKILL_META_END';
+    const AGENT_WORLDBOOK_SKILL_REGISTRY_COMMENT_ACU = 'TavernDB-ACU-AgentWorldbookSkillRegistry';
     const SKILL_META_BLOCK_PATTERN_ACU = /\n?<!--\s*ACU_SKILL_META_START\s*\n([\s\S]*?)\nACU_SKILL_META_END\s*-->\n?/g;
+    const skillRegistryWriteQueues_ACU = new Map();
     function normalizeCommentText_ACU$1(comment) {
         return typeof comment === 'string' ? comment : '';
     }
@@ -27821,6 +27824,124 @@ $CONTENT
             updatedBy: isValidUpdatedBy_ACU(draft.updatedBy) ? draft.updatedBy : updatedBy,
         };
     }
+    function normalizeStoredSkillMeta_ACU(value) {
+        if (!value || typeof value !== 'object' || Array.isArray(value))
+            return null;
+        const source = value;
+        if (source.uid === null || source.uid === undefined || String(source.uid).trim() === '')
+            return null;
+        const comment = stripWorldbookSkillMetaBlock_ACU(source.comment).trim();
+        if (!comment)
+            return null;
+        const metaSource = source.meta && typeof source.meta === 'object' && !Array.isArray(source.meta)
+            ? source.meta
+            : {};
+        const meta = normalizeWorldbookSkillMetaDraft_ACU(metaSource, isValidUpdatedBy_ACU(metaSource.updatedBy) ? metaSource.updatedBy : 'manual');
+        if (!meta.description && !meta.triggerWhen && !meta.tk)
+            return null;
+        return { uid: source.uid, comment, meta };
+    }
+    function parseWorldbookSkillRegistry_ACU(entries) {
+        const entry = (Array.isArray(entries) ? entries : [])
+            .find(item => String(item?.comment || '').trim() === AGENT_WORLDBOOK_SKILL_REGISTRY_COMMENT_ACU) || null;
+        if (!entry)
+            return { entry: null, skills: [] };
+        try {
+            const raw = JSON.parse(String(entry.content || ''));
+            if (raw.version !== 1 || raw.kind !== 'agent_worldbook_skill_registry' || !Array.isArray(raw.skills)) {
+                return { entry, skills: [] };
+            }
+            const skills = raw.skills.map(normalizeStoredSkillMeta_ACU).filter(Boolean);
+            return { entry, skills };
+        }
+        catch {
+            return { entry, skills: [] };
+        }
+    }
+    function findStoredSkillMetaForEntry_ACU(entry, skills) {
+        const uid = String(entry?.uid ?? '');
+        const comment = stripWorldbookSkillMetaBlock_ACU(entry?.comment || entry?.name).trim();
+        return skills.find(skill => String(skill.uid) === uid)
+            || skills.find(skill => !!comment && skill.comment === comment)
+            || null;
+    }
+    function parseWorldbookSkillMetaFromEntry_ACU(entry, bookEntries = []) {
+        const legacy = parseWorldbookSkillMetaFromComment_ACU(entry?.comment || entry?.name);
+        if (legacy)
+            return legacy;
+        const { skills } = parseWorldbookSkillRegistry_ACU(bookEntries);
+        return findStoredSkillMetaForEntry_ACU(entry, skills)?.meta || null;
+    }
+    function buildWorldbookSkillMetaMapForEntries_ACU(entries) {
+        const result = new Map();
+        const list = Array.isArray(entries) ? entries : [];
+        for (const entry of list) {
+            if (String(entry?.comment || '').trim() === AGENT_WORLDBOOK_SKILL_REGISTRY_COMMENT_ACU)
+                continue;
+            const meta = parseWorldbookSkillMetaFromEntry_ACU(entry, list);
+            if (meta && entry?.uid !== null && entry?.uid !== undefined)
+                result.set(String(entry.uid), meta);
+        }
+        return result;
+    }
+    function runWithSkillRegistryWriteLock_ACU(bookName, operation) {
+        const previous = skillRegistryWriteQueues_ACU.get(bookName) || Promise.resolve();
+        const current = previous.catch(() => undefined).then(() => operation());
+        skillRegistryWriteQueues_ACU.set(bookName, current);
+        void current.finally(() => {
+            if (skillRegistryWriteQueues_ACU.get(bookName) === current)
+                skillRegistryWriteQueues_ACU.delete(bookName);
+        }).catch(() => undefined);
+        return current;
+    }
+    async function persistWorldbookSkillRegistry_ACU(bookName, registryEntry, skills) {
+        const registry = {
+            version: 1,
+            kind: 'agent_worldbook_skill_registry',
+            updatedAt: Date.now(),
+            skills,
+        };
+        const payload = {
+            comment: AGENT_WORLDBOOK_SKILL_REGISTRY_COMMENT_ACU,
+            content: JSON.stringify(registry, null, 2),
+            keys: [],
+            enabled: false,
+            type: 'selective',
+            order: Number.isFinite(Number(registryEntry?.order)) ? Number(registryEntry?.order) : 10001,
+            prevent_recursion: true,
+        };
+        if (registryEntry?.uid !== null && registryEntry?.uid !== undefined) {
+            await setLorebookEntries_ACU(bookName, [{ ...payload, uid: registryEntry.uid }]);
+        }
+        else {
+            await createLorebookEntries_ACU(bookName, [payload]);
+        }
+    }
+    function upsertStoredSkillMeta_ACU(skills, entry, meta) {
+        const comment = stripWorldbookSkillMetaBlock_ACU(entry?.comment || entry?.name).trim();
+        const next = skills.filter(skill => String(skill.uid) !== String(entry.uid) && skill.comment !== comment);
+        next.push({ uid: entry.uid, comment, meta });
+        return next;
+    }
+    async function migrateLegacyWorldbookSkillMetaBlocks_ACU(bookName) {
+        await runWithSkillRegistryWriteLock_ACU(bookName, async () => {
+            const entries = await getLorebookEntries_ACU(bookName);
+            const parsed = parseWorldbookSkillRegistry_ACU(entries);
+            let skills = parsed.skills;
+            const commentPatches = [];
+            for (const entry of entries) {
+                const legacyMeta = parseWorldbookSkillMetaFromComment_ACU(entry?.comment || entry?.name);
+                if (!legacyMeta)
+                    continue;
+                skills = upsertStoredSkillMeta_ACU(skills, entry, legacyMeta);
+                commentPatches.push({ uid: entry.uid, comment: stripWorldbookSkillMetaBlock_ACU(entry.comment) });
+            }
+            if (commentPatches.length === 0)
+                return;
+            await persistWorldbookSkillRegistry_ACU(bookName, parsed.entry, skills);
+            await setLorebookEntries_ACU(bookName, commentPatches);
+        });
+    }
     function buildWorldbookSkillMetaComment_ACU(comment, metaDraft) {
         const meta = normalizeWorldbookSkillMetaDraft_ACU(metaDraft);
         const baseComment = stripWorldbookSkillMetaBlock_ACU(comment);
@@ -27844,40 +27965,60 @@ $CONTENT
         const targetError = validateWorldbookSkillMetaTarget_ACU(bookName, uid);
         if (targetError)
             return { updated: false, reason: targetError };
-        const entries = await getLorebookEntries_ACU(bookName);
-        const entry = findWorldbookEntryByUid_ACU(entries, uid);
-        if (!entry)
-            return { updated: false, reason: '未找到世界书条目' };
-        const meta = normalizeWorldbookSkillMetaDraft_ACU(metaDraft, updatedBy);
-        const nextComment = buildWorldbookSkillMetaComment_ACU(entry.comment, meta);
-        if (nextComment === normalizeCommentText_ACU$1(entry.comment)) {
-            return { updated: false, reason: '世界书 Skill 元数据未变化', entry };
-        }
-        await setLorebookEntries_ACU(bookName, [{ uid: entry.uid, comment: nextComment }]);
-        return { updated: true, entry: { ...entry, comment: nextComment } };
+        return runWithSkillRegistryWriteLock_ACU(bookName, async () => {
+            const entries = await getLorebookEntries_ACU(bookName);
+            const entry = findWorldbookEntryByUid_ACU(entries, uid);
+            if (!entry)
+                return { updated: false, reason: '未找到世界书条目' };
+            const parsed = parseWorldbookSkillRegistry_ACU(entries);
+            const meta = normalizeWorldbookSkillMetaDraft_ACU(metaDraft, updatedBy);
+            const existing = parseWorldbookSkillMetaFromEntry_ACU(entry, entries);
+            const cleanComment = stripWorldbookSkillMetaBlock_ACU(entry.comment);
+            const unchanged = existing
+                && existing.description === meta.description
+                && existing.triggerWhen === meta.triggerWhen
+                && Number(existing.tk || 0) === Number(meta.tk || 0)
+                && existing.updatedBy === meta.updatedBy
+                && cleanComment === normalizeCommentText_ACU$1(entry.comment);
+            if (unchanged)
+                return { updated: false, reason: '世界书 Skill 元数据未变化', entry };
+            const skills = upsertStoredSkillMeta_ACU(parsed.skills, entry, meta);
+            await persistWorldbookSkillRegistry_ACU(bookName, parsed.entry, skills);
+            if (cleanComment !== normalizeCommentText_ACU$1(entry.comment)) {
+                await setLorebookEntries_ACU(bookName, [{ uid: entry.uid, comment: cleanComment }]);
+            }
+            return { updated: true, entry: { ...entry, comment: cleanComment } };
+        });
     }
     async function deleteWorldbookEntrySkillMeta_ACU(bookName, uid) {
         const targetError = validateWorldbookSkillMetaTarget_ACU(bookName, uid);
         if (targetError)
             return { updated: false, reason: targetError };
-        const entries = await getLorebookEntries_ACU(bookName);
-        const entry = findWorldbookEntryByUid_ACU(entries, uid);
-        if (!entry)
-            return { updated: false, reason: '未找到世界书条目' };
-        const currentComment = normalizeCommentText_ACU$1(entry.comment);
-        const nextComment = stripWorldbookSkillMetaBlock_ACU(currentComment);
-        if (nextComment === currentComment) {
-            return { updated: false, reason: '世界书条目没有 Skill 元数据', entry };
-        }
-        await setLorebookEntries_ACU(bookName, [{ uid: entry.uid, comment: nextComment }]);
-        return { updated: true, entry: { ...entry, comment: nextComment } };
+        return runWithSkillRegistryWriteLock_ACU(bookName, async () => {
+            const entries = await getLorebookEntries_ACU(bookName);
+            const entry = findWorldbookEntryByUid_ACU(entries, uid);
+            if (!entry)
+                return { updated: false, reason: '未找到世界书条目' };
+            const parsed = parseWorldbookSkillRegistry_ACU(entries);
+            const cleanComment = stripWorldbookSkillMetaBlock_ACU(entry.comment);
+            const stored = findStoredSkillMetaForEntry_ACU(entry, parsed.skills);
+            const hadLegacy = parseWorldbookSkillMetaFromComment_ACU(entry.comment) !== null;
+            if (!stored && !hadLegacy)
+                return { updated: false, reason: '世界书条目没有 Skill 元数据', entry };
+            const skills = parsed.skills.filter(skill => String(skill.uid) !== String(entry.uid) && skill.comment !== cleanComment);
+            if (parsed.entry)
+                await persistWorldbookSkillRegistry_ACU(bookName, parsed.entry, skills);
+            if (hadLegacy)
+                await setLorebookEntries_ACU(bookName, [{ uid: entry.uid, comment: cleanComment }]);
+            return { updated: true, entry: { ...entry, comment: cleanComment } };
+        });
     }
-    function buildWorldbookSkillMetaReadResult_ACU(bookName, entry) {
+    function buildWorldbookSkillMetaReadResult_ACU(bookName, entry, bookEntries = []) {
         const uid = entry?.uid;
         if (uid === null || uid === undefined || String(uid).trim() === '')
             return null;
         const comment = normalizeCommentText_ACU$1(entry?.comment || entry?.name);
-        const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+        const skillMeta = parseWorldbookSkillMetaFromEntry_ACU(entry, bookEntries);
         if (!skillMeta)
             return null;
         return {
@@ -27896,7 +28037,13 @@ $CONTENT
         const entry = findWorldbookEntryByUid_ACU(entries, uid);
         if (!entry)
             return null;
-        return buildWorldbookSkillMetaReadResult_ACU(bookName, entry);
+        if (parseWorldbookSkillMetaFromComment_ACU(entry.comment)) {
+            await migrateLegacyWorldbookSkillMetaBlocks_ACU(bookName);
+            const migratedEntries = await getLorebookEntries_ACU(bookName);
+            const migratedEntry = findWorldbookEntryByUid_ACU(migratedEntries, uid);
+            return migratedEntry ? buildWorldbookSkillMetaReadResult_ACU(bookName, migratedEntry, migratedEntries) : null;
+        }
+        return buildWorldbookSkillMetaReadResult_ACU(bookName, entry, entries);
     }
     async function getAgentRuntimeLorebookEntries_ACU$1(bookName, readContext) {
         if (!readContext)
@@ -27917,9 +28064,15 @@ $CONTENT
                 .filter(Boolean))];
         const results = [];
         for (const bookName of uniqueBookNames) {
-            const entries = await getAgentRuntimeLorebookEntries_ACU$1(bookName, readContext);
+            let entries = await getAgentRuntimeLorebookEntries_ACU$1(bookName, readContext);
+            if (!readContext && entries.some(entry => parseWorldbookSkillMetaFromComment_ACU(entry?.comment || entry?.name))) {
+                await migrateLegacyWorldbookSkillMetaBlocks_ACU(bookName);
+                entries = await getLorebookEntries_ACU(bookName);
+            }
             for (const entry of Array.isArray(entries) ? entries : []) {
-                const item = buildWorldbookSkillMetaReadResult_ACU(bookName, entry);
+                if (String(entry?.comment || '').trim() === AGENT_WORLDBOOK_SKILL_REGISTRY_COMMENT_ACU)
+                    continue;
+                const item = buildWorldbookSkillMetaReadResult_ACU(bookName, entry, entries);
                 if (item)
                     results.push(item);
             }
@@ -27927,25 +28080,39 @@ $CONTENT
         return results;
     }
     async function clearWorldbookSkillMetaBlocks_ACU(bookNames = []) {
-        const targets = await listWorldbookSkillMetas_ACU(bookNames);
         const result = {
-            total: targets.length,
+            total: 0,
             cleared: 0,
             skipped: 0,
             failed: 0,
             errors: [],
         };
-        for (const target of targets) {
+        const uniqueBookNames = [...new Set((Array.isArray(bookNames) ? bookNames : []).map(name => String(name || '').trim()).filter(Boolean))];
+        for (const bookName of uniqueBookNames) {
             try {
-                const deleteResult = await deleteWorldbookEntrySkillMeta_ACU(target.bookName, target.uid);
-                if (deleteResult.updated)
-                    result.cleared += 1;
-                else
-                    result.skipped += 1;
+                await runWithSkillRegistryWriteLock_ACU(bookName, async () => {
+                    const entries = await getLorebookEntries_ACU(bookName);
+                    const parsed = parseWorldbookSkillRegistry_ACU(entries);
+                    const legacyEntries = entries.filter(entry => parseWorldbookSkillMetaFromComment_ACU(entry?.comment || entry?.name));
+                    const targetKeys = new Set([
+                        ...parsed.skills.map(skill => `${String(skill.uid)}\u0000${skill.comment}`),
+                        ...legacyEntries.map(entry => `${String(entry.uid)}\u0000${stripWorldbookSkillMetaBlock_ACU(entry.comment)}`),
+                    ]);
+                    result.total += targetKeys.size;
+                    if (parsed.entry)
+                        await persistWorldbookSkillRegistry_ACU(bookName, parsed.entry, []);
+                    if (legacyEntries.length > 0) {
+                        await setLorebookEntries_ACU(bookName, legacyEntries.map(entry => ({
+                            uid: entry.uid,
+                            comment: stripWorldbookSkillMetaBlock_ACU(entry.comment),
+                        })));
+                    }
+                    result.cleared += targetKeys.size;
+                });
             }
             catch (error) {
                 result.failed += 1;
-                result.errors.push({ bookName: target.bookName, uid: target.uid, reason: error?.message || '清除 Skill 元数据失败' });
+                result.errors.push({ bookName, uid: '', reason: error?.message || '清除 Skill 元数据失败' });
             }
         }
         return result;
@@ -28024,16 +28191,15 @@ $CONTENT
             return false;
         if (String(entry.type || '').trim().toLowerCase() === 'constant')
             return false;
-        if (isDatabaseGeneratedWorldbookEntryForAgent_ACU(entry))
+        if (isAgentSkillifyExcludedLorebookEntry_ACU(entry))
             return false;
         return true;
     }
-    function buildEntrySummary_ACU(bookName, entry) {
+    function buildEntrySummary_ACU(bookName, entry, existingSkillMeta = null) {
         const rawComment = String(entry?.comment || entry?.name || '').trim();
         const strippedComment = stripWorldbookSkillMetaBlock_ACU(rawComment);
         const comment = strippedComment || String(entry?.name || '').trim();
         const content = String(entry?.content || '').trim();
-        const existingSkillMeta = parseWorldbookSkillMetaFromComment_ACU(rawComment);
         const estimatedTk = estimateTextTk_ACU(content || comment);
         const existingTk = Number(existingSkillMeta?.tk);
         return {
@@ -28191,12 +28357,13 @@ $CONTENT
         const summaries = [];
         for (const bookName of [...new Set(bookNames.map(name => String(name || '').trim()).filter(Boolean))]) {
             const entries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
+            const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(entries);
             for (const entry of entries) {
                 if (!isWorldbookEntrySkillifyCandidate_ACU(entry))
                     continue;
                 if (selectedKeys && !selectedKeys.has(getSkillifySelectionKey_ACU(bookName, entry.uid)))
                     continue;
-                summaries.push(buildEntrySummary_ACU(bookName, entry));
+                summaries.push(buildEntrySummary_ACU(bookName, entry, skillMetaByUid.get(String(entry.uid)) || null));
             }
         }
         const maxEntries = Number.isFinite(Number(options.maxEntries)) && Number(options.maxEntries) > 0
@@ -29061,6 +29228,16 @@ $CONTENT
         }
         return greenlights;
     }
+    async function reapplyFinalGenerationGreenlights_ACU(greenlights) {
+        let normalizedGreenlights = normalizeAgentWorldbookRefs_ACU(greenlights);
+        if (normalizedGreenlights.length === 0) {
+            normalizedGreenlights = await readFinalGenerationGreenlights_ACU();
+        }
+        if (normalizedGreenlights.length > 0) {
+            await writeFinalGenerationGreenlights_ACU(normalizedGreenlights);
+        }
+        return normalizedGreenlights;
+    }
     async function clearFinalGenerationGreenlights_ACU() {
         const snapshot = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
         const snapshotUidSetByBook = buildSnapshotUidSetByBook_ACU(snapshot);
@@ -29406,7 +29583,7 @@ $CONTENT
                 if (!targetSheetKeys.includes(sheetKey))
                     return;
             }
-            const isSummaryTable = isSummaryOrOutlineTable_ACU$1(table.name);
+            const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
             let shouldShowData = true;
             if (!targetSheetKeys) {
                 const isUnifiedMode = (updateMode === 'full' || updateMode === 'manual_unified' || updateMode === 'auto_unified');
@@ -31361,6 +31538,7 @@ $CONTENT
         const allowedKeys = new Set();
         for (const [bookName, snapshotEntries] of Object.entries(snapshot.books || {})) {
             const entries = await getAgentRuntimeLorebookEntries_ACU(bookName, readContext);
+            const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(entries);
             const list = Array.isArray(snapshotEntries) ? snapshotEntries : [];
             for (const snapshotEntry of list) {
                 const uid = snapshotEntry?.uid;
@@ -31370,7 +31548,7 @@ $CONTENT
                 if (!entry)
                     continue;
                 const comment = String(entry.comment || entry.name || '');
-                const meta = parseWorldbookSkillMetaFromComment_ACU(comment);
+                const meta = skillMetaByUid.get(String(uid)) || parseWorldbookSkillMetaFromComment_ACU(comment);
                 const keys = getWorldbookEntryKeywordsForSkillify_ACU(entry);
                 const fallback = hasUsableWorldbookSkillMeta_ACU(meta) ? null : buildFallbackWorldbookSummaryText_ACU(entry, comment, keys);
                 allowedKeys.add(refKey_ACU(bookName, uid));
@@ -32465,7 +32643,7 @@ $CONTENT
     }
     async function runPlotTasksRuntime_ACU(plotSettings, userMessage, runtimeOptions = {}) {
         const { inputForHash = userMessage, hasExistingUserMessage = false } = runtimeOptions;
-        _set_pendingFinalGenerationGreenlights_ACU$1([]);
+        _set_pendingFinalGenerationGreenlights_ACU([]);
         await clearFinalGenerationGreenlights_ACU();
         ensurePlotTasksCompat_ACU(plotSettings, { syncLegacy: true });
         let enabledTasks = getEnabledPlotTasks_ACU(plotSettings);
@@ -32505,7 +32683,7 @@ $CONTENT
                 const finalGenerationGreenlights = agentDecision.active === true && Array.isArray(agentDecision.finalGenerationGreenlights)
                     ? agentDecision.finalGenerationGreenlights
                     : [];
-                _set_pendingFinalGenerationGreenlights_ACU$1(finalGenerationGreenlights);
+                _set_pendingFinalGenerationGreenlights_ACU(finalGenerationGreenlights);
                 if (agentDecision.active === true) {
                     await writeFinalGenerationGreenlights_ACU(finalGenerationGreenlights);
                 }
@@ -33362,7 +33540,7 @@ $CONTENT
             if (!sheetKey.startsWith('sheet_'))
                 return;
             const table = dataObj[sheetKey];
-            if (!table || !isSummaryOrOutlineTable_ACU$1(table.name))
+            if (!table || !isSummaryOrOutlineTable_ACU(table.name))
                 return;
             if (!isSpecialIndexLockEnabled_ACU(sheetKey))
                 return;
@@ -33536,6 +33714,29 @@ $CONTENT
         }
         return totalRemoved;
     }
+    function isWorldbookEntryPresentInMessages_ACU(messages, entry) {
+        const candidates = buildNativeWorldbookGreenlightRemovalCandidates_ACU(entry);
+        if (candidates.length === 0)
+            return false;
+        for (const message of Array.isArray(messages) ? messages : []) {
+            if (!message || typeof message !== 'object')
+                continue;
+            const allowRawContentOnly = isNativeWorldbookPromptMessage_ACU(message);
+            const texts = typeof message.content === 'string'
+                ? [message.content]
+                : (Array.isArray(message.content)
+                    ? message.content
+                        .filter((part) => part?.type === 'text' && typeof part.text === 'string')
+                        .map((part) => part.text)
+                    : []);
+            for (const text of texts) {
+                if (candidates.some(candidate => (candidate.requiresComment || allowRawContentOnly) && text.includes(candidate.text))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
     function buildAgentWorldbookRefKeySet_ACU(refs) {
         const keySet = new Set();
         for (const ref of Array.isArray(refs) ? refs : []) {
@@ -33642,31 +33843,41 @@ $CONTENT
     async function handleChatCompletionReady_ACU(data) {
         logDebug_ACU('[提示词模板] handleChatCompletionReady_ACU 被调用');
         logDebug_ACU('[提示词模板] settings_ACU?.promptTemplateSettings:', settings_ACU?.promptTemplateSettings);
-        if (!settings_ACU?.promptTemplateSettings?.enabled) {
-            logDebug_ACU('[提示词模板] 功能未启用，跳过处理');
-            return;
-        }
         if (!data || !data.messages || !Array.isArray(data.messages)) {
             return;
         }
-        const finalGenerationGreenlights = Array.isArray(pendingFinalGenerationGreenlights_ACU$1) ? [...pendingFinalGenerationGreenlights_ACU$1] : [];
+        const finalGenerationGreenlights = Array.isArray(pendingFinalGenerationGreenlights_ACU) ? [...pendingFinalGenerationGreenlights_ACU] : [];
         const shouldHandleAgentWorldbookFinalPrompt = isWorldbookTakeoverActive_ACU() || finalGenerationGreenlights.length > 0;
         const startTime = Date.now();
         logDebug_ACU('[提示词模板] 开始处理酒馆提示词...');
         if (shouldHandleAgentWorldbookFinalPrompt) {
             try {
-                const allAgentSkillWorldbookEntries = await getAgentControlledWorldbookEntriesForFinalPrompt_ACU(settings_ACU?.plotSettings || {});
+                const [allAgentSkillWorldbookEntries, allowedAgentWorldbookEntries] = await Promise.all([
+                    getAgentControlledWorldbookEntriesForFinalPrompt_ACU(settings_ACU?.plotSettings || {}),
+                    getAgentGreenlightWorldbookEntriesForPlot_ACU(settings_ACU?.plotSettings || {}, finalGenerationGreenlights),
+                ]);
                 const allowedFinalGreenlightKeySet = buildAgentWorldbookRefKeySet_ACU(finalGenerationGreenlights);
-                const entriesToFilter = (Array.isArray(allAgentSkillWorldbookEntries) ? allAgentSkillWorldbookEntries : [])
+                const controlledEntries = Array.isArray(allAgentSkillWorldbookEntries) ? allAgentSkillWorldbookEntries : [];
+                const entriesToFilter = controlledEntries
                     .filter(entry => !isAgentWorldbookEntryAllowed_ACU(entry, allowedFinalGreenlightKeySet));
                 const filteredNativeCount = filterNativeWorldbookGreenlightsFromMessages_ACU(data.messages, entriesToFilter);
                 if (filteredNativeCount > 0) {
                     logDebug_ACU('[提示词模板] 已过滤酒馆原生正文世界书绿灯片段，数量:', filteredNativeCount);
                 }
+                const entriesToInject = (Array.isArray(allowedAgentWorldbookEntries) ? allowedAgentWorldbookEntries : [])
+                    .filter(entry => !isWorldbookEntryPresentInMessages_ACU(data.messages, entry));
+                const injectedMessageCount = injectAgentWorldbookEntriesIntoMessages_ACU(data.messages, entriesToInject);
+                if (injectedMessageCount > 0) {
+                    logDebug_ACU('[提示词模板] 已补入 Agent 正文世界书绿灯消息，数量:', injectedMessageCount);
+                }
             }
             catch (e) {
-                logDebug_ACU('[提示词模板] 运行时 Agent 正文世界书绿灯过滤失败，已跳过本轮过滤:', e);
+                logDebug_ACU('[提示词模板] 运行时 Agent 正文世界书绿灯过滤或补入失败，已跳过本轮接管处理:', e);
             }
+        }
+        if (!settings_ACU?.promptTemplateSettings?.enabled) {
+            logDebug_ACU('[提示词模板] 功能未启用，跳过模板变量处理');
+            return;
         }
         const lastPlotContent = getPlotFromHistory_ACU();
         logDebug_ACU('[提示词模板] $6 最新一层推进数据:', lastPlotContent ? `长度=${lastPlotContent.length}` : '(空)');
@@ -40824,7 +41035,7 @@ $CONTENT
             return false;
         return targetSheetKeys.some((sheetKey) => {
             const table = currentJsonTableData_ACU?.[sheetKey];
-            return !!table?.name && isSummaryOrOutlineTable_ACU$1(String(table.name || ''));
+            return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
         });
     }
     function collectIsolationKeysWithV2Frames_ACU(chat, options = {}) {
@@ -41379,7 +41590,7 @@ $CONTENT
             const sheet = currentJsonTableData_ACU[sheetKey];
             const history = resolveTableHistoryStateFromChat_ACU(chat, {
                 sheetKey,
-                isSummaryTable: isSummaryOrOutlineTable_ACU$1(sheet.name),
+                isSummaryTable: isSummaryOrOutlineTable_ACU(sheet.name),
                 isolationKey: getCurrentIsolationKey_ACU(),
                 settings: settings_ACU,
             });
@@ -44125,7 +44336,7 @@ $CONTENT
                 const sheet = dataObj[key];
                 if (!sheet || typeof sheet !== 'object' || Array.isArray(sheet))
                     return;
-                const isSummary = !!sheet.name && isSummaryOrOutlineTable_ACU$1(sheet.name);
+                const isSummary = !!sheet.name && isSummaryOrOutlineTable_ACU(sheet.name);
                 if (summaryOnly === true && !isSummary)
                     return;
                 if (summaryOnly === false && isSummary)
@@ -50737,7 +50948,7 @@ $CONTENT
                 }
                 // 计算每个表的状态
                 const tableConfig = table.updateConfig || {};
-                const isSummary = isSummaryOrOutlineTable_ACU$1(table.name);
+                const isSummary = isSummaryOrOutlineTable_ACU(table.name);
                 // 确定参数
                 const globalFrequency = settings_ACU.autoUpdateFrequency || 1;
                 const globalSkip = settings_ACU.skipUpdateFloors || 0;
@@ -50878,7 +51089,7 @@ $CONTENT
             if (!table)
                 continue;
             const tableConfig = table.updateConfig || {};
-            const isSummary = isSummaryOrOutlineTable_ACU$1(table.name);
+            const isSummary = isSummaryOrOutlineTable_ACU(table.name);
             // 获取该表的更新配置 (优先使用表内配置，否则使用全局默认)
             const rawDepth = Number.isFinite(tableConfig.contextDepth) ? tableConfig.contextDepth : -1;
             const rawFreq = Number.isFinite(tableConfig.updateFrequency) ? tableConfig.updateFrequency : -1;
@@ -51393,7 +51604,7 @@ $CONTENT
         const candidateKeys = requestedKey ? [requestedKey] : Object.keys(currentJsonTableData_ACU);
         const summaryKey = candidateKeys.find((key) => {
             const table = currentJsonTableData_ACU[key];
-            return !!table?.name && isSummaryOrOutlineTable_ACU$1(String(table.name || ''));
+            return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
         });
         if (!summaryKey)
             return null;
@@ -53453,7 +53664,7 @@ $CONTENT
         const dynamicContent = await prepareAIInput_ACU(job.messagesForContext, job.updateMode, job.targetSheetKeys, {
             tableData: job.baseSnapshot,
             excludeImportTaggedWorldbookEntries: job.isImportMode === true && settings_ACU.importPromptExcludeImportedWorldbookEntries !== false,
-            agentGreenlights: Array.isArray(pendingFinalGenerationGreenlights_ACU$1) ? [...pendingFinalGenerationGreenlights_ACU$1] : [],
+            agentGreenlights: Array.isArray(pendingFinalGenerationGreenlights_ACU) ? [...pendingFinalGenerationGreenlights_ACU] : [],
             isolationKey: job.isolationKey,
             templateScope: job.templateScope,
             sqlApplyScope: job.sqlApplyScope,
@@ -54587,7 +54798,7 @@ $CONTENT
                             const updateGroupKeysToUse = Array.isArray(fillAttemptKeys)
                                 ? fillAttemptKeys.filter(sheetKey => {
                                     const table = runtimeData?.[sheetKey];
-                                    if (!table || !isSummaryOrOutlineTable_ACU$1(table.name))
+                                    if (!table || !isSummaryOrOutlineTable_ACU(table.name))
                                         return true;
                                     return keysToTrackAsUpdated.includes(sheetKey);
                                 })
@@ -54709,7 +54920,7 @@ $CONTENT
                         const updateGroupKeysToUse = Array.isArray(fillAttemptKeys)
                             ? fillAttemptKeys.filter(sheetKey => {
                                 const table = workingTableData?.[sheetKey];
-                                if (!table || !isSummaryOrOutlineTable_ACU$1(table.name))
+                                if (!table || !isSummaryOrOutlineTable_ACU(table.name))
                                     return true;
                                 return keysToTrackAsUpdated.includes(sheetKey);
                             })
@@ -54959,7 +55170,7 @@ $CONTENT
             const sheet = templateData[sheetKey] || currentJsonTableData_ACU?.[sheetKey] || {};
             const history = resolveTableHistoryStateFromChat_ACU(chat, {
                 sheetKey,
-                isSummaryTable: isSummaryOrOutlineTable_ACU$1(String(sheet.name || '')),
+                isSummaryTable: isSummaryOrOutlineTable_ACU(String(sheet.name || '')),
                 isolationKey,
                 settings: settings_ACU,
             });
@@ -60551,7 +60762,7 @@ $CONTENT
                 `;
             }).join('')
             : '<div class="acu-hint">当前表格没有可选列。</div>';
-        const isSummaryTable = isSummaryOrOutlineTable_ACU$1(sheet.name);
+        const isSummaryTable = isSummaryOrOutlineTable_ACU(sheet.name);
         const sheetKey = _acuVisState.currentSheetKey;
         const specialIndexCol = isSummaryTable ? getSummaryIndexColumnIndex_ACU(sheet) : -1;
         const specialIndexHeader = (specialIndexCol >= 0 && Array.isArray(sheet.content?.[0]))
@@ -61206,7 +61417,7 @@ $CONTENT
         const rows = sheet.content.slice(1);
         const sheetKey = _acuVisState.currentSheetKey;
         const lockState = sheetKey ? getTableLocksForSheet_ACU(sheetKey) : { rows: new Set(), cols: new Set(), cells: new Set() };
-        const isSummaryTable = isSummaryOrOutlineTable_ACU$1(sheet.name);
+        const isSummaryTable = isSummaryOrOutlineTable_ACU(sheet.name);
         const specialIndexCol = (isSummaryTable ? getSummaryIndexColumnIndex_ACU(sheet) : -1);
         const specialIndexLocked = (isSummaryTable && sheetKey) ? isSpecialIndexLockEnabled_ACU(sheetKey) : false;
         let html = `<div class="acu-card-grid">`;
@@ -63487,7 +63698,7 @@ $CONTENT
         await refreshMergedDataAndNotifyWithUI_ACU();
         const shouldSyncSummaryVectorIndexAfterSave = getSortedSheetKeys_ACU(currentJsonTableData_ACU).some((sheetKey) => {
             const table = currentJsonTableData_ACU?.[sheetKey];
-            return !!table?.name && isSummaryOrOutlineTable_ACU$1(String(table.name || ''));
+            return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
         });
         if (shouldSyncSummaryVectorIndexAfterSave && getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
             try {
@@ -66226,7 +66437,7 @@ $CONTENT
             return '';
         const candidates = Object.keys(tables).filter((key) => {
             const table = tables[key];
-            return !!table?.name && isSummaryOrOutlineTable_ACU$1(String(table.name || ''));
+            return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
         });
         // 多个纪要表无法从 popup 上下文证明哪一个是当前 scope；宁可拒绝恢复。
         return candidates.length === 1 ? candidates[0] : '';
@@ -73769,7 +73980,7 @@ $CONTENT
             return 'summary';
         return Object.keys(tables).find((key) => {
             const table = tables[key];
-            return !!table?.name && isSummaryOrOutlineTable_ACU$1(String(table.name || ''));
+            return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
         }) || 'summary';
     }
     async function clearSummaryVectorIndexLayerFromChat_ACU(params) {
@@ -75675,7 +75886,7 @@ $CONTENT
                 .filter(k => k.startsWith('sheet_'))
                 .some(k => {
                 const table = runtimeData?.[k];
-                return Boolean(table?.name && isSummaryOrOutlineTable_ACU$1(table.name));
+                return Boolean(table?.name && isSummaryOrOutlineTable_ACU(table.name));
             });
             return {
                 success: true,
@@ -75767,7 +75978,7 @@ $CONTENT
             .filter(k => k.startsWith('sheet_'))
             .some(k => {
             const table = commitResult.tableData?.[k];
-            return Boolean(table?.name && isSummaryOrOutlineTable_ACU$1(table.name));
+            return Boolean(table?.name && isSummaryOrOutlineTable_ACU(table.name));
         });
         return {
             success: true,
@@ -76186,7 +76397,7 @@ $CONTENT
             logDebug_ACU(`${methodName}: Skip summary vector index sync for [${tableName}] because this edit is marked as batch/import mode.`);
             return;
         }
-        if (!isSummaryOrOutlineTable_ACU$1(tableName))
+        if (!isSummaryOrOutlineTable_ACU(tableName))
             return;
         if (getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled !== true)
             return;
@@ -79233,7 +79444,7 @@ $CONTENT
         return isSpecialIndexLockEnabled_ACU(sheetKey);
     }
     function maybeApplySpecialIndexSequenceToSheet_ACU(sheet, sheetKey, overrides) {
-        if (!sheet || !isSummaryOrOutlineTable_ACU$1(String(sheet?.name || '')))
+        if (!sheet || !isSummaryOrOutlineTable_ACU(String(sheet?.name || '')))
             return;
         if (!getEffectiveSpecialIndexLockEnabled_ACU(sheetKey, overrides))
             return;
@@ -79497,7 +79708,7 @@ $CONTENT
             changes.push(`${item.locked ? '锁定' : '解锁'}单元格: 第${rowNumber}行.${columnName}`);
         });
         if (rawPatch.specialIndexLocked != null) {
-            if (!isSummaryOrOutlineTable_ACU$1(String(sheet?.name || ''))) {
+            if (!isSummaryOrOutlineTable_ACU(String(sheet?.name || ''))) {
                 throw new Error('patch_sheet_locks.specialIndexLocked 仅支持纪要/大纲类表格');
             }
             if (typeof rawPatch.specialIndexLocked !== 'boolean') {
@@ -108172,7 +108383,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 const disabled = frequency <= 0;
                 const history = resolveTableHistoryStateFromChat_ACU(chat, {
                     sheetKey: key,
-                    isSummaryTable: isSummaryOrOutlineTable_ACU$1(String(table.name || "")),
+                    isSummaryTable: isSummaryOrOutlineTable_ACU(String(table.name || "")),
                     isolationKey: currentIsolationKey,
                     settings: settings_ACU,
                 });
@@ -110764,6 +110975,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 const result = [];
                 for (const bookName of unique) {
                     const bookEntries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
+                    const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(bookEntries);
                     const visibleBookEntries = bookEntries.filter((entry) => isWorldbookEntryVisibleForPageUI_ACU(bookName, entry, snapshotEntryIndexByBook));
                     const visibleUidSet = new Set(visibleBookEntries.map((entry) => String(entry?.uid)));
                     if (typeof enabledEntries[bookName] === 'undefined') {
@@ -110785,7 +110997,7 @@ Expected function or array of functions, received type ${typeof value}.`
                         : [];
                     const visible = visibleBookEntries.map((entry) => {
                         const comment = String(entry?.comment || entry?.name || '');
-                        const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+                        const skillMeta = skillMetaByUid.get(String(entry?.uid)) || null;
                         const snapshotEntry = getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry);
                         const displayView = buildWorldbookEntryDisplayView_ACU(entry, snapshotEntry);
                         return {
@@ -111399,6 +111611,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 const result = [];
                 for (const bookName of unique) {
                     const bookEntries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
+                    const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(bookEntries);
                     const visibleBookEntries = bookEntries.filter((entry) => isWorldbookEntryVisibleForPageUI_ACU(bookName, entry, snapshotEntryIndexByBook));
                     const visibleUidSet = new Set(visibleBookEntries.map((entry) => String(entry?.uid)));
                     if (typeof cfg.enabledEntries[bookName] === 'undefined') {
@@ -111420,7 +111633,7 @@ Expected function or array of functions, received type ${typeof value}.`
                         : [];
                     const buildItems = (entries) => entries.map((entry) => {
                         const comment = String(entry?.comment || entry?.name || '');
-                        const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+                        const skillMeta = skillMetaByUid.get(String(entry?.uid)) || null;
                         const snapshotEntry = getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry);
                         const displayView = buildWorldbookEntryDisplayView_ACU(entry, snapshotEntry);
                         return {
@@ -112669,7 +112882,7 @@ Expected function or array of functions, received type ${typeof value}.`
             agentDecisionPromptSegments.value = clonePromptSegments_ACU(control.agentDecisionPromptSegments);
             agentSkillifyPromptSegments.value = clonePromptSegments_ACU(control.agentSkillifyPromptSegments);
         }
-        async function refresh() {
+        async function refresh(options = {}) {
             const [result, nextSnapshot] = await Promise.all([
                 readAgentWorldbookControlFromWorldbooks_ACU(),
                 refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU(),
@@ -112681,6 +112894,10 @@ Expected function or array of functions, received type ${typeof value}.`
             configReason.value = result.reason || '';
             applyControlToRefs(result.control);
             snapshot.value = nextSnapshot;
+            if (options.reconcileTakeover === true && mode.value === 'agent') {
+                await takeoverWorldbookGreenlights_ACU();
+                snapshot.value = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
+            }
         }
         async function writeControlPatch(patch) {
             if (!isReady.value) {
@@ -112726,23 +112943,23 @@ Expected function or array of functions, received type ${typeof value}.`
                 toast.info(plotCopy.agentControl.modeChanged.agent, { muteable: false });
                 return;
             }
-            if (next === 'disabled') {
+            if (next === 'disabled' || next === 'passive') {
                 try {
-                    _set_pendingFinalGenerationGreenlights_ACU$1([]);
+                    _set_pendingFinalGenerationGreenlights_ACU([]);
                     disableLegacyAgentWorldbookControl_ACU();
-                    const restoreResult = await restoreWorldbookGreenlights_ACU({ cleanupMode: 'restore_only' });
+                    const restoreResult = await restoreWorldbookGreenlights_ACU({ cleanupMode: 'full' });
                     snapshot.value = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
                     if (restoreResult.skipped > 0 || restoreResult.failed > 0) {
-                        const message = plotCopy.agentControl.restore.reasons[restoreResult.reason || ''] || `Agent 世界书已关闭，但恢复受控条目未完全完成：${restoreResult.reason || 'unknown'}`;
+                        const message = plotCopy.agentControl.restore.reasons[restoreResult.reason || ''] || `Agent 世界书已退出接管，但恢复受控条目未完全完成：${restoreResult.reason || 'unknown'}`;
                         toast.warning(message, { muteable: false });
                         return;
                     }
-                    toast.info(plotCopy.agentControl.modeChanged.disabled, { muteable: false });
+                    toast.info(plotCopy.agentControl.modeChanged[next], { muteable: false });
                     return;
                 }
                 catch (error) {
                     snapshot.value = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
-                    toast.warning(`Agent 世界书已关闭，但恢复受控条目失败：${error?.message || '未知错误'}`, { muteable: false });
+                    toast.warning(`Agent 世界书已退出接管，但恢复受控条目失败：${error?.message || '未知错误'}`, { muteable: false });
                     return;
                 }
             }
@@ -112872,7 +113089,7 @@ Expected function or array of functions, received type ${typeof value}.`
                 return false;
             busy.value = 'restore';
             try {
-                _set_pendingFinalGenerationGreenlights_ACU$1([]);
+                _set_pendingFinalGenerationGreenlights_ACU([]);
                 const saved = await writeControlPatch({ mode: 'disabled', enabled: false });
                 disableLegacyAgentWorldbookControl_ACU();
                 if (!saved)
@@ -113145,7 +113362,7 @@ Expected function or array of functions, received type ${typeof value}.`
                     : '当前 Agent 世界书范围内无可 Skill 化的条目。';
             }
             async function refreshAll() {
-                await agentControl.refresh();
+                await agentControl.refresh({ reconcileTakeover: true });
                 await worldbook.refresh();
                 await refreshEntries();
             }
@@ -113185,8 +113402,8 @@ Expected function or array of functions, received type ${typeof value}.`
         }
     });
 
-    injectSfcStyle("\n.acu-v2-agent-page[data-v-5afc1ed2] { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n.acu-v2-agent-page__hint[data-v-5afc1ed2] { margin: 12px 0 0; color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-agent-page__hint strong[data-v-5afc1ed2] { color: var(--acu-text-1); font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-agent-page[data-v-5afc1ed2] { padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/AgentPage.vue#style-0-5afc1ed2");
-    var AgentPage_vue_vue_type_style_index_0_scoped_5afc1ed2_lang = null;
+    injectSfcStyle("\n.acu-v2-agent-page[data-v-0fce233f] { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n.acu-v2-agent-page__hint[data-v-0fce233f] { margin: 12px 0 0; color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-agent-page__hint strong[data-v-0fce233f] { color: var(--acu-text-1); font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-agent-page[data-v-0fce233f] { padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/AgentPage.vue#style-0-0fce233f");
+    var AgentPage_vue_vue_type_style_index_0_scoped_0fce233f_lang = null;
 
     const _hoisted_1$l = { class: "acu-v2-agent-page" };
     const _hoisted_2$j = { class: "acu-v2-agent-page__hint" };
@@ -113258,7 +113475,7 @@ Expected function or array of functions, received type ${typeof value}.`
 		_: 1
 	})]);
     }
-    var AgentPage = /*#__PURE__*/ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-5afc1ed2"]]);
+    var AgentPage = /*#__PURE__*/ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-0fce233f"]]);
 
     function setSendTextareaValue(text) {
         const input = getAcuHostDocument().querySelector('#send_textarea');
@@ -121351,7 +121568,7 @@ Expected function or array of functions, received type ${typeof value}.`
         const specialIndex = computed(() => {
             const sheet = currentSheet.value;
             const key = visualizer.currentSheetKey;
-            const enabled = !!sheet?.name && isSummaryOrOutlineTable_ACU$1(stringValue(sheet.name));
+            const enabled = !!sheet?.name && isSummaryOrOutlineTable_ACU(stringValue(sheet.name));
             const index = enabled ? getSummaryIndexColumnIndex_ACU(sheet) : -1;
             return {
                 enabled,
@@ -121803,7 +122020,7 @@ Expected function or array of functions, received type ${typeof value}.`
             if (!sheetKey.startsWith('sheet_'))
                 return;
             const table = data[sheetKey];
-            if (!table || !isSummaryOrOutlineTable_ACU$1(String(table.name || '')))
+            if (!table || !isSummaryOrOutlineTable_ACU(String(table.name || '')))
                 return;
             if (lockDrafts[sheetKey]?.specialIndexLocked === false)
                 return;
@@ -121996,7 +122213,7 @@ Expected function or array of functions, received type ${typeof value}.`
             const table = currentJsonTableData_ACU?.[key];
             const history = resolveTableHistoryStateFromChat_ACU(chat, {
                 sheetKey: key,
-                isSummaryTable: table ? isSummaryOrOutlineTable_ACU$1(table.name) : false,
+                isSummaryTable: table ? isSummaryOrOutlineTable_ACU(table.name) : false,
                 isolationKey,
                 settings: settings_ACU,
             });
@@ -122058,7 +122275,7 @@ Expected function or array of functions, received type ${typeof value}.`
         await refreshMergedDataAndNotify_ACU();
         const shouldSyncSummaryVectorIndex = allSheetKeys.some(sheetKey => {
             const table = currentJsonTableData_ACU?.[sheetKey];
-            return !!table?.name && isSummaryOrOutlineTable_ACU$1(String(table.name || ''));
+            return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
         });
         if (shouldSyncSummaryVectorIndex && getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
             try {
@@ -122175,10 +122392,10 @@ Expected function or array of functions, received type ${typeof value}.`
                 const deletedSheetKeys = [...changes.deletedSheetKeys];
                 const deletedSummarySheetKeys = deletedSheetKeys.filter(sheetKey => {
                     const table = visualizer.templateBaseData?.[sheetKey];
-                    return !!table?.name && isSummaryOrOutlineTable_ACU$1(String(table.name));
+                    return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name));
                 });
                 const hasRemainingSummarySheet = Object.keys(orderedData).some(sheetKey => sheetKey.startsWith('sheet_')
-                    && !!orderedData[sheetKey]?.name && isSummaryOrOutlineTable_ACU$1(String(orderedData[sheetKey].name)));
+                    && !!orderedData[sheetKey]?.name && isSummaryOrOutlineTable_ACU(String(orderedData[sheetKey].name)));
                 if (changedSheetKeys.length === 0 && deletedSheetKeys.length === 0) {
                     if (visualizer.pendingLockChanges.length > 0 || visualizer.lockDirty) {
                         saveLockDrafts(visualizer.tableLockDrafts);

@@ -978,6 +978,19 @@ export async function readFinalGenerationGreenlights_ACU(): Promise<AgentWorldbo
   return greenlights;
 }
 
+export async function reapplyFinalGenerationGreenlights_ACU(
+  greenlights: unknown,
+): Promise<AgentWorldbookFinalGreenlightRef_ACU[]> {
+  let normalizedGreenlights = normalizeAgentWorldbookRefs_ACU(greenlights);
+  if (normalizedGreenlights.length === 0) {
+    normalizedGreenlights = await readFinalGenerationGreenlights_ACU();
+  }
+  if (normalizedGreenlights.length > 0) {
+    await writeFinalGenerationGreenlights_ACU(normalizedGreenlights);
+  }
+  return normalizedGreenlights;
+}
+
 export async function clearFinalGenerationGreenlights_ACU(): Promise<number> {
   const snapshot = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
   const snapshotUidSetByBook = buildSnapshotUidSetByBook_ACU(snapshot);
