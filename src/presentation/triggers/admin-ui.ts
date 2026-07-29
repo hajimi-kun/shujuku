@@ -12,7 +12,7 @@ import { syncMergeSettingsToUI_ACU } from '../components/status-display';
 import { applyTemplateSnapshotToScope_ACU } from '../../service/template/template-preset-service';
 import { refreshPresetUIAfterSwitch_ACU } from '../components/pipeline-ui-helpers';
 
-export   function importCombinedSettings_ACU() {
+export function importCombinedSettings_ACU() {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json';

@@ -127,7 +127,7 @@ function installSendIntentCaptureHooks_ACU() {
 // 精确实现用户诉求"重 roll 等主 api 生成完才是"，避免在 swipe 当即过早触发空 SQL 假保存。
 let pendingRerollAutoUpdate_ACU = false;
 
-export   function mainInitialize_ACU() {
+export function mainInitialize_ACU() {
 
     console.log('ACU_INIT_DEBUG: mainInitialize_ACU called.');
     if (attemptToLoadCoreApis_ACU()) {

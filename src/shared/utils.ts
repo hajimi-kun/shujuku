@@ -152,12 +152,12 @@ export function buildBoundaryRulesFromLegacyTags_ACU(tagsText = '') {
     return tags.map(tag => ({ start: `<${tag}`, end: `</${tag}>` }));
 }
 
-export   function normalizeExtractRules_ACU(extractRulesInput: any, legacyExtractTags = '') {
+export function normalizeExtractRules_ACU(extractRulesInput: any, legacyExtractTags = '') {
       return normalizeExcludeRules_ACU(extractRulesInput, legacyExtractTags);
   }
 
 
-export   function normalizeExcludeRules_ACU(excludeRulesInput: any, legacyExcludeTags = '') {
+export function normalizeExcludeRules_ACU(excludeRulesInput: any, legacyExcludeTags = '') {
       const normalized: any[] = [];
       const dedup = new Set();
 
@@ -198,7 +198,7 @@ export   function normalizeExcludeRules_ACU(excludeRulesInput: any, legacyExclud
   }
 
 
-export   function logDebug_ACU(...args: any[]) {
+export function logDebug_ACU(...args: any[]) {
     if (DEBUG_MODE_ACU) console.log(`[${SCRIPT_ID_PREFIX_ACU}]`, ...args);
     // 仅当 debug 日志启用时才写入缓冲区，避免性能开销
     if (isDebugLogEnabled()) {
@@ -207,20 +207,20 @@ export   function logDebug_ACU(...args: any[]) {
   }
 
 
-export   function logError_ACU(...args: any[]) {
+export function logError_ACU(...args: any[]) {
     console.error(`[${SCRIPT_ID_PREFIX_ACU}]`, ...args);
     pushLog('error', [`[${SCRIPT_ID_PREFIX_ACU}]`, ...args]);
   }
 
 
-export   function logWarn_ACU(...args: any[]) {
+export function logWarn_ACU(...args: any[]) {
     if (!isWarnLogEnabled()) return;
     console.warn(`[${SCRIPT_ID_PREFIX_ACU}]`, ...args);
     pushLog('warn', [`[${SCRIPT_ID_PREFIX_ACU}]`, ...args]);
   }
 
 
-export   function stripSeedRowsFromTemplate_ACU(templateObj: any) {
+export function stripSeedRowsFromTemplate_ACU(templateObj: any) {
       if (!templateObj || typeof templateObj !== 'object') return templateObj;
       Object.keys(templateObj).forEach(k => {
           if (!k.startsWith('sheet_')) return;
@@ -234,7 +234,7 @@ export   function stripSeedRowsFromTemplate_ACU(templateObj: any) {
   }
 
 
-export   function parseTableTemplateJson_ACU({ stripSeedRows = false } = {}) {
+export function parseTableTemplateJson_ACU({ stripSeedRows = false } = {}) {
       try {
           let cleanTemplate = TABLE_TEMPLATE_ACU.trim();
           const parseTemplateJson = (str: string) => safeJsonParseWithJsoncComments_ACU(str, null);
@@ -321,7 +321,7 @@ export   function parseTableTemplateJson_ACU({ stripSeedRows = false } = {}) {
   }
 
 
-export   function applySheetOrderNumbers_ACU(dataObj: Record<string, any>, orderedKeys: string[]) {
+export function applySheetOrderNumbers_ACU(dataObj: Record<string, any>, orderedKeys: string[]) {
       if (!dataObj || typeof dataObj !== 'object') return false;
       const keys = Array.isArray(orderedKeys) ? orderedKeys : [];
       let changed = false;
@@ -337,7 +337,7 @@ export   function applySheetOrderNumbers_ACU(dataObj: Record<string, any>, order
   }
 
 
-export   function ensureSheetOrderNumbers_ACU(dataObj: Record<string, any>, { baseOrderKeys = null as string[] | null, forceRebuild = false } = {}) {
+export function ensureSheetOrderNumbers_ACU(dataObj: Record<string, any>, { baseOrderKeys = null as string[] | null, forceRebuild = false } = {}) {
       if (!dataObj || typeof dataObj !== 'object') return false;
       const sheetKeys = Array.isArray(baseOrderKeys) && baseOrderKeys.length
           ? baseOrderKeys.filter(k => k && k.startsWith('sheet_') && dataObj[k])
@@ -363,13 +363,13 @@ export   function ensureSheetOrderNumbers_ACU(dataObj: Record<string, any>, { ba
 
 
 
-export   function getChatFirstLayerMessage_ACU(chat: any[]) {
+export function getChatFirstLayerMessage_ACU(chat: any[]) {
       if (!Array.isArray(chat) || chat.length === 0) return null;
       return chat[0] || null;
   }
 
 
-export   function cloneScopedConfigData_ACU(value: any, fallback: any = null) {
+export function cloneScopedConfigData_ACU(value: any, fallback: any = null) {
       if (value === undefined) return fallback;
       try {
           return JSON.parse(JSON.stringify(value));

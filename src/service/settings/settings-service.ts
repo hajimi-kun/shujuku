@@ -268,7 +268,7 @@ export function saveSettings_ACU(): SaveSettingsResult_ACU {
 }
 
 
-export   function loadSettings_ACU() {
+export function loadSettings_ACU() {
       // 确保酒馆设置桥接已就绪（best-effort，不阻塞）
       void initTavernSettingsBridge_ACU();
       if (!configIdbCacheLoaded_ACU && isIndexedDbAvailable_ACU()) {
@@ -607,7 +607,7 @@ export   function loadSettings_ACU() {
   // loadSettingsAndRefreshUI_ACU 已搬到 presentation/components/settings-ui-helpers.ts
 
 
-export   function loadTemplateFromStorage_ACU(codeOverride: any = null) {
+export function loadTemplateFromStorage_ACU(codeOverride: any = null) {
       const code = normalizeIsolationCode_ACU(
           (codeOverride !== null && typeof codeOverride !== 'undefined')
               ? codeOverride
@@ -765,7 +765,7 @@ function forceDefaultTableFillPromptsOnce_ACU() {
   }
 
 
-export   function buildDefaultSettings_ACU() {
+export function buildDefaultSettings_ACU() {
       return {
           apiConfig: { url: '', apiKey: '', model: '', useMainApi: true, max_tokens: 60000, temperature: 1.0 },
           apiMode: 'custom',
@@ -868,7 +868,7 @@ export   function buildDefaultSettings_ACU() {
   }
 
 
-export   function applyTemplateScopeForCurrentChat_ACU({ isolationKey = getCurrentIsolationKey_ACU() } = {}) {
+export function applyTemplateScopeForCurrentChat_ACU({ isolationKey = getCurrentIsolationKey_ACU() } = {}) {
       const normalizedKey = normalizeTemplateScopeIsolationKey_ACU(isolationKey);
       const migratedScopeState = migrateLegacyTemplateScopeForCurrentChat_ACU({ isolationKey: normalizedKey });
       const scopeState = getCurrentChatTemplateScopeState_ACU({ isolationKey: normalizedKey }) || migratedScopeState;

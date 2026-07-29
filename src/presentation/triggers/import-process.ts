@@ -21,7 +21,7 @@ import { getSortedSheetKeys_ACU } from '../../service/template/chat-scope';
 import { getInjectionTargetLorebook_ACU } from '../../service/worldbook/injection-engine';
 import { initImportDatabase_ACU, saveChunkProgress_ACU, finalizeImportAndCleanup_ACU, clearImportedEntriesCore_ACU, deleteImportedEntriesCore_ACU } from '../../service/import/import-executor';
 
-export   async function processImportedTxtAsUpdates_ACU() {
+export async function processImportedTxtAsUpdates_ACU() {
       // 外部导入：按"自选表格"处理与注入（与手动填表一致的表选择体验）
       const $injectButton: any = null; // 旧闭包变量，现在通过 UI 层控制
 
@@ -138,13 +138,13 @@ export   async function processImportedTxtAsUpdates_ACU() {
   // [T176] handleTxtImportAndSplit_ACU 已移到 presentation/components/import-status-ui.ts
 
 
-export   async function handleInjectImportedTxtSelected_ACU() {
+export async function handleInjectImportedTxtSelected_ACU() {
       showToastr_ACU('info', '开始处理导入文件（自选表格注入）...', { acuToastCategory: ACU_TOAST_CATEGORY_ACU.IMPORT });
       await processImportedTxtAsUpdates_ACU();
   }
 
 
-export   async function clearImportLocalStorage_ACU(notify = true) {
+export async function clearImportLocalStorage_ACU(notify = true) {
       try {
           const entriesExist = (await importTempGet_ACU(STORAGE_KEY_IMPORTED_ENTRIES_ACU)) !== null;
           await importTempRemove_ACU(STORAGE_KEY_IMPORTED_ENTRIES_ACU);
@@ -169,7 +169,7 @@ export   async function clearImportLocalStorage_ACU(notify = true) {
   }
 
 
-export   async function clearImportedEntries_ACU(notify = true) {
+export async function clearImportedEntries_ACU(notify = true) {
     const targetLorebook = await getInjectionTargetLorebook_ACU();
     if (!targetLorebook) {
         showToastr_ACU('error', '无法清除导入条目：未设置数据注入目标。', { acuToastCategory: ACU_TOAST_CATEGORY_ACU.ERROR });
@@ -195,7 +195,7 @@ export   async function clearImportedEntries_ACU(notify = true) {
   }
 
 
-export   async function deleteImportedEntries_ACU() {
+export async function deleteImportedEntries_ACU() {
       const targetLorebook = await getImportWorldbookTarget_ACU();
       if (!targetLorebook) {
           showToastr_ACU('error', '无法删除注入条目：未设置导入数据注入目标世界书。');

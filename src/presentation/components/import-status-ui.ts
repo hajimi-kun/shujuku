@@ -175,7 +175,7 @@ import { $popupInstance_ACU, $importTableSelector_ACU } from '../state/ui-refs';
       return true;
   }
 
-export   async function getImportWorldbookTarget_ACU() {
+export async function getImportWorldbookTarget_ACU() {
       // 优先使用 UI 当前选择（不落盘），以便在“完成后解除绑定”的策略下，“删除外部导入条目”仍可用
       try {
           if ($popupInstance_ACU) {
