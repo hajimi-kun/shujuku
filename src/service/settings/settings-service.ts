@@ -340,10 +340,15 @@ export   function loadSettings_ACU() {
       // 5) 加载设置（按标识 profile）
       const defaultSettings = buildDefaultSettings_ACU();
       let shouldPersistSettingsAfterLoad_ACU = false;
+      // [插件重置修复] 只有当从存储里真正读到了已保存的 profile 时，才允许加载期补齐默认值并落盘。
+      // 否则（读到 null——可能是桥接未就绪 + IDB 缓存为空的瞬态失败）只把默认值留在内存里，
+      // 绝不把一份纯默认值对象写回 profile，避免覆盖用户真实配置（apiConfig/storageMode/locks 等）。
+      let loadedFromStorage_ACU = false;
 
       try {
           const savedSettings = readProfileSettingsFromStorage_ACU(activeCode);
           if (savedSettings) {
+              loadedFromStorage_ACU = true;
 
               // [迁移逻辑] 检查旧的顶层 worldbookConfig
               if (savedSettings.worldbookConfig) {
@@ -451,6 +456,8 @@ export   function loadSettings_ACU() {
           }
       } catch (error) {
           logError_ACU('Failed to load or parse settings, using defaults:', error);
+          // [插件重置修复] 迁移过程抛异常 → 不能落盘默认值覆盖真实 profile。
+          loadedFromStorage_ACU = false;
           _set_settings_ACU(buildDefaultSettings_ACU());
           settings_ACU.dataIsolationCode = activeCode;
           settings_ACU.dataIsolationEnabled = (activeCode !== '');
@@ -577,9 +584,18 @@ export   function loadSettings_ACU() {
       settingsStorageReadyForSave_ACU = true;
       refreshDefaultTableTemplateOnce_ACU(activeCode);
       if (shouldPersistSettingsAfterLoad_ACU) {
-          saveGlobalMeta_ACU();
-          persistSettingsToStorage_ACU(settings_ACU, activeCode);
-          logDebug_ACU(`[设置加载] 已持久化加载期默认值补齐，交火配置版本: ${VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU}`);
+          if (loadedFromStorage_ACU) {
+              saveGlobalMeta_ACU();
+              persistSettingsToStorage_ACU(settings_ACU, activeCode);
+              logDebug_ACU(`[设置加载] 已持久化加载期默认值补齐，交火配置版本: ${VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU}`);
+          } else {
+              // [插件重置修复] 读到 null（瞬态：桥接未就绪/IDB 缓存为空）→ 当前内存里是纯默认值。
+              // 加载期补齐逻辑（ensure*Defaults 等）翻起了落盘标志，但此时落盘会把默认值覆盖到真实 profile。
+              // 故拒绝落盘，留待桥接/IDB 就绪后重读（scheduleSettingsReloadAfterIdbReady_ACU）或用户显式保存。
+              logWarn_ACU(
+                  `[设置加载] 检测到未从存储读到已保存 profile（activeCode=${activeCode || '(default)'}），已阻止加载期默认值落盘，避免覆盖真实配置。当前内存为默认值，将在存储就绪后重读。`,
+              );
+          }
       }
 
       if (!Number.isFinite(settings_ACU.maxConcurrentGroups) || settings_ACU.maxConcurrentGroups < 1) {

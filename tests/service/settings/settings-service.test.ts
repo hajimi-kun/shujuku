@@ -564,6 +564,25 @@ describe('loadSettings_ACU', () => {
     expect(calledWith.autoUpdateEnabled).toBe(true);
   });
 
+  // [插件重置修复回归] 瞬态 null 读（桥接未就绪/IDB 缓存为空）时，ensure*Defaults 会把
+  // shouldPersistSettingsAfterLoad 翻成 true，但此时内存里是纯默认值——绝不能落盘覆盖真实 profile。
+  it('未读到已保存 profile 时即使 ensure*Defaults 翻起落盘标志也绝不落盘（避免覆盖真实配置）', () => {
+    mockPersistSettingsToStorage.mockClear();
+    mockReadProfileSettings.mockReturnValue(null);
+    loadSettings_ACU();
+    // 内置预设补齐（ensureBuiltinPlotPresets）应当翻起落盘标志，但 loadedFromStorage=false 必须阻止落盘
+    expect(mockPersistSettingsToStorage).not.toHaveBeenCalled();
+  });
+
+  // [插件重置修复回归] 对照组：真正读到已保存 profile 时，加载期补齐应当正常落盘。
+  it('读到已保存 profile 时加载期补齐正常落盘', () => {
+    mockPersistSettingsToStorage.mockClear();
+    mockReadProfileSettings.mockReturnValue({ autoUpdateEnabled: false });
+    loadSettings_ACU();
+    expect(mockPersistSettingsToStorage).toHaveBeenCalled();
+  });
+
+
   it('一次性默认模板刷新会覆盖旧默认模板', () => {
     mockReadProfileTemplate.mockReturnValue(DEFAULT_TEMPLATE_STR_ACU);
     mockGetDefaultTemplateSnapshot.mockReturnValue({ templateStr: NEW_DEFAULT_TEMPLATE_STR_ACU });

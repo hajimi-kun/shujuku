@@ -26,6 +26,8 @@ export let tavernBridgeErrorReported_ACU = false;
 let _tavernBridgeInitCompleted_ACU = false;
 /** userscript 模式下是否已报告过"根对象不可用"（防止重复刷屏） */
 let _tavernRootUnavailableWarnReported_ACU = false;
+/** userscript 模式下桥接初始化未完成时是否已告警过一次（用于观测瞬态 null 读导致的插件重置风险） */
+let _tavernBridgeNotReadyWarnReported_ACU = false;
 
 // ── 桥接函数 ──
 export function tryReadBridgeFromTop_ACU(): boolean {
@@ -166,7 +168,12 @@ export function getTavernSettingsNamespace_ACU(): any {
         }
         // ── userscript 模式：bridge 初始化未完成时安静降级，完成后只告警一次 ──
         if (!_tavernBridgeInitCompleted_ACU) {
-            // bridge 还在初始化中，不打印任何告警，安静返回 null 让调用方走 IndexedDB/localStorage 回退
+            // bridge 还在初始化中；告警一次以便观测"瞬态 null 读"（曾导致插件重置，见 loadSettings_ACU 的 loadedFromStorage 闸门），
+            // 但仍返回 null 让调用方走 IndexedDB/localStorage 回退。
+            if (!_tavernBridgeNotReadyWarnReported_ACU) {
+                _tavernBridgeNotReadyWarnReported_ACU = true;
+                logWarn_ACU('[TavernStorage] 桥接初始化未完成，本帧命名空间读取返回 null（降级到 IndexedDB/localStorage）');
+            }
             return null;
         }
         // bridge 初始化已完成但仍拿不到 root → 只告警一次
@@ -378,4 +385,5 @@ export function _resetTavernStorageState_ACU(): void {
     tavernBridgeErrorReported_ACU = false;
     _tavernBridgeInitCompleted_ACU = false;
     _tavernRootUnavailableWarnReported_ACU = false;
+    _tavernBridgeNotReadyWarnReported_ACU = false;
 }
