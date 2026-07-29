@@ -15,8 +15,7 @@ import { resetPlotAgentWorldbookSessionSnapshot_ACU } from '../../service/agent/
 import { reloadStorageProvider, disposeStorageProvider } from '../../service/table/table-storage-strategy';
 import { isSqliteMode } from '../../service/table/storage-mode';
 import { loadAllChatMessages_ACU } from '../../service/worldbook/pipeline';
-import { refreshMergedDataAndNotifyWithUI_ACU } from '../components/pipeline-ui-helpers';
-import { cleanChatName_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
+import { refreshMergedDataAndNotifyWithUI_ACU } from '../components/pipeline-ui-helpers';import { cleanChatName_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
 import { shouldSkipPlotIntercept_ACU } from '../../service/plot/plot-logic';
 import { orchestrateTavernHelperHook_ACU, orchestrateAfterCommandsStrategy1_ACU, orchestrateAfterCommandsStrategy2_ACU } from '../../service/plot/plot-orchestrator';
 import { getSendTextareaValue_ACU, setSendTextareaValue_ACU } from '../components/status-display';
@@ -122,6 +121,11 @@ function installSendIntentCaptureHooks_ACU() {
     // ignore
   }
 }
+
+// [重roll门控] 一次性 pending 标记：当用户重 roll（MESSAGE_SWIPED 或 regenerate）时置 true，
+// 在主 API GENERATION_ENDED 时消费——强制触发一次填表（即使本次生成被判定为 quiet/background）。
+// 精确实现用户诉求"重 roll 等主 api 生成完才是"，避免在 swipe 当即过早触发空 SQL 假保存。
+let pendingRerollAutoUpdate_ACU = false;
 
 export   function mainInitialize_ACU() {
 
@@ -339,7 +343,14 @@ export   function mainInitialize_ACU() {
         if (SillyTavern_API_ACU.eventTypes.GENERATION_ENDED) {
             SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_ENDED, (message_id: any) => {
                 logDebug_ACU(`ACU GENERATION_ENDED event for message_id: ${message_id}`);
-                if (shouldProcessAutoTableUpdateForGenerationEnded_ACU()) {
+                // [重roll门控] 消费 pending 标记：用户重 roll 后，主 API 生成完成时强制触发一次填表，
+                // 即使本次生成被判定为 quiet/background 也强制触发，精确实现"重 roll 等主 api 生成完"。
+                const forceAutoUpdateAfterReroll = pendingRerollAutoUpdate_ACU;
+                pendingRerollAutoUpdate_ACU = false;
+                if (forceAutoUpdateAfterReroll) {
+                    logDebug_ACU('ACU: Force auto table update after re-roll (main API generation ended).');
+                    handleNewMessageDebounced_ACU('GENERATION_ENDED');
+                } else if (shouldProcessAutoTableUpdateForGenerationEnded_ACU()) {
                   handleNewMessageDebounced_ACU('GENERATION_ENDED');
                 } else {
                   logDebug_ACU('ACU: Skip auto table update due to quiet/background generation.');
@@ -358,6 +369,24 @@ export   function mainInitialize_ACU() {
             if (params?._qrf_processed_by_hook) return;
             const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
             const shouldProcessPlot = shouldProcessPlotForGeneration_ACU(type, params, dryRun);
+            if (type === 'regenerate' && !dryRun) {
+              // [重roll门控] 标记一次 pending 重 roll，待主 API GENERATION_ENDED 后再触发填表。
+              pendingRerollAutoUpdate_ACU = true;
+              logDebug_ACU('[重roll门控] 检测到 regenerate，已标记 pending；将在主 API 生成完成后触发填表。');
+              // Regenerate reuses the previous Agent decision, but the host may have
+              // rebuilt worldbook state between swipes. Reapply the selected blue
+              // lights before prompt construction without invoking Agent again.
+              try {
+                const greenlights = await reapplyFinalGenerationGreenlights_ACU(pendingFinalGenerationGreenlights_ACU);
+                if (greenlights.length > 0) {
+                  _set_pendingFinalGenerationGreenlights_ACU(greenlights);
+                  logDebug_ACU(`[剧情推进] regenerate 重用上一轮 Agent 接管选择：${greenlights.length} 条。`);
+                }
+              } catch (error) {
+                logWarn_ACU('[剧情推进] regenerate 恢复 Agent 接管蓝灯失败，继续宿主生成。', error);
+              }
+              return;
+            }
             const shouldEnsureInitialSeed = !dryRun
               && type !== 'regenerate'
               && !params?.automatic_trigger
@@ -496,6 +525,13 @@ export   function mainInitialize_ACU() {
                         }
                         // [修复] 重新合并数据并更新UI和世界书
                         await refreshMergedDataAndNotifyWithUI_ACU();
+                        if (evName === 'MESSAGE_SWIPED') {
+                            // [重roll门控] 不再在 swipe 当即触发填表——会在主 API 生成前/中过早触发，
+                            // 此时 AI 尚未产出 SQL，导致空 SQL 假保存（operations=0 但门禁仍推进）。
+                            // 改为标记 pending，等主 API GENERATION_ENDED 后再触发。
+                            pendingRerollAutoUpdate_ACU = true;
+                            logDebug_ACU('[重roll门控] MESSAGE_SWIPED 已标记 pending；将在主 API 生成完成后触发填表。');
+                        }
                         const realignDirtyReason = evName === 'MESSAGE_DELETED'
                             ? 'chat_modified_deleted'
                             : 'chat_modified_swiped';

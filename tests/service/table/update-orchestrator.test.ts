@@ -77,20 +77,27 @@ const mockCallCustomOpenAI = vi.fn();
 const mockParseAndApplyTableEdits = vi.fn();
 const mockParseAndApplyTableEditsToData = vi.fn();
 const mockApplySqlEditsToTableDataSnapshot = vi.fn();
+const mockNormalizeSqlStatements = vi.hoisted(() => vi.fn());
 const mockPrepareAIInput = vi.fn();
 const mockReloadStorageProvider = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true, degraded: false, source: 'merged' }));
 const mockEnsureStorageProviderReady = vi.hoisted(() => vi.fn().mockResolvedValue({ mode: 'sqlite', isReady: () => true }));
 const mockResolveTemplateScope = vi.hoisted(() => vi.fn(() => null as any));
 
-vi.mock('../../../src/service/ai/prompt-builder', () => ({
-  callCustomOpenAI_ACU: (...args: any[]) => mockCallCustomOpenAI(...args),
-  parseAndApplyTableEdits_ACU: (...args: any[]) => mockParseAndApplyTableEdits(...args),
-  parseAndApplyTableEditsToData_ACU: (...args: any[]) => {
-    const impl = mockParseAndApplyTableEditsToData.getMockImplementation();
-    return impl ? mockParseAndApplyTableEditsToData(...args) : mockParseAndApplyTableEdits(...args);
-  },
-  prepareAIInput_ACU: (...args: any[]) => mockPrepareAIInput(...args),
-}));
+vi.mock('../../../src/service/ai/prompt-builder', async (importOriginal) => {
+  // 保留真实导出（extractTableEditInner_ACU / extractStrictJsonTableFillResponse_ACU / isSqlContent 等），
+  // 这样 collectGroupFillResponse_ACU 的真实校验能在测试里跑通；只覆盖需要桩的四个函数。
+  const actual: any = await importOriginal();
+  return {
+    ...actual,
+    callCustomOpenAI_ACU: (...args: any[]) => mockCallCustomOpenAI(...args),
+    parseAndApplyTableEdits_ACU: (...args: any[]) => mockParseAndApplyTableEdits(...args),
+    parseAndApplyTableEditsToData_ACU: (...args: any[]) => {
+      const impl = mockParseAndApplyTableEditsToData.getMockImplementation();
+      return impl ? mockParseAndApplyTableEditsToData(...args) : mockParseAndApplyTableEdits(...args);
+    },
+    prepareAIInput_ACU: (...args: any[]) => mockPrepareAIInput(...args),
+  };
+});
 
 const { mockChatArrayForSeedStage, mockIndependentTableStates, mockGetChatArray_ACU, mockCaptureManualRefillSessionSnapshot, mockClearManualRefillIncrementalDataInRange, mockClearManualRefillSheetDataInRange, mockCommitManualRefillSheetSnapshot, mockRestoreManualRefillSessionSnapshot, mockEnsureBoundaryCheckpoint, mockShouldRotateBoundaryCheckpoint, mockPurgeSheetKeysFromChatHistoryHard } = vi.hoisted(() => {
   const chatArray: any[] = [];
@@ -227,6 +234,11 @@ vi.mock('../../../src/service/table/sql-table-service', async (importOriginal) =
     applySqlEditsToTableDataSnapshot_ACU: (...args: any[]) => {
       const impl = mockApplySqlEditsToTableDataSnapshot.getMockImplementation();
       return impl ? mockApplySqlEditsToTableDataSnapshot(...args) : actual.applySqlEditsToTableDataSnapshot_ACU(...args);
+    },
+    // 仅在设置了 mock 实现时劫持；默认委托真实实现，避免影响其他测试。
+    normalizeSqlStatementsForRuntimeLog_ACU: (...args: any[]) => {
+      const impl = mockNormalizeSqlStatements.getMockImplementation();
+      return impl ? mockNormalizeSqlStatements(...args) : actual.normalizeSqlStatementsForRuntimeLog_ACU(...args);
     },
   };
 });
@@ -2391,7 +2403,7 @@ describe('executeCardUpdateCore_ACU — SQL 错误反馈重试', () => {
     vi.mocked(isSqliteMode).mockReturnValue(false);
   });
 
- it('SQL 直接 provider 路径在执行与 V2 operation 中使用系统物化的 row_id', async () => {
+  it('SQL 直接 provider 路径在执行与 V2 operation 中使用系统物化的 row_id', async () => {
     const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
     const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
     vi.mocked(isSqliteMode).mockReturnValue(true);
@@ -2437,6 +2449,42 @@ describe('executeCardUpdateCore_ACU — SQL 错误反馈重试', () => {
     }
   });
 
+  it('SQL 模式下 AI 产出无可执行 SQL（split 为 0）时静默跳过，不写入、不推进门禁、不报成功', async () => {
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    vi.mocked(isSqliteMode).mockReturnValue(true);
+
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '原始数据' });
+    mockCurrentJsonTableData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { uid: 'test', name: '测试表', sourceData: { ddl: 'CREATE TABLE test (row_id INTEGER PRIMARY KEY);' }, content: [['row_id']], updateConfig: {}, exportConfig: {}, orderNo: 0 },
+    };
+
+    // AI 返回了 SQL 文本（isSqlContent 判定为 SQL），但 splitter 拆分为 0 条语句
+    // —— 复现"成功横幅 + 未记录归零 + 表格无数据"的 SQL 假保存签名：
+    // applyEdits 会返回 {success:true, modifiedKeys:[], appliedEdits:0}（不执行任何 runBatch），
+    // 但旧逻辑仍把 targetSheetKeys 当作已填推进门禁 → persist 写入 operations=0 的 metadata-only fill event。
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>INSERT INTO test VALUES (1);</tableEdit>');
+    mockNormalizeSqlStatements.mockReturnValue([]);
+
+    mockCheckIfFirstTimeInit.mockResolvedValue(false);
+    mockSaveIndependentTable.mockResolvedValue({ saved: true });
+
+    const result = await executeCardUpdateCore_ACU(
+      [{ is_user: false, mes: 'AI回复' }],
+      0, false, 'auto_standard', false,
+      ['sheet_0'], null, new AbortController()
+    );
+
+    // 静默跳过：不报成功、不报失败，标记 skippedNoSql 由展示层显示"未写入(AI未产出SQL)"
+    expect(result.success).toBe(false);
+    expect(result.skippedNoSql).toBe(true);
+    expect(result.error).toBeUndefined();
+    // 不推进门禁 / 不写 mutation entry：persist 不应被调用
+    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+
+    vi.mocked(isSqliteMode).mockReturnValue(false);
+    mockNormalizeSqlStatements.mockReset();
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════

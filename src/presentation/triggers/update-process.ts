@@ -245,6 +245,10 @@ export async function proceedWithCardUpdate_ACU(
             setTimeout(() => {
                 notifyTableUpdate();
             }, 250);
+        } else if (result.skippedNoSql && !isSilentMode) {
+            // [SQL假保存修复] AI 本轮未产出可执行 SQL：静默跳过，不报成功/失败，仅提示未写入。
+            showToastr_ACU('warning', '未写入：AI 本轮未产出可执行 SQL，已跳过（门禁未推进）。');
+            updateStatusText('未写入：AI 未产出可执行 SQL。', false);
         } else if (!result.success && !result.aborted && !isSilentMode) {
             showToastr_ACU('error', `更新失败: ${result.error || '未知错误'}`);
             updateStatusText('错误：更新失败。', false);
