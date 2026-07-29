@@ -6,7 +6,7 @@
  * 注意：helpers-data-merge.ts 的导入链会触发 env.ts 中的 window.parent 访问，
  * 需要在 import 前 mock 掉 env.ts 和其他依赖浏览器环境的模块
  */
-import { describe, it, expect, vi } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 
 // mock 掉所有依赖浏览器环境的模块
 vi.mock('../../../src/shared/env', () => ({
@@ -94,7 +94,7 @@ vi.mock('../../../src/service/table/storage-strategy-resolver', () => ({
 }));
 
 vi.mock('../../../src/service/table/storage-v2-migration', () => ({
-  migrateLegacyStorageToV2OnLoad_ACU: vi.fn().mockResolvedValue({ migrated: true }),
+  migrateLegacyStorageToV2OnLoad_ACU: vi.fn().mockResolvedValue({ migrated: true, data: null }),
 }));
 
 vi.mock('../../../src/service/table/storage-frame-v2-replay', () => ({
@@ -122,6 +122,7 @@ import { getChatArray_ACU } from '../../../src/data/gateways/chat-gateway';
 import { getChatSheetGuideDataForIsolationKey_ACU, materializeDataFromSheetGuide_ACU } from '../../../src/service/template/chat-scope';
 import { resolveTableStorageStrategy_ACU } from '../../../src/service/table/storage-strategy-resolver';
 import { loadTableStateFromFramesV2_ACU } from '../../../src/service/table/storage-frame-v2-replay';
+import { migrateLegacyStorageToV2OnLoad_ACU } from '../../../src/service/table/storage-v2-migration';
 
 describe('migrateContentNullToRowId', () => {
   // ═══════════════════════════════════════════════════════════════
@@ -351,11 +352,9 @@ describe('migrateContentNullToRowId', () => {
 // ═══════════════════════════════════════════════════════════════
 // mergeAllIndependentTables_ACU 核心数据合并测试
 // ═══════════════════════════════════════════════════════════════
-import { mergeAllIndependentTables_ACU } from '../../../src/service/runtime/helpers-data-merge';
-import { getChatArray_ACU } from '../../../src/data/gateways/chat-gateway';
 import { getCurrentIsolationKey_ACU } from '../../../src/service/runtime/state-manager';
 import { readIsolatedTagData_ACU, isLegacyMatchForIsolation_ACU, readLegacyIndependentData_ACU } from '../../../src/data/repositories/chat-message-data-repo';
-import { getChatSheetGuideDataForIsolationKey_ACU, getTemplateSheetKeys_ACU, getSortedSheetKeys_ACU, reorderDataBySheetKeys_ACU, materializeDataFromSheetGuide_ACU } from '../../../src/service/template/chat-scope';
+import { getTemplateSheetKeys_ACU, getSortedSheetKeys_ACU, reorderDataBySheetKeys_ACU } from '../../../src/service/template/chat-scope';
 
 describe('mergeAllIndependentTables_ACU', () => {
   beforeEach(() => {
@@ -563,6 +562,47 @@ describe('mergeAllIndependentTables_ACU', () => {
     expect(result!.sheet_0.content[1][1]).toBe('旧版铁剑');
   });
 
+  it('legacy-v1 迁移成功后返回修复候选数据，而非原始 legacy 合并数据', async () => {
+    const legacyData = {
+      sheet_0: {
+        name: '背包物品表',
+        content: [['row_id', '物品名称'], [' 1 ', '原始旧数据']],
+      },
+    };
+    const repairedData = {
+      sheet_0: {
+        name: '背包物品表',
+        content: [['row_id', '物品名称'], ['1', '修复后数据']],
+      },
+    };
+    vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: false, mes: 'AI回复' }] as any);
+    vi.mocked(resolveTableStorageStrategy_ACU)
+      .mockReturnValueOnce({ mode: 'legacy-v1' } as any)
+      .mockReturnValueOnce({ mode: 'v2' } as any);
+    vi.mocked(readIsolatedTagData_ACU).mockReturnValue(null);
+    vi.mocked(isLegacyMatchForIsolation_ACU).mockReturnValue(true);
+    vi.mocked(readLegacyIndependentData_ACU).mockReturnValue(legacyData);
+    vi.mocked(migrateLegacyStorageToV2OnLoad_ACU).mockResolvedValueOnce({ migrated: true, data: repairedData } as any);
+
+    const result = await mergeAllIndependentTables_ACU();
+
+    expect(migrateLegacyStorageToV2OnLoad_ACU).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ sheet_0: expect.objectContaining({ content: [['row_id', '物品名称'], ['1', '原始旧数据']] }) }) }));
+    expect(result).toEqual(repairedData);
+  });
+
+  it('legacy-v1 迁移声称成功但未返回候选数据时拒绝继续', async () => {
+    vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: false, mes: 'AI回复' }] as any);
+    vi.mocked(resolveTableStorageStrategy_ACU).mockReturnValue({ mode: 'legacy-v1' } as any);
+    vi.mocked(readIsolatedTagData_ACU).mockReturnValue(null);
+    vi.mocked(isLegacyMatchForIsolation_ACU).mockReturnValue(true);
+    vi.mocked(readLegacyIndependentData_ACU).mockReturnValue({
+      sheet_0: { name: '背包物品表', content: [['row_id', '物品名称'], ['1', '旧数据']] },
+    });
+    vi.mocked(migrateLegacyStorageToV2OnLoad_ACU).mockResolvedValueOnce({ migrated: true } as any);
+
+    await expect(mergeAllIndependentTables_ACU()).rejects.toThrow('迁移成功结果缺少修复后的表格数据');
+  });
+
   // ═══ updateConfig 兼容迁移 ═══
   it('旧版 updateConfig 中的 0 被迁移为 -1', async () => {
     const mockChat = [
@@ -726,6 +766,28 @@ describe('formatJsonToReadable_ACU', () => {
     expect(result.readableText).toContain('| 药水 | 5 |');
     // row_id 不应出现在输出中
     expect(result.readableText).not.toContain('row_id');
+  });
+
+  it('普通表 Markdown 隐藏 physical column 并保持右侧可见列对齐', () => {
+    const jsonData = {
+      sheet_0: {
+        name: '背包物品表',
+        sourceData: {
+          ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, legacy_note TEXT, quantity INTEGER);',
+          hiddenPhysicalColumns: ['legacy_note'],
+        },
+        content: [
+          ['row_id', '物品名称', '旧备注', '数量'],
+          ['1', '铁剑', '历史秘密', '3'],
+        ],
+      },
+    };
+
+    const result = formatJsonToReadable_ACU(jsonData);
+    expect(result.readableText).toContain('| 物品名称 | 数量 |');
+    expect(result.readableText).toContain('| 铁剑 | 3 |');
+    expect(result.readableText).not.toContain('旧备注');
+    expect(result.readableText).not.toContain('历史秘密');
   });
 
   it('重要人物表被提取到独立字段，不出现在 readableText 中', () => {
@@ -1380,7 +1442,7 @@ describe('parseReadableToJson_ACU', () => {
     });
   });
 
-  it('重建 Markdown 表格时使用稳定 allocator，不按新数组长度复用已占用身份', () => {
+  it('重建 Markdown 表格时使用稳定 allocator，从历史最大 row_id 后继续分配', () => {
     Object.defineProperty(stateManager, 'currentJsonTableData_ACU', {
       value: {
         sheet_0: {
@@ -1396,8 +1458,8 @@ describe('parseReadableToJson_ACU', () => {
 
     expect(result?.sheet_0.content).toEqual([
       ['row_id', '物品名称'],
-      ['2', '魔法杖'],
-      ['4', '药水'],
+      ['4', '魔法杖'],
+      ['5', '药水'],
     ]);
     Object.defineProperty(stateManager, 'currentJsonTableData_ACU', {
       value: null, writable: true, configurable: true,

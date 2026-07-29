@@ -3,7 +3,7 @@
  * Sheet Guide 数据操作（D 组）
  */
 import { DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU, deriveTemplatePresetNameForImport_ACU, getCurrentTemplatePresetName_ACU, normalizeTemplatePresetSelectionValue_ACU } from '../../../shared/template-preset-utils';
-import { CHAT_SCOPED_CONFIG_FIELD_ACU, CHAT_SHEET_GUIDE_FIELD_ACU, CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU, CHAT_SHEET_GUIDE_VERSION_ACU, CHAT_TEMPLATE_ARCHIVE_OPTION_PREFIX_ACU, LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU, MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU, getChatScopedConfigContainer_ACU, getChatSheetGuideContainer_ACU, normalizeChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../../data/storage/chat-history';
+import { CHAT_SCOPED_CONFIG_FIELD_ACU, CHAT_SHEET_GUIDE_FIELD_ACU, CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU, CHAT_SHEET_GUIDE_VERSION_ACU, CHAT_TEMPLATE_ARCHIVE_OPTION_PREFIX_ACU, LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU, MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU, getChatScopedConfigContainer_ACU, getChatSheetGuideContainer_ACU, peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, normalizeChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../../data/storage/chat-history';
 import { getDefaultTemplateSnapshot_ACU, getTemplatePreset_ACU } from '../template-preset-service';
 import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU } from '../../runtime/state-manager';
 import { getChatArray_ACU, saveChatToHost_ACU } from '../../../data/gateways/chat-gateway';
@@ -485,7 +485,7 @@ export function shouldUseOpeningSeedRows_ACU(): boolean {
               }
           };
 
-          const scopedContainer = getChatScopedConfigContainer_ACU(chat);
+          const scopedContainer = peekChatScopedConfigContainer_ACU(chat);
           const scopedTemplateSlots = scopedContainer?.template;
           if (scopedTemplateSlots && typeof scopedTemplateSlots === 'object' && !Array.isArray(scopedTemplateSlots)) {
               Object.keys(scopedTemplateSlots).forEach((tagKey: string) => {
@@ -498,7 +498,7 @@ export function shouldUseOpeningSeedRows_ACU(): boolean {
               return JSON.parse(JSON.stringify(best.seedRows));
           }
 
-          const container = getChatSheetGuideContainer_ACU(chat);
+          const container = peekChatSheetGuideContainer_ACU(chat);
           const tags = container?.tags;
           if (!tags || typeof tags !== 'object') return null;
           Object.keys(tags).forEach((tagKey: string) => {

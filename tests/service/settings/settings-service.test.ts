@@ -130,6 +130,7 @@ vi.mock('../../../src/shared/defaults-json.js', () => ({
   DEFAULT_BUILTIN_PLOT_PRESETS_ACU: [{ name: '时间召回', _acuBuiltinPresetId: 'time-recall', _acuBuiltinPresetVersion: 'test' }],
   DEFAULT_CHAR_CARD_PROMPT_ACU: [{ role: 'USER', content: '默认提示词' }],
   DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU: [{ role: 'USER', content: '默认 strict json 提示词' }],
+  DEFAULT_CHAR_CARD_PROMPT_SQL_ACU: [{ role: 'USER', content: '默认 sql 提示词' }],
   DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU: [{ role: 'USER', content: '默认 sql strict json 提示词' }],
   DEFAULT_MERGE_SUMMARY_PROMPT_ACU: '默认合并提示词',
   DEFAULT_PLOT_SETTINGS_ACU: { enabled: false },
@@ -144,7 +145,9 @@ vi.mock('../../../src/shared/defaults', () => ({
   DEFAULT_AUTO_UPDATE_THRESHOLD_ACU: 3,
   DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU: 500,
   TABLE_TEMPLATE_DEFAULTS_REFRESH_VERSION_ACU: 'test-table-defaults-refresh',
+  TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU: 'test-prompt-force-default',
   VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU: 'spv3.6.3-keyword-prompt-content-based-refresh',
+  SUMMARY_INDEX_V2_WRITER_FORCE_ENABLE_VERSION_ACU: 'spv3.6.10-v2-writer-force-enable',
   defaultWorldbookConfig_ACU: {
     zeroTkOccupyMode: false,
     outlineEntryEnabled: true,
@@ -160,6 +163,8 @@ vi.mock('../../../src/shared/defaults', () => ({
     recallCandidateLimit: 100,
     summaryIndexKeywordMinRows: 200,
     recentFixedInjectCount: 50,
+    summaryIndexV2WriteEnabled: true,
+    summaryIndexV2WriteScopeAllowlist: [],
     summaryPromptGroup: []
   },
   buildDefaultPlotWorldbookConfig_ACU: () => ({ source: 'character', manualSelection: [] }),
@@ -296,12 +301,16 @@ beforeEach(() => {
   mockEnsureSheetOrderNumbers.mockReset().mockReturnValue(false);
   mockSettings.dataIsolationCode = '';
   mockSettings.dataIsolationEnabled = false;
+  mockSettings.storageMode = 'native';
   mockSettings.charCardPrompt = [];
+  mockSettings.strictJsonCharCardPrompt = [];
+  mockSettings.strictJsonSqlCharCardPrompt = [];
   mockSettings.mergeSummaryPrompt = '';
   mockSettings.plotSettings = { plotWorldbookConfig: null };
   mockSettings.plotPresetBindings = {};
   mockSettings.currentTemplatePresetName = '';
   mockSettings.tableTemplateDefaultsRefreshVersion = '';
+  mockSettings.tableFillPromptForceDefaultVersion = '';
   mockSettings.maxConcurrentGroups = 1;
   mockSettings.zeroTkOccupyModeDefault = false;
   mockSettings.characterSettings = {};
@@ -309,6 +318,7 @@ beforeEach(() => {
   mockGlobalMeta.isolationCodeList = [];
   mockGlobalMeta.migratedLegacySingleStore = true;
   mockGlobalMeta.zeroTkOccupyModeGlobal = false;
+  mockGlobalMeta.vectorMemoryConfigGlobal = null;
   _set_settingsStorageReadyForSave_ACU(true);
 });
 
@@ -555,6 +565,64 @@ describe('loadSettings_ACU', () => {
     expect(calledWith.customField).toBe('自定义值');
   });
 
+  it('补齐缺失的 V2 rollout 开关与 allowlist，且持久化全局配置', () => {
+    mockGlobalMeta.vectorMemoryConfigGlobal = {
+      defaultsRefreshVersion: 'old-vector-defaults',
+    };
+
+    loadSettings_ACU();
+
+    expect(mockGlobalMeta.vectorMemoryConfigGlobal.summaryIndexV2WriteEnabled).toBe(true);
+    expect(mockGlobalMeta.vectorMemoryConfigGlobal.summaryIndexV2WriteScopeAllowlist).toEqual([]);
+    expect(mockSaveGlobalMeta).toHaveBeenCalled();
+  });
+
+  it('当前 defaults marker 下仍补齐缺失的 V2 rollout 字段并持久化，不触发关键词默认值覆盖', () => {
+    mockGlobalMeta.vectorMemoryConfigGlobal = {
+      defaultsRefreshVersion: 'spv3.6.3-keyword-prompt-content-based-refresh',
+      keywordPromptGroup: [{ content: '用户自定义关键词提示词' }],
+    };
+
+    loadSettings_ACU();
+
+    expect(mockGlobalMeta.vectorMemoryConfigGlobal.summaryIndexV2WriteEnabled).toBe(true);
+    expect(mockGlobalMeta.vectorMemoryConfigGlobal.summaryIndexV2WriteScopeAllowlist).toEqual([]);
+    expect(mockGlobalMeta.vectorMemoryConfigGlobal.keywordPromptGroup).toEqual([{ content: '用户自定义关键词提示词' }]);
+    expect(mockSaveGlobalMeta).toHaveBeenCalled();
+  });
+
+  it('一次性强制开启 V2 writer：未标记 marker 的显式 false 会被反转为 true 并写入 marker', () => {
+    mockGlobalMeta.vectorMemoryConfigGlobal = {
+      defaultsRefreshVersion: 'spv3.6.3-keyword-prompt-content-based-refresh',
+      summaryIndexV2WriteEnabled: false,
+      summaryIndexV2WriteScopeAllowlist: ['scope-user-configured'],
+    };
+
+    loadSettings_ACU();
+
+    expect(mockGlobalMeta.vectorMemoryConfigGlobal.summaryIndexV2WriteEnabled).toBe(true);
+    expect(mockGlobalMeta.vectorMemoryConfigGlobal.summaryIndexV2WriteScopeAllowlist).toEqual(['scope-user-configured']);
+    expect(mockGlobalMeta.vectorMemoryConfigGlobal.summaryIndexV2WriteForceEnableVersion)
+      .toBe('spv3.6.10-v2-writer-force-enable');
+    expect(mockSaveGlobalMeta).toHaveBeenCalled();
+  });
+
+  it('已标记 V2 writer force enable marker 后，保留用户手动关闭的 writer 显式意图', () => {
+    mockGlobalMeta.vectorMemoryConfigGlobal = {
+      defaultsRefreshVersion: 'spv3.6.3-keyword-prompt-content-based-refresh',
+      summaryIndexV2WriteEnabled: false,
+      summaryIndexV2WriteScopeAllowlist: ['scope-user-configured'],
+      summaryIndexV2WriteForceEnableVersion: 'spv3.6.10-v2-writer-force-enable',
+    };
+
+    loadSettings_ACU();
+
+    expect(mockGlobalMeta.vectorMemoryConfigGlobal.summaryIndexV2WriteEnabled).toBe(false);
+    expect(mockGlobalMeta.vectorMemoryConfigGlobal.summaryIndexV2WriteScopeAllowlist).toEqual(['scope-user-configured']);
+    expect(mockGlobalMeta.vectorMemoryConfigGlobal.summaryIndexV2WriteForceEnableVersion)
+      .toBe('spv3.6.10-v2-writer-force-enable');
+  });
+
   it('解析异常时回退到默认设置', () => {
     mockReadProfileSettings.mockImplementation(() => { throw new Error('解析失败'); });
     loadSettings_ACU();
@@ -598,5 +666,44 @@ describe('loadSettings_ACU', () => {
     expect(mockWriteProfileTemplate).not.toHaveBeenCalledWith('', NEW_DEFAULT_TEMPLATE_STR_ACU);
     expect(mockSetTableTemplate).not.toHaveBeenCalledWith(NEW_DEFAULT_TEMPLATE_STR_ACU);
     expect(mockSettings.tableTemplateDefaultsRefreshVersion).toBe('test-table-defaults-refresh');
+  });
+
+  it('一次性强制恢复会覆盖用户自定义的原生与严格 JSON 填表提示词', () => {
+    mockReadProfileSettings.mockReturnValue({
+      storageMode: 'native',
+      charCardPrompt: [{ role: 'USER', content: '用户自定义提示词', enabled: false }],
+      strictJsonCharCardPrompt: [{ role: 'USER', content: '用户自定义 strict json 提示词' }],
+      strictJsonSqlCharCardPrompt: [{ role: 'USER', content: '用户自定义 sql strict json 提示词' }],
+    });
+
+    loadSettings_ACU();
+
+    expect(mockSettings.charCardPrompt).toEqual([{ role: 'USER', content: '默认提示词' }]);
+    expect(mockSettings.strictJsonCharCardPrompt).toEqual([{ role: 'USER', content: '默认 strict json 提示词' }]);
+    expect(mockSettings.strictJsonSqlCharCardPrompt).toEqual([{ role: 'USER', content: '默认 sql strict json 提示词' }]);
+    expect(mockSettings.tableFillPromptForceDefaultVersion).toBe('test-prompt-force-default');
+  });
+
+  it('SQLite 模式的一次性强制恢复使用 SQL 默认填表提示词', () => {
+    mockReadProfileSettings.mockReturnValue({
+      storageMode: 'sqlite',
+      charCardPrompt: [{ role: 'USER', content: '我自己写的提示词' }],
+    });
+
+    loadSettings_ACU();
+
+    expect(mockSettings.charCardPrompt).toEqual([{ role: 'USER', content: '默认 sql 提示词' }]);
+    expect(mockSettings.tableFillPromptForceDefaultVersion).toBe('test-prompt-force-default');
+  });
+
+  it('已记录强制恢复版本时不再改写用户后续自定义提示词', () => {
+    mockReadProfileSettings.mockReturnValue({
+      tableFillPromptForceDefaultVersion: 'test-prompt-force-default',
+      charCardPrompt: [{ role: 'USER', content: '迁移后再次自定义' }],
+    });
+
+    loadSettings_ACU();
+
+    expect(mockSettings.charCardPrompt[0].content).toBe('迁移后再次自定义');
   });
 });

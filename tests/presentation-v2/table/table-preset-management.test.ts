@@ -94,4 +94,46 @@ describe('useTablePresetManagement', () => {
     }));
     expect(openVisualizerSurface).toHaveBeenCalledWith({ source: 'v2-shell' });
   });
+
+  it('聊天预设切换返回 saved=false 时不打开 visualizer 且显示真实错误', async () => {
+    const { management, applyTemplatePresetToCurrent, openVisualizerSurface } = await importManagement();
+    applyTemplatePresetToCurrent.mockResolvedValueOnce({ saved: false, error: '目标聊天已切换，已取消模板提交。' });
+
+    await management.editPreset('global-B');
+
+    expect(openVisualizerSurface).not.toHaveBeenCalled();
+    const { useToastStore } = await import('../../../src/presentation-v2/stores/toast-store');
+    expect(useToastStore().items.at(-1)).toMatchObject({ kind: 'error', text: '目标聊天已切换，已取消模板提交。' });
+  });
+
+  it('聊天预设已保存但 runtime 不可用时显示警告且不打开 visualizer', async () => {
+    const { management, applyTemplatePresetToCurrent, openVisualizerSurface } = await importManagement();
+    applyTemplatePresetToCurrent.mockResolvedValueOnce({
+      saved: true,
+      runtimeReady: false,
+      postCommitWarning: '模板已保存，但 SQLite 运行时重建失败。',
+    });
+
+    await management.editPreset('global-B');
+
+    expect(openVisualizerSurface).not.toHaveBeenCalled();
+    const { useToastStore } = await import('../../../src/presentation-v2/stores/toast-store');
+    expect(useToastStore().items.at(-1)).toMatchObject({ kind: 'warning', text: '模板已保存，但 SQLite 运行时重建失败。' });
+  });
+
+  it('删除活跃预设前聊天回退失败时保留预设且不报告成功', async () => {
+    const { management, deleteTemplatePreset, applyTemplatePresetToCurrent } = await importManagement();
+    applyTemplatePresetToCurrent
+      .mockResolvedValueOnce({ presetName: '', isDefault: true })
+      .mockResolvedValueOnce({ saved: false, error: '目标聊天已切换，已取消模板提交。' });
+
+    const promise = management.deletePreset('global-A');
+    const { useDialogStore } = await import('../../../src/presentation-v2/stores/dialog-store');
+    useDialogStore().submitActive();
+    await promise;
+
+    expect(deleteTemplatePreset).not.toHaveBeenCalled();
+    const { useToastStore } = await import('../../../src/presentation-v2/stores/toast-store');
+    expect(useToastStore().items.at(-1)).toMatchObject({ kind: 'error', text: '目标聊天已切换，已取消模板提交。' });
+  });
 });

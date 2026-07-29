@@ -28,6 +28,7 @@ function mockSqlConsoleDeps(opts: {
     isSqliteMode: () => opts.sqlite !== false,
   }));
   vi.doMock('../../../src/service/table/table-storage-strategy', () => ({
+    isStorageRuntimeReadyForSyncRead_ACU: () => true,
     getStorageProvider,
     ensureStorageProviderReady_ACU: ensureStorageProviderReady,
   }));

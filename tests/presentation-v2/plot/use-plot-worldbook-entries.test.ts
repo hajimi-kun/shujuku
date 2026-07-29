@@ -25,6 +25,7 @@ let settings: ReturnType<typeof createSettings>;
 const mockSaveSettings = vi.fn();
 const mockGetEntries = vi.fn();
 const mockGetAgentSnapshot = vi.fn(() => ({ active: false, selectionSignature: '', createdAt: 0, books: {} }));
+const mockRefreshAgentSnapshot = vi.fn();
 const mockSaveEntrySkillMeta = vi.fn();
 const mockDeleteEntrySkillMeta = vi.fn();
 
@@ -43,6 +44,7 @@ async function getComposable(presetSettings?: ReturnType<typeof createSettings>,
   }));
   vi.doMock('../../../src/service/agent/agent-worldbook-takeover', () => ({
     getPlotAgentWorldbookSnapshot_ACU: mockGetAgentSnapshot,
+    refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU: mockRefreshAgentSnapshot,
   }));
   vi.doMock('../../../src/service/agent/agent-worldbook-skill-meta', () => ({
     buildWorldbookSkillMetaMapForEntries_ACU: (entries: any[]) => new Map((entries || [])
@@ -78,6 +80,8 @@ beforeEach(() => {
   mockSaveSettings.mockClear();
   mockGetEntries.mockClear();
   mockGetAgentSnapshot.mockReturnValue({ active: false, selectionSignature: '', createdAt: 0, books: {} });
+  mockRefreshAgentSnapshot.mockReset();
+  mockRefreshAgentSnapshot.mockImplementation(async () => mockGetAgentSnapshot());
   mockSaveEntrySkillMeta.mockReset();
   mockDeleteEntrySkillMeta.mockReset();
   mockSaveEntrySkillMeta.mockResolvedValue({ updated: false, reason: 'noop' });
@@ -382,5 +386,68 @@ describe('usePlotWorldbookEntries', () => {
 
     c.toggleGroupExpanded('G');
     expect(c.groups.value[0].expanded).toBe(false);
+  });
+
+  it('分类前刷新持久 snapshot，pending 条目不视为已接管', async () => {
+    mockGetAgentSnapshot.mockReturnValue({ active: false, selectionSignature: '', createdAt: 0, books: {} });
+    mockRefreshAgentSnapshot.mockResolvedValue({
+      active: true,
+      selectionSignature: 'test-selection',
+      createdAt: 1,
+      books: {
+        MyBook: [{ uid: 7, takeoverStatus: 'pending', previousEnabled: true, previousKeys: ['旧关键词'], previousType: 'selective' }],
+      },
+    });
+    mockGetEntries.mockResolvedValue({
+      MyBook: [{ uid: 7, comment: '尚未完成接管', name: '尚未完成接管', enabled: false, type: 'selective', keys: [] }],
+    });
+
+    const c = await getComposable();
+    await c.loadEntries(['MyBook']);
+
+    expect(mockRefreshAgentSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockRefreshAgentSnapshot.mock.invocationCallOrder[0]).toBeLessThan(mockGetEntries.mock.invocationCallOrder[0]);
+    expect(c.groups.value[0].entries[0]).toMatchObject({
+      agentTakeoverState: 'initial_disabled',
+      disabled: true,
+    });
+  });
+
+  it('分类使用 refresh 返回的 applied snapshot，不读取陈旧 getter cache', async () => {
+    mockGetAgentSnapshot.mockReturnValue({ active: false, selectionSignature: '', createdAt: 0, books: {} });
+    mockRefreshAgentSnapshot.mockResolvedValue({
+      active: true,
+      selectionSignature: 'fresh-selection',
+      createdAt: 2,
+      books: {
+        MyBook: [{ uid: 8, takeoverStatus: 'applied', previousEnabled: true, previousKeys: ['旧关键词'], previousType: 'selective' }],
+      },
+    });
+    mockGetEntries.mockResolvedValue({
+      MyBook: [{ uid: 8, comment: '已接管条目', name: '已接管条目', enabled: false, type: 'constant', keys: [] }],
+    });
+
+    const c = await getComposable();
+    await c.loadEntries(['MyBook']);
+
+    expect(mockGetAgentSnapshot).not.toHaveBeenCalled();
+    expect(c.groups.value[0].entries[0]).toMatchObject({
+      agentTakeoverState: 'taken_over',
+      disabled: false,
+      isConstant: false,
+      checked: true,
+    });
+  });
+
+  it('snapshot 刷新失败时中止加载，避免以陈旧 cache 分类', async () => {
+    mockRefreshAgentSnapshot.mockRejectedValueOnce(new Error('刷新 snapshot 失败'));
+
+    const c = await getComposable();
+    await c.loadEntries(['MyBook']);
+
+    expect(mockGetEntries).not.toHaveBeenCalled();
+    expect(c.groups.value).toEqual([]);
+    expect(c.status.value).toBe('error');
+    expect(c.error.value).toBe('刷新 snapshot 失败');
   });
 });

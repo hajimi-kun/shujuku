@@ -1,11 +1,14 @@
 import { ref, shallowRef } from 'vue';
 import { getLorebookEntriesByNames_ACU } from '../../service/worldbook/pipeline';
-import { getPlotAgentWorldbookSnapshot_ACU } from '../../service/agent/agent-worldbook-takeover';
+import { refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU } from '../../service/agent/agent-worldbook-takeover';
+import {
+  buildWorldbookSnapshotEntryIndexByBook_ACU,
+  getWorldbookSnapshotEntryForDisplay_ACU,
+  resolveWorldbookEntryTakeoverState_ACU,
+} from './worldbook-entry-display';
 import {
   deleteWorldbookEntrySkillMeta_ACU,
-  buildWorldbookSkillMetaMapForEntries_ACU,
-  listWorldbookSkillMetas_ACU,
-  normalizeWorldbookSkillMetaDraft_ACU,
+  parseWorldbookSkillMetaFromComment_ACU,
   saveWorldbookEntrySkillMeta_ACU,
   stripWorldbookSkillMetaBlock_ACU,
   type WorldbookSkillMeta_ACU,
@@ -28,27 +31,8 @@ export type AgentWorldbookEntryItem = WorldbookEntryDisplayItem_ACU;
 export type AgentWorldbookEntryGroup = WorldbookEntryDisplayGroup_ACU;
 export type AgentWorldbookSkillifySelectedEntry = WorldbookSkillifySelectedEntry_ACU;
 
-function buildSnapshotUidSet_ACU(): Map<string, Set<string>> {
-  const result = new Map<string, Set<string>>();
-  const snapshot = getPlotAgentWorldbookSnapshot_ACU();
-  if (snapshot.active !== true) return result;
-  for (const [bookName, entries] of Object.entries(snapshot.books || {})) {
-    const uids = new Set((Array.isArray(entries) ? entries : []).map(entry => String(entry?.uid ?? '')).filter(Boolean));
-    if (uids.size > 0) result.set(bookName, uids);
-  }
-  return result;
-}
-
 function getEntryLabel_ACU(entry: any): string {
   return stripWorldbookSkillMetaBlock_ACU(String(entry?.comment || entry?.name || '')).trim() || `条目 ${entry?.uid}`;
-}
-
-function getTakeoverState_ACU(bookName: string, entry: any, hasSkill: boolean, snapshotUids: Map<string, Set<string>>): AgentWorldbookEntryTakeoverState {
-  if (snapshotUids.get(bookName)?.has(String(entry?.uid))) {
-    return entry?.enabled !== false && String(entry?.type || '').trim().toLowerCase() === 'constant' ? 'final_greenlight' : 'taken_over';
-  }
-  if (entry?.enabled === false) return 'initial_disabled';
-  return hasSkill ? 'skill_ready' : 'native';
 }
 
 function selectionKey_ACU(bookName: string, uid: number): string {
@@ -59,11 +43,11 @@ function isAgentWorldbookEntryVisible_ACU(
   bookName: string,
   entry: any,
   skillMeta: WorldbookSkillMeta_ACU | null,
-  snapshotUids: Map<string, Set<string>>,
+  snapshotEntry: unknown,
 ): boolean {
   return isWorldbookEntrySkillifyCandidate_ACU(entry)
     || skillMeta !== null
-    || snapshotUids.get(bookName)?.has(String(entry?.uid)) === true;
+    || !!snapshotEntry;
 }
 
 export interface UseAgentWorldbookEntriesOptions {
@@ -88,20 +72,18 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
         status.value = 'success';
         return [];
       }
-      // listWorldbookSkillMetas also migrates legacy comment blocks into the
-      // hidden registry before this panel derives labels and takeover state.
-      await listWorldbookSkillMetas_ACU(uniqueBookNames);
-      const refreshedEntriesByBook = await getLorebookEntriesByNames_ACU(uniqueBookNames) as Record<string, any[]>;
-      const snapshotUids = buildSnapshotUidSet_ACU();
+      const snapshot = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
+      const snapshotEntryIndexByBook = buildWorldbookSnapshotEntryIndexByBook_ACU(snapshot);
+      const entriesByBook = await getLorebookEntriesByNames_ACU(uniqueBookNames) as Record<string, any[]>;
       const nextGroups: AgentWorldbookEntryGroup[] = [];
       const visibleSelections = new Set<string>();
       for (const bookName of uniqueBookNames) {
-        const entries = Array.isArray(refreshedEntriesByBook[bookName]) ? refreshedEntriesByBook[bookName] : [];
-        const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(entries);
+        const entries = Array.isArray(entriesByBook[bookName]) ? entriesByBook[bookName] : [];
         const items = entries.flatMap((entry: any): AgentWorldbookEntryItem[] => {
           const comment = String(entry?.comment || entry?.name || '');
-          const skillMeta = skillMetaByUid.get(String(entry?.uid)) || null;
-          if (!isAgentWorldbookEntryVisible_ACU(bookName, entry, skillMeta, snapshotUids)) {
+          const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+          const snapshotEntry = getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry);
+          if (!isAgentWorldbookEntryVisible_ACU(bookName, entry, skillMeta, snapshotEntry)) {
             return [];
           }
           const key = selectionKey_ACU(bookName, entry.uid);
@@ -113,7 +95,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
             comment,
             skillMeta,
             hasSkill: !!skillMeta,
-            agentTakeoverState: getTakeoverState_ACU(bookName, entry, !!skillMeta, snapshotUids),
+            agentTakeoverState: resolveWorldbookEntryTakeoverState_ACU(entry, !!skillMeta, snapshotEntry),
             checked: false,
             skillifySelected: selected.value.has(key),
             skillifySelectable: isWorldbookEntrySkillifyCandidate_ACU(entry),
@@ -173,12 +155,8 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
     return Array.from(selected.value.values());
   }
 
-  function updateEntrySkillMetaLocal(
-    bookName: string,
-    uid: number,
-    comment: string,
-    skillMeta: WorldbookSkillMeta_ACU | null,
-  ): void {
+  function updateEntrySkillMetaLocal(bookName: string, uid: number, comment: string): void {
+    const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
     groups.value = groups.value.map(group => {
       if (group.bookName !== bookName) return group;
       return {
@@ -190,7 +168,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
             comment,
             label: stripWorldbookSkillMetaBlock_ACU(comment).trim() || `条目 ${uid}`,
             skillMeta,
-            hasSkill: skillMeta !== null,
+            hasSkill: !!skillMeta,
           };
         }),
       };
@@ -214,12 +192,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
   ): Promise<void> {
     const result = await saveWorldbookEntrySkillMeta_ACU(bookName, uid, draft, updatedBy);
     if (result.entry && typeof result.entry.comment === 'string') {
-      updateEntrySkillMetaLocal(
-        bookName,
-        uid,
-        result.entry.comment,
-        normalizeWorldbookSkillMetaDraft_ACU(draft, updatedBy),
-      );
+      updateEntrySkillMetaLocal(bookName, uid, result.entry.comment);
     }
     if (result.updated) await notifySkillMetaChanged();
   }
@@ -227,7 +200,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
   async function deleteEntrySkillMeta(bookName: string, uid: number): Promise<void> {
     const result = await deleteWorldbookEntrySkillMeta_ACU(bookName, uid);
     if (result.entry && typeof result.entry.comment === 'string') {
-      updateEntrySkillMetaLocal(bookName, uid, result.entry.comment, null);
+      updateEntrySkillMetaLocal(bookName, uid, result.entry.comment);
     }
     if (result.updated) await notifySkillMetaChanged();
   }

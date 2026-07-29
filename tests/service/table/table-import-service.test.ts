@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   replaceAllData: vi.fn().mockResolvedValue({ success: true }),
   getCurrentData: vi.fn(),
   runTableUpdateCommit: vi.fn(),
+  reloadStorageProvider: vi.fn().mockResolvedValue(undefined),
+  validateSqliteTemplateDataStrict: vi.fn().mockResolvedValue({ success: true }),
 }));
 
 vi.mock('../../../src/service/chat/chat-service', () => ({
@@ -27,10 +29,15 @@ vi.mock('../../../src/service/table/table-storage-strategy', () => ({
     replaceAllData: mocks.replaceAllData,
     getCurrentData: mocks.getCurrentData,
   })),
+  reloadStorageProvider: mocks.reloadStorageProvider,
 }));
 
 vi.mock('../../../src/service/table/table-update-commit', () => ({
   runTableUpdateCommit_ACU: mocks.runTableUpdateCommit,
+}));
+
+vi.mock('../../../src/service/table/sqlite-template-validation', () => ({
+  validateSqliteTemplateDataStrict_ACU: mocks.validateSqliteTemplateDataStrict,
 }));
 
 vi.mock('../../../src/shared/utils', () => ({
@@ -67,7 +74,9 @@ describe('importTableJsonThroughCommit_ACU', () => {
     expect(result.success).toBe(true);
     expect(mocks.replaceAllData).toHaveBeenCalledWith(importedData);
     expect(result.persisted).toBe(true);
-    expect(mocks.runTableUpdateCommit).toHaveBeenCalledWith(expect.objectContaining({
+    const [commitOptions, apply] = mocks.runTableUpdateCommit.mock.calls[0];
+    const applied = await apply();
+    expect(commitOptions).toEqual(expect.objectContaining({
       source: 'import',
       reason: 'importTableAsJson',
       targetMessageIndex: 1,
@@ -75,8 +84,62 @@ describe('importTableJsonThroughCommit_ACU', () => {
       updateGroupKeys: null,
       trackingSheetKeys: [],
       trackAsUpdate: false,
-      operations: [{ kind: 'data_replace', data: importedData, reason: 'import' }],
-    }), expect.any(Function));
+      strictSave: true,
+    }));
+    expect(applied.persist).toEqual({ operations: [] });
+  });
+
+  it('可修复的旧版 rowId 表头只持久化并加载审计后的 candidate', async () => {
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['rowId', '物品'], [' 1 ', '铁剑'], ['1', '药水']] },
+    };
+
+    const result = await importTableJsonThroughCommit_ACU(JSON.stringify(importedData));
+
+    const [options, apply] = mocks.runTableUpdateCommit.mock.calls[0];
+    const applied = await apply();
+    const expectedCandidate = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['row_id', '物品'], ['1', '铁剑'], ['2', '药水']] },
+    };
+    expect(applied.persist).toEqual({ operations: [] });
+    expect(applied.tableData).toEqual(expectedCandidate);
+    expect(mocks.replaceAllData).toHaveBeenCalledWith(expectedCandidate);
+    expect(result).toEqual(expect.objectContaining({ success: true, tableData: expectedCandidate }));
+  });
+
+  it('无数据业务表头自动补 row_id，并以同一候选数据预检、提交和替换 runtime', async () => {
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['物品', '数量']] },
+    };
+    const expectedCandidate = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['row_id', '物品', '数量']] },
+    };
+
+    const result = await importTableJsonThroughCommit_ACU(JSON.stringify(importedData));
+
+    expect(result).toEqual(expect.objectContaining({ success: true, tableData: expectedCandidate }));
+    expect(mocks.validateSqliteTemplateDataStrict).toHaveBeenCalledWith(expectedCandidate);
+    const [, apply] = mocks.runTableUpdateCommit.mock.calls[0];
+    expect((await apply()).tableData).toEqual(expectedCandidate);
+    expect(mocks.replaceAllData).toHaveBeenCalledWith(expectedCandidate);
+    expect(importedData.sheet_0.content).toEqual([['物品', '数量']]);
+  });
+
+  it('有种子行的业务表头不走空模板补列捷径', async () => {
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['物品']], seedRows: [['铁剑']] },
+    };
+
+    const result = await importTableJsonThroughCommit_ACU(JSON.stringify(importedData));
+
+    expect(result).toMatchObject({ failureStage: 'preflight', auditStatus: 'requires_confirmation' });
+    expect(mocks.runTableUpdateCommit).not.toHaveBeenCalled();
+    expect(mocks.replaceAllData).not.toHaveBeenCalled();
   });
 
   it('删除楼层/备份恢复模式只恢复运行时，不写新的持久化事件', async () => {
@@ -92,5 +155,119 @@ describe('importTableJsonThroughCommit_ACU', () => {
     expect(result.tableData).toEqual(importedData);
     expect(mocks.replaceAllData).toHaveBeenCalledWith(importedData);
     expect(mocks.runTableUpdateCommit).not.toHaveBeenCalled();
+  });
+
+  it('持久化失败时不替换 runtime，保留预检后提交的原子边界', async () => {
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '旧版模板', content: [['row_id', '数量'], ['1', 1]] },
+    };
+    mocks.runTableUpdateCommit.mockResolvedValueOnce({
+      success: false,
+      error: 'V2 checkpoint 行标识或结构不合法：invalid_header: sheet_0 第 0 行',
+    });
+
+    const result = await importTableJsonThroughCommit_ACU(JSON.stringify(importedData));
+
+    expect(result).toEqual({
+      success: false,
+      persisted: false,
+      failureStage: 'commit',
+      error: 'V2 checkpoint 行标识或结构不合法：invalid_header: sheet_0 第 0 行',
+    });
+    expect(mocks.replaceAllData).not.toHaveBeenCalled();
+    expect(mocks.runTableUpdateCommit).toHaveBeenCalledOnce();
+  });
+
+  it('预检要求人工确认时不启动提交且不替换 runtime', async () => {
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '无法确认模板', content: [['名称', '数量'], ['铁剑', 1]] },
+    };
+
+    const result = await importTableJsonThroughCommit_ACU(JSON.stringify(importedData));
+
+    expect(result).toEqual({
+      success: false,
+      persisted: false,
+      failureStage: 'preflight',
+      auditStatus: 'requires_confirmation',
+      issues: [expect.objectContaining({ code: 'upgrade_invalid_header', sheetKey: 'sheet_0' })],
+      error: '导入数据需要人工确认或无法修复：upgrade_invalid_header',
+    });
+    expect(mocks.runTableUpdateCommit).not.toHaveBeenCalled();
+    expect(mocks.replaceAllData).not.toHaveBeenCalled();
+  });
+
+  it('严格保存成功后 runtime 替换失败会重载 provider 并如实返回已保存状态', async () => {
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['row_id', '物品'], ['1', '铁剑']] },
+    };
+    mocks.replaceAllData.mockResolvedValueOnce({ success: false, error: 'SQLite hydrate failed' });
+
+    const result = await importTableJsonThroughCommit_ACU(JSON.stringify(importedData));
+
+    expect(result).toEqual({
+      success: false,
+      persisted: true,
+      failureStage: 'post_commit_runtime',
+      error: '导入数据已保存，但运行时全量替换失败；已尝试重新加载运行时：SQLite hydrate failed',
+    });
+    expect(mocks.runTableUpdateCommit).toHaveBeenCalledOnce();
+    expect(mocks.replaceAllData).toHaveBeenCalledWith(importedData);
+    expect(mocks.reloadStorageProvider).toHaveBeenCalledOnce();
+  });
+
+  it('SQLite 预检失败时不启动提交也不替换 runtime', async () => {
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['row_id', '物品'], ['1', '铁剑']] },
+    };
+    mocks.validateSqliteTemplateDataStrict.mockResolvedValueOnce({ success: false, error: 'DDL 与表头不一致' });
+
+    const result = await importTableJsonThroughCommit_ACU(JSON.stringify(importedData));
+
+    expect(result).toEqual({
+      success: false,
+      persisted: false,
+      failureStage: 'preflight',
+      auditStatus: 'clean',
+      issues: [{ code: 'sqlite_preflight_failed', message: 'DDL 与表头不一致' }],
+      error: '导入候选数据未通过 SQLite 预检：DDL 与表头不一致',
+    });
+    expect(mocks.runTableUpdateCommit).not.toHaveBeenCalled();
+    expect(mocks.replaceAllData).not.toHaveBeenCalled();
+  });
+
+  it('已有 V2 full checkpoint 时才追加 data_replace 操作', async () => {
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['row_id', '物品'], ['1', '铁剑']] },
+    };
+    mocks.getChatArray.mockReturnValue([
+      {
+        is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: importedData },
+              logEntries: [],
+            },
+          },
+        },
+      },
+      { is_user: false, mes: 'AI回复' },
+    ]);
+
+    await importTableJsonThroughCommit_ACU(JSON.stringify(importedData));
+
+    const [, apply] = mocks.runTableUpdateCommit.mock.calls[0];
+    const applied = await apply();
+    expect(applied.persist).toEqual({
+      operations: [{ kind: 'data_replace', data: importedData, reason: 'import' }],
+    });
   });
 });

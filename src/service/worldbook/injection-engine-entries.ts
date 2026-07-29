@@ -9,6 +9,15 @@ import { getImportBatchPrefix_ACU } from '../../shared/constants';
 import { ensureExportConfigDefaults_ACU, normalizePlacementConfig_ACU, getFixedPlacementDefaultsForTable_ACU, applyPlacementToEntry_ACU, isEntryPlacementMatched_ACU } from './injection-engine-config';
 import { buildUsedOrderSet_ACU, allocOrder_ACU, allocConsecutiveOrderBlock_ACU } from './injection-engine-order';
 import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from './injection-engine-state';
+import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
+
+function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[][] } {
+    const visibleColumns = getSheetColumnProjection_ACU(table).visibleColumns.filter(column => column.sourceIndex > 0);
+    return {
+        headers: visibleColumns.map(column => column.header),
+        rows: table.content.slice(1).map((row: any[]) => visibleColumns.map(column => row[column.sourceIndex])),
+    };
+}
 
   export function splitKeywordsByComma_ACU(text: string) {
       const raw = String(text || '').trim();
@@ -68,15 +77,14 @@ import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from './inject
         }
 
         // Format the entire table as markdown
+        const { headers, rows } = projectWorldbookTable_ACU(outlineTable);
         let content = `# ${outlineTable.name}\n\n`;
-        const headers = outlineTable.content[0] ? outlineTable.content[0].slice(1) : [];
         if (headers.length > 0) {
             content += `| ${headers.join(' | ')} |\n`;
             content += `|${headers.map(() => '---').join('|')}|\n`;
         }
-        const rows = outlineTable.content.slice(1);
         rows.forEach((row: any) => {
-            content += `| ${row.slice(1).join(' | ')} |\n`;
+            content += `| ${row.join(' | ')} |\n`;
         });
 
         const finalContent = `<剧情大纲编码索引>\n\n${content.trim()}\n\n</剧情大纲编码索引>`;
@@ -178,7 +186,8 @@ import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from './inject
         }
 
         // --- 2. Re-create entries from the table ---
-        const summaryRows = (summaryTable?.content?.length > 1) ? summaryTable.content.slice(1) : [];
+        const projectedSummary = summaryTable?.content?.length > 0 ? projectWorldbookTable_ACU(summaryTable) : { headers: [], rows: [] };
+        const summaryRows = projectedSummary.rows;
         if (summaryRows.length === 0) {
             logDebug_ACU('No summary rows to create entries for.');
             return;
@@ -189,7 +198,7 @@ import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from './inject
             summaryCfg.fixedEntryPlacement,
             getFixedPlacementDefaultsForTable_ACU(summaryTable?.name || '总结表').entry
         );
-        const headers = summaryTable.content[0].slice(1);
+        const headers = projectedSummary.headers;
         const keywordColumnIndex = headers.indexOf('编码索引');
         if (keywordColumnIndex === -1) {
             logError_ACU('Cannot find "编码索引" column in 总结表. Cannot process summary entries.');
@@ -202,15 +211,14 @@ import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from './inject
         const sharedSummaryDataOrder = allocOrder_ACU(usedOrders, summaryFixedPlacement.order, 1, 99999);
         
         summaryRows.forEach((row: any, i: number) => {
-            const rowData = row.slice(1);
-            const keywordsRaw = rowData[keywordColumnIndex];
+            const keywordsRaw = row[keywordColumnIndex];
             if (!keywordsRaw) return; // Skip if no keywords
 
             const keywords = splitKeywordsByComma_ACU(keywordsRaw);
             if (keywords.length === 0) return;
 
             // 行条目只包含行数据，不包含表头
-            const content = `| ${rowData.join(' | ')} |\n`;
+            const content = `| ${row.join(' | ')} |\n`;
             const newEntryData = applyPlacementToEntry_ACU({
                 comment: `${SUMMARY_ENTRY_PREFIX}${i + 1}`,
                 content: content,
@@ -295,13 +303,14 @@ import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from './inject
         }
 
         // --- 2. 全量重建 ---
-        const personRows = (importantPersonsTable?.content?.length > 1) ? importantPersonsTable.content.slice(1) : [];
+        const projectedPersons = importantPersonsTable?.content?.length > 0 ? projectWorldbookTable_ACU(importantPersonsTable) : { headers: [], rows: [] };
+        const personRows = projectedPersons.rows;
         if (personRows.length === 0) {
             logDebug_ACU('No important persons to create entries for.');
             return; // 如果没有人物，删除后直接返回
         }
 
-        const headers = importantPersonsTable.content[0].slice(1);
+        const headers = projectedPersons.headers;
         const nameColumnIndex = headers.indexOf('姓名') !== -1 ? headers.indexOf('姓名') : headers.indexOf('角色名');
         if (nameColumnIndex === -1) {
             logError_ACU('Cannot find "姓名" or "角色名" column in 重要人物表. Cannot process person entries.');
@@ -333,15 +342,14 @@ import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from './inject
         };
 
         personRows.forEach((row: any, i: number) => {
-            const rowData = row.slice(1);
-            const personName = rowData[nameColumnIndex];
+            const personName = row[nameColumnIndex];
             if (!personName) return;
             personNames.push(personName);
 
             // [优化] 生成关键词：英文逗号分割为多关键词；每个关键词保留括号前的部分
             const keys = buildPersonNameKeywords_ACU(personName);
 
-            const content = `| ${rowData.join(' | ')} |`
+            const content = `| ${row.join(' | ')} |`
             const newEntryData = applyPlacementToEntry_ACU({
                 comment: `${PERSON_ENTRY_PREFIX}${i + 1}`,
                 content: content,

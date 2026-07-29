@@ -57,6 +57,12 @@ import {
   normalizeExtractRules_ACU,
   parseTableTemplateJson_ACU,
 } from '../../src/shared/utils';
+import {
+  _resetForTesting as resetLogBufferForTesting,
+  getAllLogs,
+  setWarnLogEnabled,
+  subscribe,
+} from '../../src/shared/log-buffer';
 
 // ═══════════════════════════════════════════════════════════════
 // cleanChatName_ACU
@@ -622,12 +628,34 @@ describe('logDebug_ACU', () => {
 // logWarn_ACU
 // ═══════════════════════════════════════════════════════════════
 describe('logWarn_ACU', () => {
-  it('调用 console.warn 并包含前缀', () => {
+  it('默认关闭时不调用 console.warn、不写缓冲且不通知订阅者', () => {
+    resetLogBufferForTesting();
+    const received: any[] = [];
+    subscribe((entry) => received.push(entry));
     const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     logWarn_ACU('警告日志');
+
+    expect(spy).not.toHaveBeenCalled();
+    expect(getAllLogs()).toEqual([]);
+    expect(received).toEqual([]);
+    spy.mockRestore();
+  });
+
+  it('开启后恢复 console.warn、缓冲写入与订阅通知', () => {
+    resetLogBufferForTesting();
+    setWarnLogEnabled(true);
+    const received: any[] = [];
+    subscribe((entry) => received.push(entry));
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    logWarn_ACU('警告日志');
+
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0][0]).toContain('ACU');
     expect(spy.mock.calls[0][1]).toBe('警告日志');
+    expect(getAllLogs()).toHaveLength(1);
+    expect(getAllLogs()[0].level).toBe('warn');
+    expect(received).toHaveLength(1);
+    expect(received[0].level).toBe('warn');
     spy.mockRestore();
   });
 });
@@ -636,12 +664,20 @@ describe('logWarn_ACU', () => {
 // logError_ACU
 // ═══════════════════════════════════════════════════════════════
 describe('logError_ACU', () => {
-  it('调用 console.error 并包含前缀', () => {
+  it('Warn 关闭时仍调用 console.error、写缓冲并通知订阅者', () => {
+    resetLogBufferForTesting();
+    const received: any[] = [];
+    subscribe((entry) => received.push(entry));
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     logError_ACU('错误日志');
+
     expect(spy).toHaveBeenCalledTimes(1);
     expect(spy.mock.calls[0][0]).toContain('ACU');
     expect(spy.mock.calls[0][1]).toBe('错误日志');
+    expect(getAllLogs()).toHaveLength(1);
+    expect(getAllLogs()[0].level).toBe('error');
+    expect(received).toHaveLength(1);
+    expect(received[0].level).toBe('error');
     spy.mockRestore();
   });
 });

@@ -138,6 +138,8 @@ export interface ChatSummaryVectorIndexState_ACU {
 export interface SummaryVectorIndexExternalFileRef_ACU {
     role: SummaryVectorIndexExternalFileRole_ACU;
     path: string;
+    /** V2 registry publication lifecycle; missing means historical entry with unknown legacy semantics. */
+    publicationState?: 'prepared' | 'published';
     shardId?: string;
     byteSize: number;
     checksum: string;
@@ -176,6 +178,29 @@ export interface SummaryVectorIndexSnapshotInfo_ACU {
     batchIds: string[];
 }
 
+/** V2 immutable external snapshot identity. Missing means a legacy layout. */
+export interface SummaryVectorIndexStorageIdentity_ACU {
+    layoutVersion: 2;
+    scopeFingerprint: string;
+    writeGeneration: string;
+    revision: number;
+}
+
+/**
+ * 每个可达路径所声明的完整预期身份。
+ * 这是 reachability / health / GC 的共同证据，不得在各调用点重新拼缩水字段。
+ */
+export interface SummaryVectorIndexExpectedFileIdentity_ACU {
+    chatKey: string;
+    isolationKey: string;
+    sourceTableKey: string;
+    indexId: string;
+    snapshotRevision?: number;
+    storageIdentity?: SummaryVectorIndexStorageIdentity_ACU;
+    embeddingModel: string;
+    dimension: number;
+}
+
 export interface ChatSummaryVectorIndexManifest_ACU {
     version: number;
     backend: 'st-files';
@@ -210,6 +235,7 @@ export interface ChatSummaryVectorIndexManifest_ACU {
      * 旧版 manifest 没有该字段，读取端必须回退到 files 中的 base_shard/delta_shard。
      */
     snapshot?: SummaryVectorIndexSnapshotInfo_ACU;
+    storageIdentity?: SummaryVectorIndexStorageIdentity_ACU;
     batchRefs?: SummaryVectorIndexBatchRef_ACU[];
     /**
      * v3 内容寻址协议：聊天楼层保存轻量 checkpoint，manifest 保存 row -> chunkKey 引用，
@@ -313,6 +339,13 @@ export interface SummaryVectorIndexStats_ACU {
 export interface SummaryVectorIndexReachableFile_ACU {
     path: string;
     role?: SummaryVectorIndexExternalFileRole_ACU;
+    /**
+     * 同一物理对象可能被多个聊天楼层或 tag slot 引用。首个引用仍保留在
+     * messageIndex/isolationKey，完整引用集用于诊断与 purge 安全审计。
+     */
+    references?: Array<{ messageIndex: number; isolationKey: string }>;
+    expectedIdentity: SummaryVectorIndexExpectedFileIdentity_ACU;
+    manifest: ChatSummaryVectorIndexManifest_ACU;
     indexId?: string;
     messageIndex: number;
     isolationKey: string;
@@ -335,7 +368,7 @@ export interface SummaryVectorIndexReachabilityReport_ACU {
 
 export interface SummaryVectorIndexHealthIssue_ACU {
     severity: 'warning' | 'error';
-    code: 'missing_file' | 'checksum_mismatch' | 'identity_mismatch' | 'legacy_manifest' | 'unreachable_registered_file' | 'read_error' | 'pack_chunk_missing';
+    code: 'missing_file' | 'checksum_mismatch' | 'identity_mismatch' | 'path_identity_collision' | 'legacy_manifest' | 'unreachable_registered_file' | 'read_error' | 'pack_chunk_missing';
     path: string;
     role?: SummaryVectorIndexExternalFileRole_ACU;
     rowKey?: string;
@@ -357,6 +390,7 @@ export interface SummaryVectorIndexHealthReport_ACU {
     missingFileCount: number;
     checksumMismatchCount: number;
     identityMismatchCount: number;
+    pathIdentityCollisionCount: number;
     legacyManifestCount: number;
     unreachableRegisteredFileCount: number;
     flushTaskTotalCount?: number;

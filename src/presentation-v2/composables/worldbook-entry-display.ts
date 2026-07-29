@@ -57,7 +57,9 @@ export function buildWorldbookSnapshotEntryIndexByBook_ACU(
     if (!Array.isArray(entries)) continue;
     const entriesByUid = new Map(
       entries
-        .filter((entry): entry is AgentWorldbookControlSnapshotEntry_ACU => !!entry && String(entry.uid ?? '') !== '')
+        .filter((entry): entry is AgentWorldbookControlSnapshotEntry_ACU => !!entry
+          && entry.takeoverStatus !== 'pending'
+          && String(entry.uid ?? '') !== '')
         .map(entry => [String(entry.uid), entry]),
     );
     if (entriesByUid.size > 0) result.set(bookName, entriesByUid);

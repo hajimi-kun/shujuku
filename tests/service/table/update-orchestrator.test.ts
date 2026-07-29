@@ -17,7 +17,13 @@ vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: vi.fn(),
   logWarn_ACU: vi.fn(),
   logError_ACU: vi.fn(),
+  hashUserInput_ACU: vi.fn((text: string) => text ? 'mock-ddl-digest' : ''),
   isSummaryOrOutlineTable_ACU: vi.fn(() => false),
+  stripSeedRowsFromTemplate_ACU: vi.fn((data: any) => {
+    const cloned = JSON.parse(JSON.stringify(data));
+    Object.keys(cloned || {}).filter(key => key.startsWith('sheet_')).forEach(key => { cloned[key].content = [cloned[key].content?.[0] || ['row_id']]; });
+    return cloned;
+  }),
   parseTableTemplateJson_ACU: vi.fn(() => ({
     mate: { type: 'acu' },
     sheet_0: { name: '测试表', updateConfig: { groupId: 0 } },
@@ -71,20 +77,29 @@ const mockCallCustomOpenAI = vi.fn();
 const mockParseAndApplyTableEdits = vi.fn();
 const mockParseAndApplyTableEditsToData = vi.fn();
 const mockApplySqlEditsToTableDataSnapshot = vi.fn();
+const mockNormalizeSqlStatements = vi.hoisted(() => vi.fn());
 const mockPrepareAIInput = vi.fn();
-const mockReloadStorageProvider = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockReloadStorageProvider = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true, degraded: false, source: 'merged' }));
+const mockEnsureStorageProviderReady = vi.hoisted(() => vi.fn().mockResolvedValue({ mode: 'sqlite', isReady: () => true }));
+const mockResolveTemplateScope = vi.hoisted(() => vi.fn(() => null as any));
 
-vi.mock('../../../src/service/ai/prompt-builder', () => ({
-  callCustomOpenAI_ACU: (...args: any[]) => mockCallCustomOpenAI(...args),
-  parseAndApplyTableEdits_ACU: (...args: any[]) => mockParseAndApplyTableEdits(...args),
-  parseAndApplyTableEditsToData_ACU: (...args: any[]) => {
-    const impl = mockParseAndApplyTableEditsToData.getMockImplementation();
-    return impl ? mockParseAndApplyTableEditsToData(...args) : mockParseAndApplyTableEdits(...args);
-  },
-  prepareAIInput_ACU: (...args: any[]) => mockPrepareAIInput(...args),
-}));
+vi.mock('../../../src/service/ai/prompt-builder', async (importOriginal) => {
+  // 保留真实导出（extractTableEditInner_ACU / extractStrictJsonTableFillResponse_ACU / isSqlContent 等），
+  // 这样 collectGroupFillResponse_ACU 的真实校验能在测试里跑通；只覆盖需要桩的四个函数。
+  const actual: any = await importOriginal();
+  return {
+    ...actual,
+    callCustomOpenAI_ACU: (...args: any[]) => mockCallCustomOpenAI(...args),
+    parseAndApplyTableEdits_ACU: (...args: any[]) => mockParseAndApplyTableEdits(...args),
+    parseAndApplyTableEditsToData_ACU: (...args: any[]) => {
+      const impl = mockParseAndApplyTableEditsToData.getMockImplementation();
+      return impl ? mockParseAndApplyTableEditsToData(...args) : mockParseAndApplyTableEdits(...args);
+    },
+    prepareAIInput_ACU: (...args: any[]) => mockPrepareAIInput(...args),
+  };
+});
 
-const { mockChatArrayForSeedStage, mockIndependentTableStates, mockGetChatArray_ACU, mockCaptureManualRefillSessionSnapshot, mockClearManualRefillIncrementalDataInRange, mockClearManualRefillSheetDataInRange, mockCommitManualRefillSheetSnapshot, mockRestoreManualRefillSessionSnapshot, mockEnsureManualRefillInitialBaseline, mockEnsureBoundaryCheckpoint, mockShouldRotateBoundaryCheckpoint, mockPurgeSheetKeysFromChatHistoryHard } = vi.hoisted(() => {
+const { mockChatArrayForSeedStage, mockIndependentTableStates, mockGetChatArray_ACU, mockCaptureManualRefillSessionSnapshot, mockClearManualRefillIncrementalDataInRange, mockClearManualRefillSheetDataInRange, mockCommitManualRefillSheetSnapshot, mockRestoreManualRefillSessionSnapshot, mockEnsureBoundaryCheckpoint, mockShouldRotateBoundaryCheckpoint, mockPurgeSheetKeysFromChatHistoryHard } = vi.hoisted(() => {
   const chatArray: any[] = [];
   const independentTableStates: Record<string, any> = {};
   return {
@@ -96,7 +111,6 @@ const { mockChatArrayForSeedStage, mockIndependentTableStates, mockGetChatArray_
     mockClearManualRefillSheetDataInRange: vi.fn().mockResolvedValue(0),
     mockCommitManualRefillSheetSnapshot: vi.fn().mockResolvedValue({ success: true, changed: true, clearedCount: 1, checkpointCount: 1, targetMessageIndex: 0 }),
     mockRestoreManualRefillSessionSnapshot: vi.fn().mockResolvedValue(undefined),
-    mockEnsureManualRefillInitialBaseline: vi.fn().mockResolvedValue({ success: true, changed: false, skipped: true, targetMessageIndex: 0 }),
     mockEnsureBoundaryCheckpoint: vi.fn().mockResolvedValue({ success: true, changed: false, skipped: true }),
     mockShouldRotateBoundaryCheckpoint: vi.fn(() => false),
     mockPurgeSheetKeysFromChatHistoryHard: vi.fn().mockResolvedValue({ changed: true, changedCount: 1 }),
@@ -109,7 +123,6 @@ vi.mock('../../../src/service/chat/chat-service', () => ({
   clearManualRefillIncrementalDataInRange_ACU: mockClearManualRefillIncrementalDataInRange,
   clearManualRefillSheetDataInRange_ACU: mockClearManualRefillSheetDataInRange,
   commitManualRefillSheetSnapshotInRangeAtomic_ACU: mockCommitManualRefillSheetSnapshot,
-  ensureManualRefillInitialBaseline_ACU: mockEnsureManualRefillInitialBaseline,
   restoreManualRefillSessionSnapshotAtomic_ACU: mockRestoreManualRefillSessionSnapshot,
   ensureV2BoundaryCheckpointForRetainedBuffer_ACU: mockEnsureBoundaryCheckpoint,
   shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU: mockShouldRotateBoundaryCheckpoint,
@@ -128,6 +141,21 @@ vi.mock('../../../src/service/worldbook/injection-engine-state', () => ({
 
 vi.mock('../../../src/service/template/chat-scope', () => ({
   getChatSheetGuideDataForIsolationKey_ACU: vi.fn(() => null),
+  getCurrentChatTemplateScopeState_ACU: vi.fn(() => null),
+  getGlobalTemplateSnapshotForCurrentProfile_ACU: vi.fn(() => ({
+    templateObj: {
+      mate: { type: 'acu' },
+      sheet_0: { uid: 'sheet_0', name: '测试表', sourceData: {}, updateConfig: {}, exportConfig: {}, orderNo: 0, content: [['row_id', '值']] },
+    },
+  })),
+  sanitizeTemplateSnapshotForChat_ACU: vi.fn((source: any) => source ? {
+    templateObj: JSON.parse(JSON.stringify(source)),
+    templateStr: JSON.stringify(source),
+  } : null),
+  // 模板范围默认「未知」→ 不过滤，保持既有用例语义（这些用例不验证模板范围）。
+  resolveTemplateScope_ACU: (...args: any[]) => mockResolveTemplateScope(...args),
+  filterSheetKeysByTemplateScope_ACU: (keys: string[], scope: any) => (scope ? keys.filter((k: string) => scope.sheetKeys.has(k)) : [...keys]),
+  projectSheetForTemplateScope_ACU: vi.fn((sheet: any) => sheet),
   getEffectiveSeedRowsForSheet_ACU: vi.fn(() => []),
   shouldUseInitialSeedRows_ACU: vi.fn(() => {
     const chat = mockGetChatArray_ACU();
@@ -161,6 +189,7 @@ vi.mock('../../../src/service/worldbook/pipeline', () => ({
 }));
 
 const mockCheckIfFirstTimeInit = vi.fn().mockResolvedValue(false);
+const mockEnsureLegacyStorageMigratedBeforeWrite = vi.fn().mockResolvedValue({ success: true, migrated: false });
 const mockSaveIndependentTable = vi.fn().mockResolvedValue({ saved: true });
 const mockPersistTablesToChatMessage = vi.fn().mockResolvedValue({ saved: true, messageIndex: 0 });
 
@@ -176,7 +205,7 @@ vi.mock('../../../src/service/table/table-service', () => ({
     };
   }),
   checkIfFirstTimeInit_ACU: (...args: any[]) => mockCheckIfFirstTimeInit(...args),
-  ensureLegacyStorageMigratedBeforeWrite_ACU: vi.fn().mockResolvedValue({ success: true, migrated: false }),
+  ensureLegacyStorageMigratedBeforeWrite_ACU: (...args: any[]) => mockEnsureLegacyStorageMigratedBeforeWrite(...args),
   persistTablesToChatMessage_ACU: (...args: any[]) => mockPersistTablesToChatMessage(...args),
   saveIndependentTableToChatHistory_ACU: (...args: any[]) => mockSaveIndependentTable(...args),
 }));
@@ -194,6 +223,7 @@ vi.mock('../../../src/service/table/table-storage-strategy', async (importOrigin
   return {
     ...actual,
     reloadStorageProvider: (...args: any[]) => mockReloadStorageProvider(...args),
+    ensureStorageProviderReady_ACU: (...args: any[]) => mockEnsureStorageProviderReady(...args),
   };
 });
 
@@ -204,6 +234,11 @@ vi.mock('../../../src/service/table/sql-table-service', async (importOriginal) =
     applySqlEditsToTableDataSnapshot_ACU: (...args: any[]) => {
       const impl = mockApplySqlEditsToTableDataSnapshot.getMockImplementation();
       return impl ? mockApplySqlEditsToTableDataSnapshot(...args) : actual.applySqlEditsToTableDataSnapshot_ACU(...args);
+    },
+    // 仅在设置了 mock 实现时劫持；默认委托真实实现，避免影响其他测试。
+    normalizeSqlStatementsForRuntimeLog_ACU: (...args: any[]) => {
+      const impl = mockNormalizeSqlStatements.getMockImplementation();
+      return impl ? mockNormalizeSqlStatements(...args) : actual.normalizeSqlStatementsForRuntimeLog_ACU(...args);
     },
   };
 });
@@ -261,11 +296,21 @@ beforeEach(() => {
   Object.keys(mockIndependentTableStates).forEach(key => delete mockIndependentTableStates[key]);
   mockGetChatArray_ACU.mockImplementation(() => mockChatArrayForSeedStage);
   mockClearManualRefillIncrementalDataInRange.mockResolvedValue(0);
+  mockClearManualRefillSheetDataInRange.mockResolvedValue(0);
   mockCommitManualRefillSheetSnapshot.mockResolvedValue({ success: true, changed: true, clearedCount: 1, checkpointCount: 1, targetMessageIndex: 0 });
-  mockEnsureManualRefillInitialBaseline.mockResolvedValue({ success: true, changed: false, skipped: true, targetMessageIndex: 0 });
   mockEnsureBoundaryCheckpoint.mockResolvedValue({ success: true, changed: false, skipped: true });
   mockPurgeSheetKeysFromChatHistoryHard.mockResolvedValue({ changed: true, changedCount: 1 });
-  mockReloadStorageProvider.mockResolvedValue(undefined);
+  mockReloadStorageProvider.mockResolvedValue({ ok: true, degraded: false, source: 'merged' });
+  mockEnsureStorageProviderReady.mockImplementation(async () => {
+    const { SqlTableService } = await vi.importActual<typeof import('../../../src/service/table/sql-table-service')>(
+      '../../../src/service/table/sql-table-service',
+    );
+    const provider = new SqlTableService();
+    const loadResult = await provider.loadFromData(JSON.parse(JSON.stringify(mockCurrentJsonTableData || {})));
+    if (loadResult.error || !provider.isReady()) throw new Error(`测试 SQLite runtime 初始化失败：${loadResult.error || 'unknown'}`);
+    return provider;
+  });
+  mockEnsureLegacyStorageMigratedBeforeWrite.mockReset().mockResolvedValue({ success: true, migrated: false });
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -557,6 +602,44 @@ describe('buildBatchMergeBase_ACU', () => {
     }
   });
 
+  it('写入编排遇到无锚点 data_replace 时阻断，不退回模板空基底', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    try {
+      vi.mocked(isSqliteMode).mockReturnValue(true);
+      vi.mocked(getChatArray_ACU).mockReturnValue([{
+        is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              logEntries: [{
+                seq: 1,
+                entryId: 'orphan-data-replace',
+                createdAt: 1,
+                source: 'import',
+                targetMessageIndex: 0,
+                aiFloor: 1,
+                filledSheetKeys: ['sheet_0'],
+                changedSheetKeys: ['sheet_0'],
+                groupKeys: [],
+                operations: [{ kind: 'data_replace', reason: 'import', data: { sheet_0: { content: [['row_id'], ['1']] } } }],
+              }],
+            },
+          },
+        },
+      }]);
+
+      const result = await buildBatchMergeBase_ACU(1, { maxMessageIndex: 0 });
+
+      expect(result.data).toBeNull();
+      expect(result.error).toContain('请先在数据管理中执行 V2 恢复诊断并确认恢复');
+    } finally {
+      vi.mocked(isSqliteMode).mockReturnValue(false);
+    }
+  });
+
   it('非 SQLite 有界基底且未进入 V2 replay 时保留 runtime snapshot fallback', async () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
     const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
@@ -662,6 +745,17 @@ describe('processUpdatesBatch_ACU', () => {
   it('空索引列表返回 success: true', async () => {
     const result = await processUpdatesBatch_ACU([], 'auto_standard', {}, vi.fn());
     expect(result.success).toBe(true);
+  });
+
+  it('迁移失败时不执行任何批次更新', async () => {
+    mockEnsureLegacyStorageMigratedBeforeWrite.mockResolvedValueOnce({ success: false, error: 'mixed storage evidence insufficient' });
+    const mockExecute = vi.fn();
+
+    const result = await processUpdatesBatch_ACU([1], 'auto_standard', {}, mockExecute);
+
+    expect(result).toEqual({ success: false, error: 'mixed storage evidence insufficient' });
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(mockReloadStorageProvider).not.toHaveBeenCalled();
   });
 
   it('执行更新回调成功时返回 success: true', async () => {
@@ -1308,7 +1402,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('可回放手动重填启动前不预清理重填范围内选中表历史数据', async () => {
+  it('手动重填启动前无条件清理重填范围内选中表历史数据', async () => {
     const { getChatArray_ACU, clearManualRefillIncrementalDataInRange_ACU, clearManualRefillSheetDataInRange_ACU, clearTableDataAtFloors_ACU } = await import('../../../src/service/chat/chat-service');
     vi.mocked(getChatArray_ACU).mockReturnValue([
       { is_user: true },
@@ -1324,13 +1418,15 @@ describe('orchestrateManualUpdate_ACU', () => {
 
     const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
     expect(result.success).toBe(true);
+    // 只清理本次范围内的选中表，不触碰范围外数据与未选中的表。
+    expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
+    expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledWith(expect.any(Array), ['sheet_0']);
     expect(clearManualRefillIncrementalDataInRange_ACU).not.toHaveBeenCalled();
-    expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
     expect(clearTableDataAtFloors_ACU).not.toHaveBeenCalled();
     expect(mockPurgeSheetKeysFromChatHistoryHard).not.toHaveBeenCalled();
   });
 
-  it('可回放手动重填不在启动期刷新 SQLite 运行时快照', async () => {
+  it('手动重填清理后刷新运行时快照，使基底反映清理结果', async () => {
     const { getChatArray_ACU, clearManualRefillIncrementalDataInRange_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
     const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
     vi.mocked(isSqliteMode).mockReturnValue(true);
@@ -1343,79 +1439,18 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockCurrentJsonTableData = {
       sheet_0: { name: '纪要表', updateConfig: {}, content: [['row_id', '事件'], ['old', '清理前旧 chronicle']] },
     };
+    // 本例验证清理后的 reload 编排，不会进入 SQL 提交；数据夹具也没有可 hydrate 的 DDL。
+    // 因此只提供 readiness 通过的 provider stub，避免把无关的 schema 校验混入该行为测试。
+    mockEnsureStorageProviderReady.mockResolvedValue({ mode: 'sqlite', isReady: () => true });
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
 
     const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
 
-    expect(result.success).toBe(true);
+    expect(result.success, result.error).toBe(true);
+    expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
+    expect(mockReloadStorageProvider).toHaveBeenCalled();
     expect(clearManualRefillIncrementalDataInRange_ACU).not.toHaveBeenCalled();
-    expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
-    expect(mockReloadStorageProvider).not.toHaveBeenCalled();
     expect(mockPrepareAIInput).toHaveBeenCalled();
-  });
-
-  it('重填起点早于最早 init checkpoint 时先用模板建立临时基底但不预清理或刷新', async () => {
-    const { getChatArray_ACU, clearManualRefillIncrementalDataInRange_ACU, ensureManualRefillInitialBaseline_ACU } = await import('../../../src/service/chat/chat-service');
-    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
-    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
-      mate: { type: 'acu' },
-      sheet_0: { uid: 'sheet_0', name: 'chronicle', updateConfig: {}, content: [['row_id', 'code_index']] },
-      sheet_1: { uid: 'sheet_1', name: 'quest_log', updateConfig: {}, content: [['row_id', 'status']] },
-    });
-    vi.mocked(getChatArray_ACU).mockReturnValue([
-      { is_user: true },
-      { is_user: false, mes: 'AI回复1' },
-      { is_user: true },
-      { is_user: false, mes: 'AI回复3' },
-      { is_user: true },
-      {
-        is_user: false,
-        mes: 'AI回复5',
-        TavernDB_ACU_IsolatedData: {
-          '': {
-            _acu_storage_version: 2,
-            storageFrame: {
-              version: 2,
-              checkpoint: { kind: 'full', reason: 'init', createdAt: 1, data: { mate: { type: 'acu' }, sheet_0: { name: 'chronicle', content: [['row_id', 'code_index']] } } },
-              logEntries: [],
-            },
-          },
-        },
-      },
-    ]);
-    mockSettings.autoUpdateThreshold = 2;
-    mockCurrentJsonTableData = { sheet_0: { name: 'chronicle', updateConfig: {}, content: [['row_id', 'code_index'], ['old', '1']] } };
-    mockEnsureManualRefillInitialBaseline.mockResolvedValueOnce({ success: true, changed: true, targetMessageIndex: 3, movedFromMessageIndex: 5, downgradedCount: 1 });
-    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
-
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
-
-    expect(result.success).toBe(true);
-    expect(ensureManualRefillInitialBaseline_ACU).toHaveBeenCalledWith(expect.objectContaining({
-      isolationKey: '',
-      targetMessageIndex: 3,
-      data: expect.objectContaining({ sheet_0: expect.objectContaining({ name: 'chronicle' }), sheet_1: expect.objectContaining({ name: 'quest_log' }) }),
-      save: true,
-    }));
-    expect(mockCaptureManualRefillSessionSnapshot).toHaveBeenCalledWith([3, 5]);
-    expect(mockClearManualRefillIncrementalDataInRange).not.toHaveBeenCalled();
-    expect(mockReloadStorageProvider).not.toHaveBeenCalled();
-  });
-
-  it('临时 initial baseline 建立失败时回滚并拒绝清理或刷新', async () => {
-    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
-    vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: false, mes: 'AI回复1' }]);
-    mockCurrentJsonTableData = { sheet_0: { name: 'chronicle', updateConfig: {}, content: [['row_id', 'code_index']] } };
-    mockEnsureManualRefillInitialBaseline.mockResolvedValueOnce({ success: false, changed: false, error: '目标楼层已有 V2 logEntries' });
-
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('目标楼层已有 V2 logEntries');
-    expect(mockRestoreManualRefillSessionSnapshot).toHaveBeenCalledTimes(1);
-    expect(mockClearManualRefillIncrementalDataInRange).not.toHaveBeenCalled();
-    expect(mockClearManualRefillSheetDataInRange).not.toHaveBeenCalled();
-    expect(mockReloadStorageProvider).not.toHaveBeenCalled();
   });
 
   it('普通手动更新的进度回调异常保持 rejection 契约且不触发 refill 回滚', async () => {
@@ -1441,22 +1476,22 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(processBatch).not.toHaveBeenCalled();
   });
 
-  it('临时 initial baseline 建立直接 reject 时统一回滚且返回硬失败', async () => {
+  it('范围内清理直接 reject 时统一回滚且返回硬失败', async () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
     vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: false, mes: 'AI回复1' }]);
     mockCurrentJsonTableData = { sheet_0: { name: 'chronicle', updateConfig: {}, content: [['row_id', 'code_index']] } };
-    mockEnsureManualRefillInitialBaseline.mockRejectedValueOnce(new Error('baseline transaction rejected'));
+    mockClearManualRefillSheetDataInRange.mockRejectedValueOnce(new Error('purge transaction rejected'));
 
     const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('baseline transaction rejected');
+    expect(result.error).toContain('purge transaction rejected');
     expect(mockRestoreManualRefillSessionSnapshot).toHaveBeenCalledTimes(1);
     expect(mockClearManualRefillIncrementalDataInRange).not.toHaveBeenCalled();
     expect(mockReloadStorageProvider).not.toHaveBeenCalled();
   });
 
-  it('临时 baseline 落盘后 preparing 进度回调抛错时统一回滚', async () => {
+  it('范围内清理完成后 preparing 进度回调抛错时统一回滚', async () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
     vi.mocked(getChatArray_ACU).mockReturnValue([
       { is_user: true },
@@ -1480,60 +1515,12 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('progress observer failed');
     expect(mockRestoreManualRefillSessionSnapshot).toHaveBeenCalledTimes(1);
-    expect(mockReloadStorageProvider).not.toHaveBeenCalled();
+    expect(mockReloadStorageProvider).toHaveBeenCalled();
     expect(processBatch).not.toHaveBeenCalled();
     expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
   });
 
-  it('可回放手动重填忽略旧的整段增量清理 mock，直接按 bucket 执行', async () => {
-    const { getChatArray_ACU, clearManualRefillIncrementalDataInRange_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
-    vi.mocked(getChatArray_ACU).mockReturnValue([
-      { is_user: true },
-      { is_user: false, mes: 'AI回复1' },
-      { is_user: true },
-      { is_user: false, mes: 'AI回复2' },
-    ]);
-    mockCurrentJsonTableData = {
-      sheet_0: { name: '测试表A', updateConfig: {}, content: [['row_id', '值A'], ['1', '旧A']] },
-      sheet_1: { name: '测试表B', updateConfig: {}, content: [['row_id', '值B'], ['1', '旧B']] },
-    };
-    vi.mocked(clearManualRefillIncrementalDataInRange_ACU).mockRejectedValueOnce(new Error('purge failed'));
-
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
-
-    expect(result.success).toBe(true);
-    expect(clearManualRefillIncrementalDataInRange_ACU).not.toHaveBeenCalled();
-    expect(mockRestoreManualRefillSessionSnapshot).not.toHaveBeenCalled();
-    expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
-    expect(mockPurgeSheetKeysFromChatHistoryHard).not.toHaveBeenCalled();
-    expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(1);
-    expect(mockReloadStorageProvider).not.toHaveBeenCalled();
-  });
-
-  it('可回放手动重填不触发启动期运行时快照刷新', async () => {
-    const { getChatArray_ACU, clearManualRefillIncrementalDataInRange_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
-    vi.mocked(getChatArray_ACU).mockReturnValue([
-      { is_user: true },
-      { is_user: false, mes: 'AI回复1' },
-      { is_user: true },
-      { is_user: false, mes: 'AI回复2' },
-    ]);
-    mockCurrentJsonTableData = {
-      sheet_0: { name: '测试表A', updateConfig: {}, content: [['row_id', '值A'], ['1', '旧A']] },
-    };
-
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
-
-    expect(result.success).toBe(true);
-    expect(mockRestoreManualRefillSessionSnapshot).not.toHaveBeenCalled();
-    expect(clearManualRefillIncrementalDataInRange_ACU).not.toHaveBeenCalled();
-    expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
-    expect(mockReloadStorageProvider).not.toHaveBeenCalled();
-    expect(mockPrepareAIInput).toHaveBeenCalled();
-    expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(1);
-  });
-
-  it('可回放手动重填不预清理范围内或范围外历史基底，保护 V2 replay 初始数据', async () => {
+  it('手动重填只清理范围内选中表，不触碰范围外历史基底', async () => {
     const { getChatArray_ACU, clearManualRefillIncrementalDataInRange_ACU, clearManualRefillSheetDataInRange_ACU, clearTableDataAtFloors_ACU } = await import('../../../src/service/chat/chat-service');
     const chat = [
       { is_user: true, mes: '用户0' },
@@ -1574,14 +1561,14 @@ describe('orchestrateManualUpdate_ACU', () => {
     const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(true);
+    expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
     expect(clearManualRefillIncrementalDataInRange_ACU).not.toHaveBeenCalled();
-    expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
     expect(clearTableDataAtFloors_ACU).not.toHaveBeenCalled();
     expect(mockPurgeSheetKeysFromChatHistoryHard).not.toHaveBeenCalled();
     expect((chat[1] as any).TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data.sheet_0.content).toEqual([['row_id', '值A'], ['base', '范围外基底']]);
   });
 
-  it('可回放手动重填不预清理 chat[0] sheet guide，避免 V2 replay 回退链路断裂', async () => {
+  it('手动重填不清理 chat[0] sheet guide，避免 V2 replay 回退链路断裂', async () => {
     const { getChatArray_ACU, clearManualRefillIncrementalDataInRange_ACU, clearManualRefillSheetDataInRange_ACU, clearTableDataAtFloors_ACU } = await import('../../../src/service/chat/chat-service');
     const chat = [
       { is_user: true, mes: '用户0', TavernDB_ACU_SheetGuide: { '': { sheet_0: { latestMessageIndex: 1 } } } },
@@ -1598,15 +1585,15 @@ describe('orchestrateManualUpdate_ACU', () => {
     const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(true);
+    expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
     expect(clearManualRefillIncrementalDataInRange_ACU).not.toHaveBeenCalled();
-    expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
     expect(clearTableDataAtFloors_ACU).not.toHaveBeenCalled();
     expect(mockPurgeSheetKeysFromChatHistoryHard).not.toHaveBeenCalled();
     expect((chat[0] as any).TavernDB_ACU_SheetGuide).toEqual({ '': { sheet_0: { latestMessageIndex: 1 } } });
   });
 
 
-  it('已有 V2 增量但无 full checkpoint 时首次返回确认信号且不写入', async () => {
+  it('已有 V2 增量但无 full checkpoint 时直接清理并重填，不再要求二次确认', async () => {
     const { getChatArray_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU } = await import('../../../src/service/chat/chat-service');
     const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
     vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
@@ -1654,85 +1641,25 @@ describe('orchestrateManualUpdate_ACU', () => {
     const processBatch = vi.fn().mockResolvedValue({ success: true });
     const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData, { clearBeforeUpdate: true });
 
-    expect(result.success).toBe(false);
-    expect(result.requiresUserConfirmation).toEqual(expect.objectContaining({
-      reason: 'manual_refill_replace_sheet_baseline',
-      replayErrorCode: 'no_full_checkpoint_replayable',
-      contextScopeIndices: [0, 2],
-      targetSheetKeys: ['sheet_0'],
-    }));
-    expect(mockRestoreManualRefillSessionSnapshot).toHaveBeenCalledTimes(1);
-    expect(commitManualRefillSheetSnapshotInRangeAtomic_ACU).not.toHaveBeenCalled();
+    expect(result.success).toBe(true);
+    // 无 full checkpoint 也直接清理范围内选中表，让用户可以从头开始填表。
+    expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledTimes(1);
+    expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledWith([0, 2], ['sheet_0']);
+    expect(mockReloadStorageProvider).toHaveBeenCalled();
+    expect(mockRestoreManualRefillSessionSnapshot).not.toHaveBeenCalled();
+    // 清理后必须补写完整单表 checkpoint，否则新增量将没有回放锚点。
+    expect(commitManualRefillSheetSnapshotInRangeAtomic_ACU).toHaveBeenCalledTimes(1);
     expect(mockClearManualRefillIncrementalDataInRange).not.toHaveBeenCalled();
-    expect(mockReloadStorageProvider).not.toHaveBeenCalled();
-    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
-    expect(processBatch).not.toHaveBeenCalled();
   });
 
-  it('无 full checkpoint 且确认前回滚失败时返回硬错误而不是确认对象', async () => {
-    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
-    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
-    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
-      mate: { type: 'acu' },
-      sheet_0: { name: '测试表A', updateConfig: { groupId: 0 }, content: [['row_id', '值A']] },
-    });
-    vi.mocked(getChatArray_ACU).mockReturnValue([
-      {
-        is_user: false,
-        mes: 'AI回复1',
-        TavernDB_ACU_IsolatedData: {
-          '': {
-            _acu_storage_version: 2,
-            storageFrame: {
-              version: 2,
-              checkpoint: undefined,
-              logEntries: [{
-                seq: 1,
-                entryId: 'log-only-rollback-failure',
-                createdAt: 1,
-                source: 'auto_fill',
-                targetMessageIndex: 0,
-                aiFloor: 1,
-                filledSheetKeys: ['sheet_0'],
-                changedSheetKeys: ['sheet_0'],
-                groupKeys: [],
-                operations: [{ kind: 'row_upsert', sheetKey: 'sheet_0', rowId: '1', cells: ['1', '孤立增量'] }],
-              }],
-            },
-          },
-        },
-      },
-      { is_user: true, mes: '用户2' },
-      { is_user: false, mes: 'AI回复3' },
-    ]);
-    mockSettings.maxConcurrentGroups = 1;
-    mockSettings.autoUpdateThreshold = 0;
-    mockSettings.updateBatchSize = 1;
-    mockCurrentJsonTableData = {
-      sheet_0: { name: '测试表A', updateConfig: {}, content: [['row_id', '值A'], ['1', '旧A']] },
-    };
-    mockRestoreManualRefillSessionSnapshot.mockRejectedValueOnce(new Error('restore transaction failed'));
-    const processBatch = vi.fn().mockResolvedValue({ success: true });
-
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData, { clearBeforeUpdate: true });
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('临时基底回滚失败：restore transaction failed');
-    expect(result.requiresUserConfirmation).toBeUndefined();
-    expect(mockRestoreManualRefillSessionSnapshot).toHaveBeenCalledTimes(1);
-    expect(mockClearManualRefillIncrementalDataInRange).not.toHaveBeenCalled();
-    expect(mockReloadStorageProvider).not.toHaveBeenCalled();
-    expect(processBatch).not.toHaveBeenCalled();
-  });
-
-  it('无可回放 full checkpoint 且 confirmBoundaryReset=true 时仅预清理，并在成功后提交完整快照', async () => {
+  it('无可回放 full checkpoint 时预清理范围内数据，并在成功后提交完整快照', async () => {
     const { getChatArray_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU } = await import('../../../src/service/chat/chat-service');
     const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
     vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
       mate: { type: 'acu' },
       sheet_0: { name: '测试表A', updateConfig: { groupId: 0 }, content: [['row_id', '值A']] },
     });
-    vi.mocked(getChatArray_ACU).mockReturnValue([
+    const chat = [
       {
         is_user: false,
         mes: 'AI回复1',
@@ -1775,7 +1702,12 @@ describe('orchestrateManualUpdate_ACU', () => {
           },
         },
       },
-    ]);
+    ];
+    vi.mocked(getChatArray_ACU).mockReturnValue(chat);
+    mockClearManualRefillSheetDataInRange.mockImplementationOnce(async () => {
+      chat[0].TavernDB_ACU_IsolatedData[''].storageFrame.logEntries = [];
+      return 1;
+    });
     mockSettings.maxConcurrentGroups = 1;
     mockSettings.autoUpdateThreshold = 0;
     mockSettings.updateBatchSize = 1;
@@ -1784,7 +1716,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
 
     const processBatch = vi.fn().mockResolvedValue({ success: true });
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData, { clearBeforeUpdate: true, confirmBoundaryReset: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(true);
     expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledWith([0, 2, 4], ['sheet_0']);
@@ -1799,7 +1731,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(3);
   });
 
-  it('跨 checkpoint 重填的最终快照提交失败时恢复整个重填会话快照', async () => {
+  it('跨 checkpoint 重填的最终快照提交失败时保留已提交 bucket，不回滚会话快照', async () => {
     const { getChatArray_ACU, captureManualRefillSessionSnapshot_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU, restoreManualRefillSessionSnapshotAtomic_ACU } = await import('../../../src/service/chat/chat-service');
     vi.mocked(getChatArray_ACU).mockReturnValue([
       {
@@ -1824,16 +1756,23 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockSettings.updateBatchSize = 1;
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
     mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
+    mockParseAndApplyTableEditsToData.mockImplementation(() => ({
+      success: true,
+      modifiedKeys: ['sheet_0'],
+      appliedEdits: 0,
+    }));
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true, confirmBoundaryReset: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result).toEqual(expect.objectContaining({ success: false, error: expect.stringContaining('strict save failed') }));
     expect(captureManualRefillSessionSnapshot_ACU).toHaveBeenCalledWith([0, 2]);
-    expect(restoreManualRefillSessionSnapshotAtomic_ACU).toHaveBeenCalledWith(sessionSnapshot, '', ['sheet_0']);
+    // 已有 bucket 成功提交，回滚会连带丢掉用户已填好的楼层，因此必须保留。
+    expect(restoreManualRefillSessionSnapshotAtomic_ACU).not.toHaveBeenCalled();
+    expect(mockRefreshData).toHaveBeenCalled();
     expect(mockEnsureBoundaryCheckpoint).not.toHaveBeenCalled();
   });
 
-  it('跨 checkpoint 重填在用户停止后恢复整个重填会话快照', async () => {
+  it('跨 checkpoint 重填在用户停止后保留已提交 bucket，不回滚会话快照', async () => {
     const { getChatArray_ACU, captureManualRefillSessionSnapshot_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU, restoreManualRefillSessionSnapshotAtomic_ACU } = await import('../../../src/service/chat/chat-service');
     vi.mocked(getChatArray_ACU).mockReturnValue([
       {
@@ -1862,15 +1801,16 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
     mockParseAndApplyTableEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true, confirmBoundaryReset: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(false);
-    expect(restoreManualRefillSessionSnapshotAtomic_ACU).toHaveBeenCalledWith(sessionSnapshot, '', ['sheet_0']);
+    expect(restoreManualRefillSessionSnapshotAtomic_ACU).not.toHaveBeenCalled();
+    expect(mockRefreshData).toHaveBeenCalled();
     expect(commitManualRefillSheetSnapshotInRangeAtomic_ACU).not.toHaveBeenCalled();
     expect(mockEnsureBoundaryCheckpoint).not.toHaveBeenCalled();
   });
 
-  it('跨 checkpoint 重填在分组后同步聊天失败时恢复整个重填会话快照', async () => {
+  it('跨 checkpoint 重填在分组后同步聊天失败时保留已提交 bucket，不回滚会话快照', async () => {
     const { getChatArray_ACU, captureManualRefillSessionSnapshot_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU, restoreManualRefillSessionSnapshotAtomic_ACU } = await import('../../../src/service/chat/chat-service');
     const { loadAllChatMessages_ACU } = await import('../../../src/service/worldbook/pipeline');
     vi.mocked(getChatArray_ACU).mockReturnValue([
@@ -1904,62 +1844,16 @@ describe('orchestrateManualUpdate_ACU', () => {
       }
     });
 
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true, confirmBoundaryReset: true });
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result).toEqual(expect.objectContaining({ success: false, error: expect.stringContaining('分组后聊天同步失败') }));
     expect(loadAllChatMessages_ACU).toHaveBeenCalledTimes(4);
     expect(loadCallCount).toBe(4);
-    expect(restoreManualRefillSessionSnapshotAtomic_ACU).toHaveBeenCalledWith(sessionSnapshot, '', ['sheet_0']);
-    expect(mockRefreshData).toHaveBeenCalledTimes(2);
-    expect(mockRefreshData.mock.invocationCallOrder[0]).toBeLessThan(
-      restoreManualRefillSessionSnapshotAtomic_ACU.mock.invocationCallOrder[0],
-    );
-    expect(restoreManualRefillSessionSnapshotAtomic_ACU.mock.invocationCallOrder[0]).toBeLessThan(
-      mockRefreshData.mock.invocationCallOrder[1],
-    );
+    // 同步失败发生在已有 bucket 提交之后，保留已填数据并按聊天记录重新同步。
+    expect(restoreManualRefillSessionSnapshotAtomic_ACU).not.toHaveBeenCalled();
+    expect(mockRefreshData).toHaveBeenCalled();
     expect(commitManualRefillSheetSnapshotInRangeAtomic_ACU).not.toHaveBeenCalled();
     expect(mockEnsureBoundaryCheckpoint).not.toHaveBeenCalled();
-  });
-
-  it('存在其他 isolationKey 的 V2 checkpoint 时手动重填中止，避免把隔离键不匹配误判为空表', async () => {
-    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
-    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
-    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
-      mate: { type: 'acu' },
-      sheet_0: { name: '测试表A', updateConfig: { groupId: 0 }, content: [['row_id', '值A']] },
-    });
-    vi.mocked(getChatArray_ACU).mockReturnValue([
-      {
-        is_user: false,
-        mes: 'AI回复1',
-        TavernDB_ACU_IsolatedData: {
-          other: {
-            _acu_storage_version: 2,
-            storageFrame: {
-              version: 2,
-              logEntries: [],
-              checkpoint: { kind: 'full', reason: 'init', createdAt: 1, data: { sheet_0: { name: '测试表A', content: [['row_id', '值A'], ['1', '其他隔离数据']] } } },
-            },
-          },
-        },
-      },
-      { is_user: true, mes: '用户2' },
-      { is_user: false, mes: 'AI回复3' },
-    ]);
-    mockSettings.maxConcurrentGroups = 1;
-    mockSettings.autoUpdateThreshold = 0;
-    mockSettings.updateBatchSize = 1;
-    mockCurrentJsonTableData = {
-      sheet_0: { name: '测试表A', updateConfig: {}, content: [['row_id', '值A'], ['1', '旧A']] },
-    };
-
-    const processBatch = vi.fn().mockResolvedValue({ success: true });
-    const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData, { clearBeforeUpdate: true });
-
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('isolationKey 不匹配');
-    expect(processBatch).not.toHaveBeenCalled();
-    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
   });
 
 
@@ -2016,7 +1910,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(_set_isAutoUpdatingCard_ACU).toHaveBeenCalledWith(false);
   });
 
-  it('可回放手动重填跳过写入前 retained buffer boundary checkpoint，避免 bucket 提交前被维护性 checkpoint 中断', async () => {
+  it('手动重填跳过写入前 retained buffer boundary checkpoint，避免 bucket 提交前被维护性 checkpoint 中断', async () => {
     const { getChatArray_ACU, clearManualRefillIncrementalDataInRange_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
     vi.mocked(getChatArray_ACU).mockReturnValue([
       { is_user: true },
@@ -2033,8 +1927,8 @@ describe('orchestrateManualUpdate_ACU', () => {
 
     expect(result.success).toBe(true);
     expect(result.checkpointWarning).toContain('boundary checkpoint failed');
+    expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
     expect(clearManualRefillIncrementalDataInRange_ACU).not.toHaveBeenCalled();
-    expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
     expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(1);
     expect(mockEnsureBoundaryCheckpoint).toHaveBeenCalledTimes(1);
     expect(mockEnsureBoundaryCheckpoint).toHaveBeenCalledWith({ reason: 'manual_refill', save: true });
@@ -2074,6 +1968,51 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(result.error).toContain('终止');
     expect(mockEnsureBoundaryCheckpoint).not.toHaveBeenCalled();
   });
+
+  it('手动重填已提交 bucket 后用户终止时不回滚，保留已填数据并重新同步', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true },
+      { is_user: false, mes: 'AI回复' },
+    ]);
+    mockCurrentJsonTableData = {
+      sheet_0: { name: '纪要表', updateConfig: {}, content: [['row_id', '事件'], ['1', '旧值']] },
+    };
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+    // 首个 bucket 成功落盘后用户点终止。
+    mockPersistTablesToChatMessage.mockImplementationOnce(async () => {
+      mockWasStopped = true;
+      return { saved: true, messageIndex: 1 };
+    });
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('终止');
+    // 已有成功提交的 bucket，绝不能把数据回滚到填表前。
+    expect(mockRestoreManualRefillSessionSnapshot).not.toHaveBeenCalled();
+    // 但必须按聊天记录重新同步运行时数据。
+    expect(mockRefreshData).toHaveBeenCalled();
+  });
+
+  it('手动重填一个 bucket 都未成功就失败时回滚，避免旧数据净损失', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true },
+      { is_user: false, mes: 'AI回复' },
+    ]);
+    mockCurrentJsonTableData = {
+      sheet_0: { name: '纪要表', updateConfig: {}, content: [['row_id', '事件'], ['1', '旧值']] },
+    };
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+    mockPersistTablesToChatMessage.mockResolvedValue({ saved: false, error: '保存失败' });
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+
+    expect(result.success).toBe(false);
+    expect(mockRestoreManualRefillSessionSnapshot).toHaveBeenCalledTimes(1);
+  });
+
 
   it('boundary checkpoint 建立失败时保留成功结果并返回 checkpointWarning', async () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
@@ -2354,13 +2293,13 @@ describe('executeCardUpdateCore_ACU — SQL 错误反馈重试', () => {
     mockCallCustomOpenAI.mockImplementation(async (dynamicContent: any) => {
       callCount++;
       if (callCount === 1) {
-        return '<tableEdit>INSERT INTO invalid_table VALUES (1);</tableEdit>';
+        return '<tableEdit>UPDATE invalid_table SET value = 1 WHERE row_id = 1;</tableEdit>';
       }
       if (callCount === 2) {
         expect(dynamicContent.tableDataText).toContain('SQL_ERROR_FEEDBACK');
         expect(dynamicContent.tableDataText).toContain('no such table');
         expect(dynamicContent.tableDataText).toContain('SQL执行错误，请修正后重新输出');
-        return '<tableEdit>INSERT INTO test VALUES (1);</tableEdit>';
+        return '<tableEdit>DELETE FROM test WHERE row_id = 1;</tableEdit>';
       }
       return '<tableEdit>ok</tableEdit>';
     });
@@ -2435,9 +2374,9 @@ describe('executeCardUpdateCore_ACU — SQL 错误反馈重试', () => {
     mockCallCustomOpenAI.mockImplementation(async (dynamicContent: any) => {
       callCount++;
       capturedTableDataTexts.push(dynamicContent.tableDataText);
-      if (callCount === 1) return '<tableEdit>INSERT INTO missing VALUES (1);</tableEdit>';
+      if (callCount === 1) return '<tableEdit>INSERT INTO missing (value) VALUES (1);</tableEdit>';
       if (callCount === 2) return '<tableEdit>INSERT INTO t (missing_col) VALUES (1);</tableEdit>';
-      return '<tableEdit>INSERT INTO t VALUES (1);</tableEdit>';
+      return '<tableEdit>DELETE FROM t WHERE row_id = 1;</tableEdit>';
     });
 
     mockCheckIfFirstTimeInit.mockResolvedValue(false);
@@ -2455,13 +2394,96 @@ describe('executeCardUpdateCore_ACU — SQL 错误反馈重试', () => {
     expect(callCount).toBe(3);
 
     // 第二次调用时应包含第一次的错误信息
-    expect(capturedTableDataTexts[1]).toContain('no such table');
+    expect(capturedTableDataTexts[1]).toContain('无法识别目标表');
     // 第三次调用时应包含第二次的错误信息（替换了第一次的）
     expect(capturedTableDataTexts[2]).toContain('missing_col');
     // 第三次不应包含第一次的错误信息（被替换了）
     expect(capturedTableDataTexts[2]).not.toContain('no such table');
 
     vi.mocked(isSqliteMode).mockReturnValue(false);
+  });
+
+  it('SQL 直接 provider 路径在执行与 V2 operation 中使用系统物化的 row_id', async () => {
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    vi.mocked(isSqliteMode).mockReturnValue(true);
+
+    const snapshot = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: {
+        uid: 'test',
+        name: '测试表',
+        sourceData: { ddl: 'CREATE TABLE test (row_id INTEGER PRIMARY KEY, col1 TEXT NOT NULL);' },
+        content: [['row_id', 'col1'], ['1', '旧值']],
+        updateConfig: {}, exportConfig: {}, orderNo: 0,
+      },
+    } as any;
+    mockCurrentJsonTableData = structuredClone(snapshot);
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue(structuredClone(snapshot));
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '原始数据' });
+    mockCallCustomOpenAI.mockResolvedValue("<tableEdit>INSERT INTO test (col1) VALUES ('新值');</tableEdit>");
+    mockCheckIfFirstTimeInit.mockResolvedValue(false);
+    mockSaveIndependentTable.mockResolvedValue({ saved: true });
+
+    try {
+      const result = await executeCardUpdateCore_ACU(
+        [{ is_user: false, mes: 'AI回复' }],
+        0, false, 'auto_standard', false,
+        ['sheet_0'], null, new AbortController(),
+      );
+
+      expect(result.success, result.error).toBe(true);
+      const persistPayload = mockPersistTablesToChatMessage.mock.calls[0][0];
+      expect(persistPayload.tableData.sheet_0.content).toEqual([
+        ['row_id', 'col1'], ['1', '旧值'], ['2', '新值'],
+      ]);
+      expect(persistPayload.operations).toEqual([{
+        kind: 'sql_sheet_batch',
+        sheetKey: 'sheet_0',
+        statements: ["INSERT INTO ceshibiao (row_id, col1) VALUES (2, '新值')"],
+        tableName: 'ceshibiao',
+        reason: 'system',
+      }]);
+    } finally {
+      vi.mocked(isSqliteMode).mockReturnValue(false);
+    }
+  });
+
+  it('SQL 模式下 AI 产出无可执行 SQL（split 为 0）时静默跳过，不写入、不推进门禁、不报成功', async () => {
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    vi.mocked(isSqliteMode).mockReturnValue(true);
+
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '原始数据' });
+    mockCurrentJsonTableData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { uid: 'test', name: '测试表', sourceData: { ddl: 'CREATE TABLE test (row_id INTEGER PRIMARY KEY);' }, content: [['row_id']], updateConfig: {}, exportConfig: {}, orderNo: 0 },
+    };
+
+    // AI 返回了 SQL 文本（isSqlContent 判定为 SQL），但 splitter 拆分为 0 条语句
+    // —— 复现"成功横幅 + 未记录归零 + 表格无数据"的 SQL 假保存签名：
+    // applyEdits 会返回 {success:true, modifiedKeys:[], appliedEdits:0}（不执行任何 runBatch），
+    // 但旧逻辑仍把 targetSheetKeys 当作已填推进门禁 → persist 写入 operations=0 的 metadata-only fill event。
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>INSERT INTO test VALUES (1);</tableEdit>');
+    mockNormalizeSqlStatements.mockReturnValue([]);
+
+    mockCheckIfFirstTimeInit.mockResolvedValue(false);
+    mockSaveIndependentTable.mockResolvedValue({ saved: true });
+
+    const result = await executeCardUpdateCore_ACU(
+      [{ is_user: false, mes: 'AI回复' }],
+      0, false, 'auto_standard', false,
+      ['sheet_0'], null, new AbortController()
+    );
+
+    // 静默跳过：不报成功、不报失败，标记 skippedNoSql 由展示层显示"未写入(AI未产出SQL)"
+    expect(result.success).toBe(false);
+    expect(result.skippedNoSql).toBe(true);
+    expect(result.error).toBeUndefined();
+    // 不推进门禁 / 不写 mutation entry：persist 不应被调用
+    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+
+    vi.mocked(isSqliteMode).mockReturnValue(false);
+    mockNormalizeSqlStatements.mockReset();
   });
 });
 
@@ -2686,6 +2708,27 @@ describe('collectGroupFillResponse_ACU', () => {
     expect(mockEnqueueSummaryVectorIndexFlush).not.toHaveBeenCalled();
   });
 
+  it('AI 输入准备返回 SQLite failure code 时不调用 AI 且保留可操作原因', async () => {
+    const job = createJob();
+    mockPrepareAIInput.mockResolvedValue({
+      ok: false,
+      failureCode: 'provider_fallback',
+      message: 'SQLite 运行时加载失败，当前未使用 SQLite 数据库。',
+      retryable: false,
+    });
+
+    const result = await collectGroupFillResponse_ACU(job);
+
+    expect(result).toMatchObject({
+      success: false,
+      attempt: 0,
+      errorCategory: 'infrastructure',
+    });
+    expect(result.error).toContain('provider_fallback');
+    expect(result.error).toContain('SQLite 运行时加载失败');
+    expect(mockCallCustomOpenAI).not.toHaveBeenCalled();
+  });
+
   it('AI 响应缺少完整 tableEdit 标签时按重试次数失败', async () => {
     const job = createJob();
     mockSettings.tableMaxRetries = 1;
@@ -2715,6 +2758,166 @@ describe('collectGroupFillResponse_ACU', () => {
     const result = await collectGroupFillResponse_ACU(job, { lastSqlError: 'no such table' });
 
     expect(result.success).toBe(true);
+    vi.mocked(isSqliteMode).mockReturnValue(false);
+  });
+
+  it('模型 SQL 输出错误会脱敏注入下一次重试 prompt', async () => {
+    vi.useFakeTimers();
+    try {
+      const job: any = createJob();
+      job.baseSnapshot = {
+        sheet_0: {
+          uid: 'inventory',
+          name: '背包表',
+          sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT);' },
+          content: [['row_id', 'item_name'], ['1', '铁剑']],
+        },
+      };
+      const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+      vi.mocked(isSqliteMode).mockReturnValue(true);
+      mockPrepareAIInput.mockResolvedValue({ tableDataText: '原始数据' });
+      mockCallCustomOpenAI
+        .mockResolvedValueOnce('<tableEdit>CREATE TABLE leaked (id INTEGER);</tableEdit>')
+        .mockImplementationOnce(async (dynamicContent: any) => {
+          expect(dynamicContent.tableDataText).toContain('SQL_ERROR_FEEDBACK');
+          expect(dynamicContent.tableDataText).toContain('SQLite 填表仅允许 INSERT、REPLACE、UPDATE、DELETE');
+          return "<tableEdit>UPDATE inventory SET item_name = '药水' WHERE row_id = 1;</tableEdit>";
+        });
+
+      const resultPromise = collectGroupFillResponse_ACU(job);
+      await vi.runAllTimersAsync();
+      const result = await resultPromise;
+
+      expect(result.success).toBe(true);
+      expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(2);
+      vi.mocked(isSqliteMode).mockReturnValue(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('基础设施错误立即失败，不进入模型 prompt，WARN 不暴露原始 groupKey 且限制错误长度', async () => {
+    vi.useFakeTimers();
+    try {
+      const { logWarn_ACU } = await import('../../../src/shared/utils');
+      const job: any = createJob();
+      job.groupKey = `sensitive-preset-${'x'.repeat(1200)}`;
+      const infrastructureError = `401 https://internal.example/token?secret=abc ${'y'.repeat(1200)}`;
+      const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+      vi.mocked(isSqliteMode).mockReturnValue(true);
+      mockPrepareAIInput.mockResolvedValue({ tableDataText: '原始数据' });
+      mockCallCustomOpenAI.mockRejectedValueOnce(new Error(infrastructureError));
+
+      const resultPromise = collectGroupFillResponse_ACU(job);
+      await vi.runAllTimersAsync();
+      const result = await resultPromise;
+
+      expect(result.success).toBe(false);
+      expect(result.errorCategory).toBe('infrastructure');
+      expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
+      const warning = String(vi.mocked(logWarn_ACU).mock.calls[0]?.[0] || '');
+      expect(warning).toContain('groupId=0,batch=1,targets=1');
+      expect(warning).not.toContain('sensitive-preset');
+      expect(warning).not.toContain('internal.example');
+      expect(warning).not.toContain('secret=abc');
+      expect(warning.length).toBeLessThan(900);
+      vi.mocked(isSqliteMode).mockReturnValue(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('SQLite AI 响应引用隐藏物理列时在 collect 阶段拒绝并进入重试错误', async () => {
+    const job: any = createJob();
+    job.baseSnapshot = {
+      sheet_0: {
+        uid: 'inventory',
+        name: '背包表',
+        sourceData: {
+          ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, legacy_note TEXT);',
+          hiddenPhysicalColumns: ['legacy_note'],
+        },
+        content: [
+          ['row_id', '名称', '旧备注'],
+          ['1', '铁剑', '历史秘密'],
+        ],
+      },
+    };
+    mockSettings.tableMaxRetries = 1;
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    vi.mocked(isSqliteMode).mockReturnValue(true);
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '投影后的数据' });
+    mockCallCustomOpenAI.mockResolvedValue("<tableEdit>UPDATE inventory SET legacy_note = '改写' WHERE row_id = 1;</tableEdit>");
+
+    const result = await collectGroupFillResponse_ACU(job);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('隐藏物理列');
+    expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
+    vi.mocked(isSqliteMode).mockReturnValue(false);
+  });
+
+  it.each([
+    'SELECT legacy_note FROM inventory',
+    'PRAGMA table_info(inventory)',
+    'COMMIT',
+    'ROLLBACK',
+    'VACUUM',
+    'ALTER TABLE inventory DROP COLUMN legacy_note',
+  ])('SQLite AI 响应的非 mutation SQL 在 collect 阶段 fail closed：%s', async statement => {
+    const job: any = createJob();
+    job.baseSnapshot = {
+      sheet_0: {
+        uid: 'inventory',
+        name: '背包表',
+        sourceData: {
+          ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, legacy_note TEXT);',
+          hiddenPhysicalColumns: ['legacy_note'],
+        },
+        content: [['row_id', '名称', '旧备注'], ['1', '铁剑', '历史秘密']],
+      },
+    };
+    mockSettings.tableMaxRetries = 1;
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    vi.mocked(isSqliteMode).mockReturnValue(true);
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '投影后的数据' });
+    mockCallCustomOpenAI.mockResolvedValue(`<tableEdit>${statement}</tableEdit>`);
+
+    const result = await collectGroupFillResponse_ACU(job);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('SQLite 填表仅允许 INSERT、REPLACE、UPDATE、DELETE 数据变更语句');
+    expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
+    vi.mocked(isSqliteMode).mockReturnValue(false);
+  });
+
+  it.each([
+    "REPLACE INTO inventory (item_name) VALUES ('药水')",
+    "INSERT OR REPLACE INTO inventory (row_id, item_name) VALUES (1, '药水')",
+    "WITH payload AS (SELECT 1) REPLACE INTO inventory (item_name) VALUES ('药水')",
+  ])('SQLite AI 响应在 collect 阶段允许 REPLACE：%s', async statement => {
+    const job: any = createJob();
+    job.baseSnapshot = {
+      sheet_0: {
+        uid: 'inventory',
+        name: '背包表',
+        sourceData: {
+          ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT);',
+        },
+        content: [['row_id', '名称'], ['1', '铁剑']],
+      },
+    };
+    mockSettings.tableMaxRetries = 1;
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    vi.mocked(isSqliteMode).mockReturnValue(true);
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '投影后的数据' });
+    mockCallCustomOpenAI.mockResolvedValue(`<tableEdit>${statement}</tableEdit>`);
+
+    const result = await collectGroupFillResponse_ACU(job);
+
+    expect(result.success).toBe(true);
+    expect(result.tableEditText).toBe(statement);
+    expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
     vi.mocked(isSqliteMode).mockReturnValue(false);
   });
 
@@ -2757,6 +2960,29 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
     mockUpdateReadableLorebookEntry.mockResolvedValue(undefined);
     mockPersistTablesToChatMessage.mockResolvedValue({ saved: true, messageIndex: 3 });
     mockGetChatArray_ACU.mockImplementation(() => mockChatArrayForSeedStage);
+    // 这些用例验证的是“已有锚点后的增量提交”，因此必须在目标楼层前放一个
+    // full checkpoint；否则本次写入会被判定为初始 checkpoint 而不带 operations。
+    mockChatArrayForSeedStage.length = 0;
+    mockChatArrayForSeedStage.push(
+      {
+        is_user: false,
+        mes: 'AI锚点',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { kind: 'full', reason: 'init', createdAt: 1, data: { mate: { type: 'acu' }, sheet_0: { name: '表A', content: [['row_id', '值']] }, sheet_1: { name: '表B', content: [['row_id', '值']] } } },
+              logEntries: [],
+            },
+          },
+        },
+      } as any,
+      { is_user: true, mes: '用户' } as any,
+      { is_user: false, mes: 'AI2' } as any,
+      { is_user: true, mes: '用户2' } as any,
+      { is_user: false, mes: 'AI3' } as any,
+    );
     mockParseAndApplyTableEditsToData.mockImplementation((aiResponse: string, tableData: any) => {
       if (aiResponse.includes('sheet_0')) {
         tableData.sheet_0.content.push(['2', '来自A']);
@@ -2815,6 +3041,221 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
     expect(baseSnapshot.sheet_0.content).toEqual([['row_id', '值'], ['1', 'base-a']]);
     expect(baseSnapshot.sheet_1.content).toEqual([['row_id', '值'], ['1', 'base-b']]);
   });
+  it('规范化后的空模板首次填表可通过 snapshot 提交', async () => {
+    const baseSnapshot = {
+      mate: { type: 'acu' },
+      sheet_0: { name: '表A', content: [['row_id', '值']] },
+    };
+    const responses = [{
+      success: true,
+      attempt: 1,
+      aiResponse: '<tableEdit>sheet_0</tableEdit>',
+      tableEditText: 'sheet_0',
+      job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false },
+    }];
+    mockParseAndApplyTableEditsToData.mockImplementationOnce((_aiResponse: string, tableData: any) => {
+      tableData.sheet_0.content.push(['1', '首次填充']);
+      return { success: true, modifiedKeys: ['sheet_0'], appliedEdits: 1 };
+    });
+
+    const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, {
+      saveTargetIndex: 3,
+      updateMode: 'auto_standard',
+      isImportMode: false,
+    });
+
+    expect(result).toMatchObject({ success: true, modifiedKeys: ['sheet_0'] });
+    expect(mockPersistTablesToChatMessage).toHaveBeenCalledWith(expect.objectContaining({
+      tableData: expect.objectContaining({
+        sheet_0: expect.objectContaining({ content: [['row_id', '值'], ['1', '首次填充']] }),
+      }),
+    }));
+  });
+  it('存在 full checkpoint 时新表不得清空 operations', async () => {
+    // 回归：锚点判定一旦按目标表内容反推（要求 checkpoint 承载全部/部分目标表），
+    // 只要本次涉及一张 checkpoint 里还没有的新表就会被误判为无锚点，
+    // operations 被清空，数据静默写不进去也不报错。判据只能是「有没有 full checkpoint」。
+    mockChatArrayForSeedStage.length = 0;
+    mockChatArrayForSeedStage.push(
+      {
+        is_user: false,
+        mes: 'AI锚点',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              // 锚点里只有 sheet_0，sheet_1 是本次新引入的表。
+              checkpoint: { kind: 'full', reason: 'init', createdAt: 1, data: { mate: { type: 'acu' }, sheet_0: { name: '表A', content: [['row_id', '值']] } } },
+              logEntries: [],
+            },
+          },
+        },
+      } as any,
+      { is_user: true, mes: '用户' } as any,
+      { is_user: false, mes: 'AI2' } as any,
+      { is_user: true, mes: '用户2' } as any,
+      { is_user: false, mes: 'AI3' } as any,
+    );
+    const baseSnapshot = {
+      sheet_0: { name: '表A', content: [['row_id', '值'], ['1', 'base-a']] },
+      sheet_1: { name: '表B', content: [['row_id', '值'], ['1', 'base-b']] },
+    };
+    const responses = [
+      { success: true, attempt: 1, aiResponse: '<tableEdit>sheet_0</tableEdit>', tableEditText: 'sheet_0', job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+      { success: true, attempt: 1, aiResponse: '<tableEdit>sheet_1</tableEdit>', tableEditText: 'sheet_1', job: { groupKey: 'b', groupId: 2, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+    ];
+
+    mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
+    const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false });
+
+    expect(result.success).toBe(true);
+    const savePayload = mockPersistTablesToChatMessage.mock.calls[0][0];
+    // 锚点有效，必须正常生成 sheet_replace 增量，不能为空。
+    expect(savePayload.operations.length).toBeGreaterThan(0);
+    expect(savePayload.operations.map((op: any) => op.sheetKey).sort()).toEqual(['sheet_0', 'sheet_1']);
+  });
+
+  it('模板范围只含 sheet_0 时，快照与 operations 只覆盖 sheet_0，范围外的 sheet_1 不写入', async () => {
+    mockChatArrayForSeedStage.length = 0;
+    mockChatArrayForSeedStage.push(
+      {
+        is_user: false,
+        mes: 'AI锚点',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { kind: 'full', reason: 'init', createdAt: 1, data: { mate: { type: 'acu' }, sheet_0: { name: '表A', content: [['row_id', '值']] }, sheet_1: { name: '表B', content: [['row_id', '值']] } } },
+              logEntries: [],
+            },
+          },
+        },
+      } as any,
+      { is_user: true, mes: '用户' } as any,
+      { is_user: false, mes: 'AI2' } as any,
+      { is_user: true, mes: '用户2' } as any,
+      { is_user: false, mes: 'AI3' } as any,
+    );
+    // 模板范围只声明 sheet_0；sheet_1 在运行时存在但不在范围内，应保持休眠。
+    mockResolveTemplateScope.mockReturnValue({ sheetKeys: new Set(['sheet_0']), sheets: {} } as any);
+    try {
+      const baseSnapshot = {
+        sheet_0: { name: '表A', content: [['row_id', '值'], ['1', 'base-a']] },
+        sheet_1: { name: '表B', content: [['row_id', '值'], ['1', 'base-b']] },
+      };
+      const responses = [
+        { success: true, attempt: 1, aiResponse: '<tableEdit>sheet_0</tableEdit>', tableEditText: 'sheet_0', job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+        { success: true, attempt: 1, aiResponse: '<tableEdit>sheet_1</tableEdit>', tableEditText: 'sheet_1', job: { groupKey: 'b', groupId: 2, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+      ];
+      mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
+      const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false });
+
+      expect(result.success).toBe(true);
+      const savePayload = mockPersistTablesToChatMessage.mock.calls[0][0];
+      // 快照与追踪只覆盖模板范围内的 sheet_0。
+      expect(savePayload.targetSheetKeys).toEqual(['sheet_0']);
+      expect(savePayload.trackingSheetKeys).toEqual(['sheet_0']);
+      // operations 不得包含范围外的 sheet_1。
+      expect(savePayload.operations.some((op: any) => op.sheetKey === 'sheet_1')).toBe(false);
+    } finally {
+      mockResolveTemplateScope.mockReturnValue(null as any);
+    }
+  });
+
+
+
+  it('目标楼层前缺少 full checkpoint 锚点时只提交 afterData 快照，不附带 operations', async () => {
+    // 清空锚点：模拟手动重填已删除范围内 checkpoint，或全新隔离域首次写入。
+    mockChatArrayForSeedStage.length = 0;
+    mockChatArrayForSeedStage.push(
+      { is_user: true, mes: '用户' } as any,
+      { is_user: false, mes: 'AI1' } as any,
+      { is_user: true, mes: '用户2' } as any,
+      { is_user: false, mes: 'AI2' } as any,
+    );
+    const baseSnapshot = {
+      sheet_0: { name: '表A', content: [['row_id', '值'], ['1', 'base-a']] },
+      sheet_1: { name: '表B', content: [['row_id', '值'], ['1', 'base-b']] },
+    };
+    const responses = [
+      { success: true, attempt: 1, aiResponse: '<tableEdit>sheet_0</tableEdit>', tableEditText: 'sheet_0', job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+    ];
+
+    mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
+    const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false });
+
+    expect(result.success).toBe(true);
+    const savePayload = mockPersistTablesToChatMessage.mock.calls[0][0];
+    // persist 层会把本次写入当作初始 full checkpoint，那种形态拒收 operations。
+    expect(savePayload.operations).toEqual([]);
+    // afterData 仍然是填表后的完整快照，checkpoint 不会丢数据。
+    expect(savePayload.tableData.sheet_0.content).toEqual([['row_id', '值'], ['1', 'base-a'], ['2', '来自A']]);
+  });
+
+  it('非 SQL 路径存在可临时回放的 orphan artifacts 时保留本次 operations 供 persist 升级校验', async () => {
+    mockChatArrayForSeedStage.length = 0;
+    mockChatArrayForSeedStage.push(
+      {
+        is_user: false,
+        mes: 'AI orphan',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              headRevision: '1:orphan',
+              logEntries: [{
+                seq: 1, entryId: 'orphan-row', createdAt: 1, source: 'auto_fill', targetMessageIndex: 0, aiFloor: 1,
+                filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [],
+                operations: [{ kind: 'row_upsert', sheetKey: 'sheet_0', rowId: '1', cells: ['1', 'base-a'] }],
+              }],
+            },
+          },
+        },
+      } as any,
+      { is_user: true, mes: '用户' } as any,
+      { is_user: false, mes: 'AI2' } as any,
+      { is_user: false, mes: 'AI3' } as any,
+    );
+    const baseSnapshot = {
+      sheet_0: { name: '表A', content: [['row_id', '值'], ['1', 'base-a']] },
+    };
+    const responses = [
+      { success: true, attempt: 1, aiResponse: '<tableEdit>sheet_0</tableEdit>', tableEditText: 'sheet_0', job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+    ];
+
+    mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
+    const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false });
+
+    expect(result.success).toBe(true);
+    expect(mockPersistTablesToChatMessage.mock.calls[0][0].operations).toEqual([
+      { kind: 'sheet_replace', sheetKey: 'sheet_0', sheet: expect.objectContaining({ content: [['row_id', '值'], ['1', 'base-a'], ['2', '来自A']] }), reason: 'system' },
+    ]);
+  });
+
+  it('锚点存在时恢复增量提交，仍然生成 sheet_replace operations', async () => {
+    const baseSnapshot = {
+      sheet_0: { name: '表A', content: [['row_id', '值'], ['1', 'base-a']] },
+    };
+    const responses = [
+      { success: true, attempt: 1, aiResponse: '<tableEdit>sheet_0</tableEdit>', tableEditText: 'sheet_0', job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+    ];
+
+    mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
+    const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false });
+
+    expect(result.success).toBe(true);
+    const savePayload = mockPersistTablesToChatMessage.mock.calls[0][0];
+    expect(savePayload.operations).toEqual([
+      { kind: 'sheet_replace', sheetKey: 'sheet_0', sheet: expect.objectContaining({
+        content: [['row_id', '值'], ['1', 'base-a'], ['2', '来自A']],
+      }), reason: 'system' },
+    ]);
+  });
+
+
 
   it('首次填表时 unified 路径保存全量表，但只追踪实质修改表', async () => {
     mockCheckIfFirstTimeInit.mockResolvedValue(true);
@@ -2891,8 +3332,8 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
       sheet_1: { uid: 'quest_log', name: '表B', sourceData: { ddl: questDDL }, content: [['row_id', 'value'], ['1', 'base-b']], updateConfig: {}, exportConfig: {}, orderNo: 1 },
     } as any;
     const responses = [
-      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO quest_log VALUES (2, 'sql-b');</tableEdit>", tableEditText: "INSERT INTO quest_log VALUES (2, 'sql-b');", job: { groupKey: 'b', groupId: 2, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
-      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory VALUES (2, 'sql-a');</tableEdit>", tableEditText: "INSERT INTO inventory VALUES (2, 'sql-a');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO quest_log (value) VALUES ('sql-b');</tableEdit>", tableEditText: "INSERT INTO quest_log (value) VALUES ('sql-b');", job: { groupKey: 'b', groupId: 2, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory (value) VALUES ('sql-a');</tableEdit>", tableEditText: "INSERT INTO inventory (value) VALUES ('sql-a');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
     ];
 
     mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
@@ -2908,11 +3349,45 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
     expect(mockCurrentJsonTableData.sheet_0.content).toEqual([['row_id', 'value'], ['1', 'base-a'], ['2', 'sql-a']]);
     expect(mockCurrentJsonTableData.sheet_1.content).toEqual([['row_id', 'value'], ['1', 'base-b'], ['2', 'sql-b']]);
     expect(mockPersistTablesToChatMessage.mock.calls[0][0].operations).toEqual([
-      { kind: 'sql_sheet_batch', sheetKey: 'sheet_0', statements: ["INSERT INTO inventory VALUES (2, 'sql-a')"], tableName: 'inventory', reason: 'system' },
-      { kind: 'sql_sheet_batch', sheetKey: 'sheet_1', statements: ["INSERT INTO quest_log VALUES (2, 'sql-b')"], tableName: 'quest_log', reason: 'system' },
+      { kind: 'sql_sheet_batch', sheetKey: 'sheet_0', statements: ["INSERT INTO biaoa (row_id, value) VALUES (2, 'sql-a')"], tableName: 'biaoa', reason: 'system' },
+      { kind: 'sql_sheet_batch', sheetKey: 'sheet_1', statements: ["INSERT INTO biaob (row_id, value) VALUES (2, 'sql-b')"], tableName: 'biaob', reason: 'system' },
     ]);
     vi.mocked(isSqliteMode).mockReturnValue(false);
   });
+
+  it('SQL 模式下模板范围外的表连 SQL 一起屏蔽，不执行也不写增量', async () => {
+    // 回归：若只收窄 keysToSave 而仍执行 SQL，会在运行时改动范围外的表
+    // 并写出挂在缺表 checkpoint 上的孤立增量，回放时报 no such table。
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    vi.mocked(isSqliteMode).mockReturnValue(true);
+    const inventoryDDL = `CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);`;
+    const questDDL = `CREATE TABLE quest_log (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);`;
+    const baseSnapshot = {
+      mate: { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } },
+      sheet_0: { uid: 'inventory', name: '表A', sourceData: { ddl: inventoryDDL }, content: [['row_id', 'value'], ['1', 'base-a']], updateConfig: {}, exportConfig: {}, orderNo: 0 },
+      sheet_1: { uid: 'quest_log', name: '表B', sourceData: { ddl: questDDL }, content: [['row_id', 'value'], ['1', 'base-b']], updateConfig: {}, exportConfig: {}, orderNo: 1 },
+    } as any;
+    const responses = [
+      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory (value) VALUES ('sql-a');</tableEdit>", tableEditText: "INSERT INTO inventory (value) VALUES ('sql-a');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO quest_log (value) VALUES ('sql-b');</tableEdit>", tableEditText: "INSERT INTO quest_log (value) VALUES ('sql-b');", job: { groupKey: 'b', groupId: 2, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+    ];
+    // 模板范围只声明 sheet_0。
+    mockResolveTemplateScope.mockReturnValue({ sheetKeys: new Set(['sheet_0']), sheets: {} } as any);
+    try {
+      mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
+      const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false });
+
+      expect(result.success).toBe(true);
+      const savePayload = mockPersistTablesToChatMessage.mock.calls[0][0];
+      // 只剩 sheet_0 的增量；范围外的 sheet_1 既不执行也不写入。
+      expect(savePayload.operations.map((op: any) => op.sheetKey)).toEqual(['sheet_0']);
+      expect(savePayload.operations.some((op: any) => op.sheetKey === 'sheet_1')).toBe(false);
+    } finally {
+      mockResolveTemplateScope.mockReturnValue(null as any);
+      vi.mocked(isSqliteMode).mockReturnValue(false);
+    }
+  });
+
 
   it('SQL 模式下混合 SQL/非 SQL 响应直接失败，不退化为快照写入', async () => {
     const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
@@ -2925,7 +3400,7 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
       sheet_1: { uid: 'quest_log', name: '表B', sourceData: { ddl: questDDL }, content: [['row_id', 'value'], ['1', 'base-b']], updateConfig: {}, exportConfig: {}, orderNo: 1 },
     } as any;
     const responses = [
-      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory VALUES (2, 'sql-a');</tableEdit>", tableEditText: "INSERT INTO inventory VALUES (2, 'sql-a');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory (value) VALUES ('sql-a');</tableEdit>", tableEditText: "INSERT INTO inventory (value) VALUES ('sql-a');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
       { success: true, attempt: 1, aiResponse: '<tableEdit>insertRow(1,{"0":"dsl-b"})</tableEdit>', tableEditText: 'insertRow(1,{"0":"dsl-b"})', job: { groupKey: 'b', groupId: 2, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
     ];
 
@@ -2934,7 +3409,8 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('禁止混合 SQL/非 SQL');
-    expect(result.error).toContain('b');
+    expect(result.error).toContain('groupId=2');
+    expect(result.error).not.toContain('group b');
     expect(mockApplySqlEditsToTableDataSnapshot).not.toHaveBeenCalled();
     expect(mockParseAndApplyTableEditsToData).not.toHaveBeenCalled();
     expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
@@ -2957,8 +3433,9 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
     const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false });
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('group a SQL 执行失败');
+    expect(result.error).toContain('groupId=1,batch=1,targets=1 SQL 执行失败');
     expect(result.error).toContain('missing_col');
+    expect(result.error).not.toContain('group a');
     expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
     expect(mockUpdateReadableLorebookEntry).not.toHaveBeenCalled();
     expect(mockEnqueueSummaryVectorIndexFlush).not.toHaveBeenCalled();
@@ -2966,7 +3443,38 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
     vi.mocked(isSqliteMode).mockReturnValue(false);
   });
 
-  it('SQL 模式下模板基础数据与 AI INSERT 主键冲突时返回真实 SQL 错误且不保存', async () => {
+  it('SQL 统一执行边界允许 INSERT OR REPLACE 覆盖已有行', async () => {
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    vi.mocked(isSqliteMode).mockReturnValue(true);
+    const statement = "INSERT OR REPLACE INTO inventory (row_id, value) VALUES (1, 'replace-a')";
+    const baseSnapshot = {
+      mate: { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } },
+      sheet_0: {
+        uid: 'inventory',
+        name: '表A',
+        sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);' },
+        content: [['row_id', 'value'], ['1', 'base-a']],
+        updateConfig: {}, exportConfig: {}, orderNo: 0,
+      },
+    } as any;
+    const responses = [{
+      success: true,
+      attempt: 1,
+      aiResponse: `<tableEdit>${statement}</tableEdit>`,
+      tableEditText: statement,
+      job: { groupKey: 'sensitive-group', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false },
+    }];
+
+    mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
+    const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false });
+
+    expect(result.success).toBe(true);
+    expect(result.tableData?.sheet_0.content).toEqual([['row_id', 'value'], ['1', 'replace-a']]);
+    expect(mockPersistTablesToChatMessage).toHaveBeenCalled();
+    vi.mocked(isSqliteMode).mockReturnValue(false);
+  });
+
+  it('SQL 模式静默忽略 AI 显式 row_id，并使用系统身份保存', async () => {
     const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
     const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
     const { getChatSheetGuideDataForIsolationKey_ACU, getEffectiveSeedRowsForSheet_ACU } = await import('../../../src/service/template/chat-scope');
@@ -2984,20 +3492,20 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
       sheet_0: { uid: 'inventory', name: '表A', sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);' }, content: [['row_id', 'value']], updateConfig: {}, exportConfig: {}, orderNo: 0 },
     } as any;
     const responses = [
-      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory VALUES (1, 'sql-conflict');</tableEdit>", tableEditText: "INSERT INTO inventory VALUES (1, 'sql-conflict');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory (row_id, value) VALUES (999, 'sql-conflict');</tableEdit>", tableEditText: "INSERT INTO inventory (row_id, value) VALUES (999, 'sql-conflict');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
     ];
 
     mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
     const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false });
 
-    expect(result.success).toBe(false);
-    const normalizedError = String(result.error).toLowerCase();
-    expect(normalizedError).toContain('group a');
-    expect(normalizedError).toMatch(/unique|constraint|primary/);
+    expect(result.success).toBe(true);
     expect(mockParseAndApplyTableEditsToData).not.toHaveBeenCalled();
-    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
-    expect(mockUpdateReadableLorebookEntry).not.toHaveBeenCalled();
-    expect(mockEnqueueSummaryVectorIndexFlush).not.toHaveBeenCalled();
+    expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(1);
+    const persistArgs = mockPersistTablesToChatMessage.mock.calls[0]?.[0];
+    expect(persistArgs?.tableData?.sheet_0?.content).toContainEqual(['2', 'sql-conflict']);
+    expect(persistArgs?.tableData?.sheet_0?.content.flat()).not.toContain('999');
+    expect((persistArgs?.operations?.[0] as any)?.statements?.[0]).toContain("(row_id, value) VALUES (2, 'sql-conflict')");
+    expect((persistArgs?.operations?.[0] as any)?.statements?.[0]).not.toContain('999');
     vi.mocked(isSqliteMode).mockReturnValue(false);
   });
 
@@ -3120,7 +3628,7 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
       sheet_0: { uid: 'inventory', name: '表A', sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);' }, content: [['row_id', 'value']], updateConfig: {}, exportConfig: {}, orderNo: 0 },
     } as any;
     const responses = [
-      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory VALUES (2, 'sql-a');</tableEdit>", tableEditText: "INSERT INTO inventory VALUES (2, 'sql-a');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0', 'sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory (value) VALUES ('sql-a');</tableEdit>", tableEditText: "INSERT INTO inventory (value) VALUES ('sql-a');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0', 'sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
     ];
 
     mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
@@ -3132,7 +3640,7 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
     expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(1);
     const savePayload = mockPersistTablesToChatMessage.mock.calls[0][0];
     expect(savePayload.targetSheetKeys).toEqual(['sheet_0', 'sheet_1']);
-    expect(savePayload.tableData.sheet_0.content).toEqual([['row_id', 'value'], ['2', 'sql-a']]);
+    expect(savePayload.tableData.sheet_0.content).toEqual([['row_id', 'value'], ['1', 'sql-a']]);
     expect(savePayload.tableData.sheet_1.content).toEqual([['row_id', 'value'], ['1', 'tpl-b']]);
     vi.mocked(isSqliteMode).mockReturnValue(false);
   });
@@ -3155,7 +3663,7 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
       sheet_0: { uid: 'inventory', name: '表A', sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);' }, content: [['row_id', 'value']], updateConfig: {}, exportConfig: {}, orderNo: 0 },
     } as any;
     const responses = [
-      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory VALUES (2, 'sql-a');</tableEdit>", tableEditText: "INSERT INTO inventory VALUES (2, 'sql-a');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0', 'sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory (value) VALUES ('sql-a');</tableEdit>", tableEditText: "INSERT INTO inventory (value) VALUES ('sql-a');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0', 'sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
     ];
 
     mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
@@ -3189,7 +3697,7 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
       sheet_1: { uid: 'quest_log', name: '表B', sourceData: { ddl: 'CREATE TABLE quest_log (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);' }, content: [['row_id', 'value'], ['9', 'existing-b']], updateConfig: {}, exportConfig: {}, orderNo: 1 },
     } as any;
     const responses = [
-      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory VALUES (2, 'sql-a');</tableEdit>", tableEditText: "INSERT INTO inventory VALUES (2, 'sql-a');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0', 'sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory (value) VALUES ('sql-a');</tableEdit>", tableEditText: "INSERT INTO inventory (value) VALUES ('sql-a');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0', 'sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
     ];
 
     mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
@@ -3223,7 +3731,7 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
       sheet_0: { uid: 'inventory', name: '表A', sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);' }, content: [['row_id', 'value']], updateConfig: {}, exportConfig: {}, orderNo: 0 },
     } as any;
     const responses = [
-      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory VALUES (2, 'sql-a');</tableEdit>", tableEditText: "INSERT INTO inventory VALUES (2, 'sql-a');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0', 'sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
+      { success: true, attempt: 1, aiResponse: "<tableEdit>INSERT INTO inventory (value) VALUES ('sql-a');</tableEdit>", tableEditText: "INSERT INTO inventory (value) VALUES ('sql-a');", job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0', 'sheet_1'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false } },
     ];
 
     mockCurrentJsonTableData = JSON.parse(JSON.stringify(baseSnapshot));
@@ -3267,11 +3775,11 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     mockPersistTablesToChatMessage.mockResolvedValue({ saved: true, messageIndex: 3 });
     mockParseAndApplyTableEditsToData.mockImplementation((aiResponse: string, tableData: any) => {
       if (aiResponse.includes('sheet_0')) {
-        tableData.sheet_0.content.push(['2', '来自A']);
+        tableData.sheet_0.content.push([String(tableData.sheet_0.content.length), '来自A']);
         return { success: true, modifiedKeys: ['sheet_0'], appliedEdits: 1 };
       }
       if (aiResponse.includes('sheet_1')) {
-        tableData.sheet_1.content.push(['2', '来自B']);
+        tableData.sheet_1.content.push([String(tableData.sheet_1.content.length), '来自B']);
         return { success: true, modifiedKeys: ['sheet_1'], appliedEdits: 1 };
       }
       return { success: false, modifiedKeys: [], appliedEdits: 0 };
@@ -3283,6 +3791,24 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     expect(result).toEqual({ success: true, failedGroups: [], committedBucketCount: 0 });
     expect(mockPrepareAIInput).not.toHaveBeenCalled();
     expect(mockCallCustomOpenAI).not.toHaveBeenCalled();
+  });
+
+  it('迁移失败时拒绝整组处理且不触发 AI 或持久化', async () => {
+    mockEnsureLegacyStorageMigratedBeforeWrite.mockResolvedValueOnce({ success: false, error: 'mixed storage evidence insufficient' });
+
+    const result = await processGroupedRuntimeChunk_ACU([
+      { key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null },
+      { key: 'group_b', groupId: 1, indices: [3], batchSize: 2, sheetKeys: ['sheet_1'], requestOptions: null },
+    ], 'manual_independent');
+
+    expect(result).toEqual({
+      success: false,
+      failedGroups: ['group_a', 'group_b'],
+      error: 'mixed storage evidence insufficient',
+      committedBucketCount: 0,
+    });
+    expect(mockCallCustomOpenAI).not.toHaveBeenCalled();
+    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
   });
 
   it('同一 bucket 的多组只统一提交一次', async () => {
@@ -3454,7 +3980,7 @@ describe('processGroupedRuntimeChunk_ACU', () => {
   });
 
 
-  it('手动重填多 bucket 使用固定 mergeBaseMaxMessageIndex，不把前一 bucket 新写增量带入后续基底', async () => {
+  it('手动重填多 bucket 逐 bucket 前移基底边界，纳入前一 bucket 增量且排除未处理楼层', async () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
     const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
     const chat = Array.from({ length: 31 }, (_, index) => ({ is_user: false, mes: `AI ${index}` })) as any[];
@@ -3521,6 +4047,35 @@ describe('processGroupedRuntimeChunk_ACU', () => {
       if (aiResponse.includes('29-30')) tableData.sheet_0.content.push(['29', '第29层新值'], ['30', '第30层新值']);
       return { success: true, modifiedKeys: ['sheet_0'], appliedEdits: 2 };
     });
+    // 把每个 bucket 的提交结果作为 V2 增量写回聊天，模拟真实持久化，
+    // 使后续 bucket 的 bounded replay 能够看到刚提交的行。
+    mockPersistTablesToChatMessage.mockImplementation(async (options: any) => {
+      const appendedRows = (options.tableData?.sheet_0?.content || []).slice(21);
+      chat[options.targetMessageIndex].TavernDB_ACU_IsolatedData = {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            logEntries: [{
+              seq: 1,
+              entryId: `new-${options.targetMessageIndex}`,
+              createdAt: options.targetMessageIndex,
+              source: 'manual_fill',
+              targetMessageIndex: options.targetMessageIndex,
+              aiFloor: options.targetMessageIndex + 1,
+              filledSheetKeys: ['sheet_0'],
+              changedSheetKeys: ['sheet_0'],
+              groupKeys: ['sheet_0'],
+              operations: appendedRows.map((row: string[]) => ({
+                kind: 'row_upsert', sheetKey: 'sheet_0', rowId: row[0], cells: row,
+              })),
+              writeSet: [{ kind: 'sheet', sheetKey: 'sheet_0' }],
+            }],
+          },
+        },
+      };
+      return { saved: true, messageIndex: options.targetMessageIndex };
+    });
 
     const result = await processGroupedRuntimeChunk_ACU([
       { key: 'manual_refill', groupId: 0, indices: [27, 28, 29, 30], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null, mergeBaseMaxMessageIndex: 26 },
@@ -3529,8 +4084,13 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     expect(result.success).toBe(true);
     expect(promptBaseRows).toHaveLength(2);
     expect(promptBaseRows[0]).toHaveLength(27);
-    expect(promptBaseRows[1]).toEqual(promptBaseRows[0]);
-    expect(promptBaseRows[1].some(row => row[0] === '27' || row[0] === '28' || row[0] === '29' || row[0] === '30')).toBe(false);
+    // 第一个 bucket 起点为 27，边界 26：不得包含 27~30 的行。
+    expect(promptBaseRows[0].some(row => ['27', '28', '29', '30'].includes(row[0]))).toBe(false);
+    // 第二个 bucket 起点为 29，边界前移到 28：必须纳入上一 bucket 刚提交的 27、28，
+    // 同时仍不得包含本 bucket 尚未处理的 29、30。
+    expect(promptBaseRows[1].map(row => row[0])).toContain('27');
+    expect(promptBaseRows[1].map(row => row[0])).toContain('28');
+    expect(promptBaseRows[1].some(row => ['29', '30'].includes(row[0]))).toBe(false);
   });
 
   it('SQL 模式下不再早退，而是完成 grouped 统一提交', async () => {
@@ -3548,8 +4108,8 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     } as any);
     mockCurrentJsonTableData = JSON.parse(JSON.stringify(vi.mocked(parseTableTemplateJson_ACU).getMockImplementation()?.() || {}));
     mockCallCustomOpenAI
-      .mockResolvedValueOnce("<tableEdit>INSERT INTO inventory VALUES (2, 'sql-a');</tableEdit>")
-      .mockResolvedValueOnce("<tableEdit>INSERT INTO quest_log VALUES (2, 'sql-b');</tableEdit>");
+      .mockResolvedValueOnce("<tableEdit>INSERT INTO inventory (value) VALUES ('sql-a');</tableEdit>")
+      .mockResolvedValueOnce("<tableEdit>INSERT INTO quest_log (value) VALUES ('sql-b');</tableEdit>");
 
     const result = await processGroupedRuntimeChunk_ACU([
       { key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null },
@@ -3582,9 +4142,9 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     mockPrepareAIInput.mockImplementation(async () => ({ tableDataText: '模拟数据' }));
     mockCallCustomOpenAI.mockImplementation(async (dynamicContent: any) => {
       capturedTableDataTexts.push(dynamicContent.tableDataText);
-      if (mockCallCustomOpenAI.mock.calls.length === 1) return "<tableEdit>INSERT INTO inventory VALUES (2, 'sql-a');</tableEdit>";
+      if (mockCallCustomOpenAI.mock.calls.length === 1) return "<tableEdit>INSERT INTO inventory (value) VALUES ('sql-a');</tableEdit>";
       if (mockCallCustomOpenAI.mock.calls.length === 2) return '<tableEdit>insertRow(1,{"0":"dsl-b"})</tableEdit>';
-      return "<tableEdit>INSERT INTO quest_log VALUES (2, 'sql-b');</tableEdit>";
+      return "<tableEdit>INSERT INTO quest_log (value) VALUES ('sql-b');</tableEdit>";
     });
 
     const result = await processGroupedRuntimeChunk_ACU([
@@ -3627,7 +4187,7 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
   });
 
-  it('统一提交失败后会把错误反馈注入下一轮 prompt 并重试成功', async () => {
+  it('持久化失败属于基础设施错误，不进入下一轮 prompt 或再次调用 AI', async () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
     const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
     vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: true }, { is_user: false, mes: 'AI回复' }]);
@@ -3645,18 +4205,18 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     });
 
     mockPersistTablesToChatMessage
-      .mockResolvedValueOnce({ saved: false, error: 'group group_a 解析或应用失败' })
-      .mockResolvedValueOnce({ saved: true, messageIndex: 1 });
+      .mockResolvedValueOnce({ saved: false, error: '401 https://internal.example/save?token=secret-token' });
 
     const result = await processGroupedRuntimeChunk_ACU([
       { key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null },
     ], 'manual_independent');
 
-    expect(result.success).toBe(true);
-    expect(capturedTableDataTexts).toHaveLength(2);
-    expect(capturedTableDataTexts[1]).toContain('UNIFIED_GROUP_ERROR_FEEDBACK');
-    expect(capturedTableDataTexts[1]).toContain('group group_a 解析或应用失败');
-    expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(2);
+    expect(result.success).toBe(false);
+    expect(capturedTableDataTexts).toEqual(['模拟数据']);
+    expect(result.error).not.toContain('internal.example');
+    expect(result.error).not.toContain('secret-token');
+    expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
+    expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(1);
   });
 
   it('统一提交持续失败到耗尽重试时整 bucket 失败且不落盘', async () => {
@@ -3843,7 +4403,7 @@ describe('processGroupedRuntimeChunk_ACU', () => {
     mockCurrentJsonTableData = {
       sheet_0: { uid: 'inventory', name: '表A', sourceData: { ddl: inventoryDDL }, content: [['row_id', 'value'], ['1', 'base-a']], updateConfig: {}, exportConfig: {}, orderNo: 0 },
     } as any;
-    mockCallCustomOpenAI.mockResolvedValueOnce("<tableEdit>INSERT INTO inventory VALUES (2, 'sql-a');</tableEdit>");
+    mockCallCustomOpenAI.mockResolvedValueOnce("<tableEdit>INSERT INTO inventory (value) VALUES ('sql-a');</tableEdit>");
 
     const legacyProcessBatch = vi.fn().mockResolvedValue({ success: true });
     const refreshData = vi.fn().mockResolvedValue(undefined);

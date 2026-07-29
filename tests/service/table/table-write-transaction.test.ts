@@ -230,6 +230,45 @@ describe('table-write-transaction', () => {
     })).resolves.toBeUndefined();
   });
 
+  it('模板切回场景：曾被写过的表在 all 快照下不再被误判为已变化', async () => {
+    // 先前一次切换已写入 sheet_in05z9vz，将其 per-sheet revision 推进（模拟“切到更多表”的模板）。
+    await runTableWriteTransaction_ACU({ source: 'template_assistant', reason: 'switch to more sheets', writeSet: sheetWrite('sheet_in05z9vz') }, async (ctx) => {
+      await ctx.runCommit(async () => 'ok', sheetWrite('sheet_in05z9vz'));
+    });
+
+    // 切回时按模板路径用 all 捕获基线（此后无并发写入）。
+    const allRevision = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }]);
+
+    // 提交的 writeSet 含该具体表（rebase/删除都会进 writeSet）。修复前 expected=0 vs actual>0 会误杀。
+    await expect(runTableWriteTransaction_ACU({
+      source: 'template_assistant',
+      reason: 'chat_template_reconciliation',
+      writeSet: sheetWrite('sheet_in05z9vz'),
+      baseRevision: allRevision,
+    }, async (ctx) => {
+      await ctx.runCommit(async () => 'ok', sheetWrite('sheet_in05z9vz'));
+    })).resolves.toBeUndefined();
+  });
+
+  it('all 快照下若期间发生任意写入仍被 global 检查拦截', async () => {
+    const allRevision = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }]);
+
+    // 捕获后有并发 per-sheet 写入，global 必然变化。
+    await runTableWriteTransaction_ACU({ source: 'manual_crud', reason: 'concurrent write', writeSet: sheetWrite('sheet_x') }, async (ctx) => {
+      await ctx.runCommit(async () => 'ok', sheetWrite('sheet_x'));
+    });
+
+    await expect(runTableWriteTransaction_ACU({
+      source: 'template_assistant',
+      reason: 'chat_template_reconciliation',
+      writeSet: sheetWrite('sheet_x'),
+      baseRevision: allRevision,
+    }, async (ctx) => {
+      await ctx.runCommit(async () => 'should-fail');
+    })).rejects.toThrow('运行时数据已变化');
+  });
+
+
   it('提交可只推进实际变更表的运行时版本，不推进锁定但未修改的表', async () => {
     const baseBRevision = captureTableRuntimeRevisionForWriteSet_ACU(sheetWrite('sheet_b'));
 

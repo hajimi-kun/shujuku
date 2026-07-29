@@ -5,7 +5,7 @@
  * JSON 清洗管线已提取到 json-sanitizer.ts
  */
 import { currentJsonTableData_ACU, settings_ACU } from '../../runtime/state-manager';
-import { getEffectiveSeedRowsForSheet_ACU, getSortedSheetKeys_ACU } from '../../template/chat-scope';
+import { ensureStableRowIdsForSeedRows_ACU, getEffectiveSeedRowsForSheet_ACU, getSortedSheetKeys_ACU } from '../../template/chat-scope';
 import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../../shared/utils';
 import { applySummaryIndexSequenceToTable_ACU, formatSummaryIndexCode_ACU, getSummaryIndexColumnIndex_ACU, getTableLocksForSheet_ACU, isSpecialIndexLockEnabled_ACU } from '../../runtime/helpers-remaining';
 import { sanitizeJsonPipeline_ACU, coerceLooseRowObject_ACU } from './json-sanitizer';
@@ -308,8 +308,9 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
                 }
             }
             if (!Array.isArray(sr) || sr.length === 0) return;
-    const headerRow = Array.isArray(table.content[0]) ? JSON.parse(JSON.stringify(table.content[0])) : ["row_id"];
-            const seed = JSON.parse(JSON.stringify(sr));
+            const headerRow = Array.isArray(table.content[0]) ? JSON.parse(JSON.stringify(table.content[0])) : ["row_id"];
+            // seedRows 是明确的新行来源；在物化时分配身份，不能把空 row_id 留给 V2 persist 拒绝。
+            const seed = ensureStableRowIdsForSeedRows_ACU(sr);
             table.content = [headerRow, ...seed];
         } catch (e) { logWarn_ACU('[表格编辑] restoreSeedRows 失败:', e); }
     };
@@ -532,7 +533,7 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
       // 跳过 HTML 注释残留
       if (trimmed.startsWith('<!--') || trimmed.startsWith('-->')) continue;
       // 检查是否以 SQL 关键字开头
-      const sqlKeywords = /^(INSERT|UPDATE|DELETE|ALTER|BEGIN|CREATE|DROP|REPLACE)\b/i;
+      const sqlKeywords = /^(INSERT|UPDATE|DELETE|ALTER|BEGIN|COMMIT|END|ROLLBACK|SAVEPOINT|RELEASE|CREATE|DROP|REPLACE|SELECT|WITH|PRAGMA|VACUUM|REINDEX|ANALYZE|ATTACH|DETACH)\b/i;
       return sqlKeywords.test(trimmed);
     }
     return false;

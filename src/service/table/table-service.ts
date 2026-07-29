@@ -82,7 +82,7 @@ export async function ensureLegacyStorageMigratedBeforeWrite_ACU(reason = 'table
   const strategy = resolveTableStorageStrategy_ACU(chat, isolationKey, isolationConfig);
   if (strategy.mode !== 'legacy-v1') return { success: true, migrated: false };
 
-  logWarn_ACU(`[LegacyMigrationGate] ${reason}: detected legacy-v1 before write, migrating first. reason=${strategy.reason}`);
+  logWarn_ACU(`[LegacyMigrationGate] ${reason}: detected legacy-v1 before write, migrating first. reason=${strategy.reason}${strategy.warning ? `; warning=${strategy.warning}` : ''}`);
   const mergedLegacyData = await mergeAllIndependentTablesLegacyV1_ACU();
   if (!mergedLegacyData || !Object.keys(mergedLegacyData).some(k => k.startsWith('sheet_'))) {
     return { success: false, error: '旧存储迁移失败：无法从 legacy-v1 合并出有效表格数据。' };
@@ -97,14 +97,18 @@ export async function ensureLegacyStorageMigratedBeforeWrite_ACU(reason = 'table
   if (!migrationResult.migrated) {
     return { success: false, error: `旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}` };
   }
+  if (!migrationResult.data) {
+    return { success: false, error: '旧存储迁移到 V2 失败: 迁移成功结果缺少修复后的表格数据。' };
+  }
 
   const postStrategy = resolveTableStorageStrategy_ACU(chat, isolationKey, isolationConfig);
   if (postStrategy.mode === 'legacy-v1') {
     return { success: false, error: `旧存储迁移后仍检测到 legacy-v1: ${postStrategy.reason}` };
   }
 
-  _set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(mergedLegacyData)) as TableDataObject_ACU);
-  return { success: true, migrated: true, data: mergedLegacyData as TableDataObject_ACU };
+  const migratedData = migrationResult.data;
+  _set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(migratedData)) as TableDataObject_ACU);
+  return { success: true, migrated: true, data: migratedData };
 }
 
 export async function persistTablesToChatMessage_ACU(

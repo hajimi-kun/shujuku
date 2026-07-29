@@ -16,12 +16,15 @@ import {
   formatArgs,
   _resetForTesting,
   setDebugLogEnabled,
+  setWarnLogEnabled,
+  isWarnLogEnabled,
 } from '../../src/shared/log-buffer';
 
 beforeEach(() => {
   _resetForTesting();
-  // 测试中启用 debug 日志，否则 pushLog('debug', ...) 会被跳过
+  // 通用测试显式启用可选级别；默认关闭行为由独立用例验证
   setDebugLogEnabled(true);
+  setWarnLogEnabled(true);
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -60,6 +63,32 @@ describe('pushLog + getAllLogs', () => {
     const logs = getAllLogs();
     logs.length = 0; // 清空副本
     expect(getLogCount()).toBe(1); // 内部缓冲区不受影响
+  });
+});
+
+describe('Warn 日志开关', () => {
+  it('默认关闭时不写入缓冲区且不通知订阅者', () => {
+    _resetForTesting();
+    const received: any[] = [];
+    subscribe((entry) => received.push(entry));
+
+    pushLog('warn', ['[ACU]', '[SQL] 应被隐藏']);
+
+    expect(isWarnLogEnabled()).toBe(false);
+    expect(getAllLogs()).toEqual([]);
+    expect(getKnownTags()).toEqual([]);
+    expect(received).toEqual([]);
+  });
+
+  it('显式开启后恢复写入与订阅通知', () => {
+    const received: any[] = [];
+    subscribe((entry) => received.push(entry));
+
+    pushLog('warn', ['[ACU]', '[SQL] 已显示']);
+
+    expect(isWarnLogEnabled()).toBe(true);
+    expect(getAllLogs()).toHaveLength(1);
+    expect(received).toHaveLength(1);
   });
 });
 
@@ -262,10 +291,12 @@ describe('subscribe / unsubscribe', () => {
 describe('_resetForTesting', () => {
   it('重置所有状态', () => {
     pushLog('debug', ['[ACU]', '[SQL] test']);
+    setWarnLogEnabled(true);
     subscribe(() => {});
     _resetForTesting();
     expect(getLogCount()).toBe(0);
     expect(getKnownTags()).toEqual([]);
     expect(getSubscriberCount()).toBe(0);
+    expect(isWarnLogEnabled()).toBe(false);
   });
 });

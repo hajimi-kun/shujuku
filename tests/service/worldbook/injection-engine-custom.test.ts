@@ -248,6 +248,48 @@ describe('updateCustomTableExports_ACU', () => {
       expect(mockCreateLorebookEntries).toHaveBeenCalled();
     });
 
+    it('整表导出隐藏 physical column 且保持右侧可见列对齐', async () => {
+      const mergedData: any = {
+        sheet_0: {
+          name: '自定义表',
+          sourceData: {
+            ddl: 'CREATE TABLE custom_table (row_id INTEGER PRIMARY KEY, name TEXT, legacy_note TEXT, status TEXT);',
+            hiddenPhysicalColumns: ['legacy_note'],
+          },
+          content: [
+            ['row_id', '名称', '旧备注', '状态'],
+            ['1', '铁剑', '历史秘密', '可用'],
+          ],
+          exportConfig: { enabled: true, entryName: '自定义表', entryType: 'constant' },
+        },
+      };
+      mockGetSortedSheetKeys.mockReturnValue(['sheet_0']);
+      mockEnsureExportConfigDefaults.mockReturnValue({
+        enabled: true,
+        splitByRow: false,
+        entryName: '自定义表',
+        entryType: 'constant',
+        keywords: '',
+        preventRecursion: true,
+        injectionTemplate: '',
+        extraIndexEnabled: false,
+        extraIndexEntryName: '自定义表-索引',
+        extraIndexColumns: [],
+        extraIndexColumnModes: {},
+        extraIndexInjectionTemplate: '',
+        entryPlacement: { position: 'at_depth_as_system', depth: 2, order: 10000 },
+        extraIndexPlacement: { position: 'at_depth_as_system', depth: 2, order: 10010 },
+      });
+
+      await updateCustomTableExports_ACU(mergedData);
+
+      const contents = mockCreateLorebookEntries.mock.calls[0][1].map((entry: any) => String(entry.content || '')).join('\n');
+      expect(contents).toContain('| 名称 | 状态 |');
+      expect(contents).toContain('| 铁剑 | 可用 |');
+      expect(contents).not.toContain('旧备注');
+      expect(contents).not.toContain('历史秘密');
+    });
+
     it('未启用导出的表格被跳过', async () => {
       const mergedData: any = {
         sheet_0: {

@@ -15,7 +15,7 @@ const {
   mockIsWorldbookApiAvailable,
   mockGwGetLorebookEntries, mockGwSetLorebookEntries,
   mockGwCreateLorebookEntries, mockGwDeleteLorebookEntries,
-  mockListLorebooks, mockGwGetWorldBooks,
+  mockListLorebooks, mockGwGetWorldBooks, mockResolveLorebookNameFromList,
   mockGetCharLorebooks, mockGetChatMessages, mockGetChatLength,
   mockSaveSettings,
   mockGetSortedSheetKeys, mockMaterializeDataFromSheetGuide,
@@ -65,6 +65,16 @@ const {
     mockGwDeleteLorebookEntries: vi.fn(async () => {}),
     mockListLorebooks: vi.fn(async () => []),
     mockGwGetWorldBooks: vi.fn(async () => []),
+    mockResolveLorebookNameFromList: vi.fn((requestedName: unknown, bookList: unknown) => {
+      const requested = String(requestedName ?? '').normalize('NFKC').replace(/[\u200B\uFEFF]/g, '').trim();
+      const names = (Array.isArray(bookList) ? bookList : []).map(item =>
+        String(item && typeof item === 'object' ? (item as any).name ?? '' : item ?? '').trim()
+      ).filter(Boolean);
+      const exact = names.find(name => name === String(requestedName ?? '').trim());
+      if (exact) return exact;
+      const matches = names.filter(name => name.normalize('NFKC').replace(/[\u200B\uFEFF]/g, '').trim() === requested);
+      return matches.length === 1 ? matches[0] : null;
+    }),
     mockGetCharLorebooks: vi.fn(async () => ({ primary: null, additional: [] })),
     mockGetChatMessages: vi.fn(async () => []),
     mockGetChatLength: vi.fn(() => 0),
@@ -152,6 +162,7 @@ vi.mock('../../../src/data/gateways/worldbook-gateway', () => ({
   deleteLorebookEntries_ACU: mockGwDeleteLorebookEntries,
   listLorebooks_ACU: mockListLorebooks,
   getWorldBooks_ACU: mockGwGetWorldBooks,
+  resolveLorebookNameFromList_ACU: mockResolveLorebookNameFromList,
 }));
 
 vi.mock('../../../src/data/gateways/character-gateway', () => ({
@@ -260,6 +271,7 @@ beforeEach(() => {
   mockShouldSuppressWorldbookInjection.mockReturnValue(false);
   mockGwGetLorebookEntries.mockResolvedValue([]);
   mockListLorebooks.mockResolvedValue([]);
+  mockResolveLorebookNameFromList.mockClear();
   mockGetCharLorebooks.mockResolvedValue({ primary: null, additional: [] });
   mockGetImportStablePrefix.mockReturnValue('外部导入-');
   mockGetImportBatchPrefix.mockReturnValue('外部导入-');
@@ -544,6 +556,35 @@ describe('getLorebookEntriesByNames_ACU', () => {
     const result = await getLorebookEntriesByNames_ACU(['书A']);
     expect(result['书A']).toHaveLength(1);
   });
+
+  it('Unicode 等价名称使用宿主真实名称读取，同时保留请求名称作为返回键', async () => {
+    mockListLorebooks.mockResolvedValue(['AB\u200BC']);
+    mockGwGetLorebookEntries.mockResolvedValue([{ uid: 1 }]);
+
+    const result = await getLorebookEntriesByNames_ACU(['ＡＢＣ']);
+
+    expect(mockGwGetLorebookEntries).toHaveBeenCalledWith('AB\u200BC');
+    expect(result['ＡＢＣ']).toEqual([{ uid: 1, book: 'AB\u200BC' }]);
+  });
+
+  it('fallback 路径按 Unicode 等价名称匹配宿主真实对象', async () => {
+    mockIsWorldbookApiAvailable.mockReturnValue(false);
+    mockListLorebooks.mockResolvedValue(['AB\u200BC']);
+    mockGwGetWorldBooks.mockResolvedValue([
+      { name: 'AB\u200BC', entries: [{ uid: 1, comment: '条目1' }] },
+    ]);
+
+    const result = await getLorebookEntriesByNames_ACU(['ＡＢＣ']);
+
+    expect(result['ＡＢＣ']).toEqual([{ uid: 1, comment: '条目1', book: 'AB\u200BC' }]);
+  });
+
+  it('Unicode 归一化后存在歧义时拒绝读取', async () => {
+    mockListLorebooks.mockResolvedValue(['ABC', 'ＡＢＣ\u200B']);
+    const result = await getLorebookEntriesByNames_ACU(['ＡＢＣ']);
+    expect(result['ＡＢＣ']).toEqual([]);
+    expect(mockGwGetLorebookEntries).not.toHaveBeenCalled();
+  });
 });
 
 describe('getLorebookEntriesStrict_ACU', () => {
@@ -575,6 +616,19 @@ describe('getLorebookEntriesStrict_ACU', () => {
     expect(result.status).toBe('invalid_selection');
     expect(result.invalidBookNames).toEqual(['残留配置书']);
     expect(mockGwGetLorebookEntries).not.toHaveBeenCalled();
+  });
+
+  it('validate_list 将等价 Unicode 名称解析为宿主真实名称后读取', async () => {
+    mockListLorebooks.mockResolvedValue(['AB\u200BC']);
+    mockGwGetLorebookEntries.mockResolvedValue([{ uid: 1, content: '正文' }]);
+
+    const result = await getLorebookEntriesStrict_ACU(['ＡＢＣ'], {
+      source: 'manual_validation', validationPolicy: 'validate_list', runId: 'run-unicode-name',
+    });
+
+    expect(result.status).toBe('success');
+    expect(mockGwGetLorebookEntries).toHaveBeenCalledWith('AB\u200BC');
+    expect(result.entriesByBook['AB\u200BC']).toEqual([{ uid: 1, content: '正文', book: 'AB\u200BC' }]);
   });
 
   it('同一 context 内同名宿主读取合并 in-flight Promise，并向调用方提供独立快照', async () => {
@@ -1416,6 +1470,69 @@ describe('updateReadableLorebookEntry_ACU', () => {
     expect(mockUpdateOutlineTableEntry).toHaveBeenCalledWith(expect.any(Object), true, 'target-book');
     expect(mockUpdateCustomTableExports).toHaveBeenCalledWith(expect.any(Object), true, 'target-book');
     expect(mockGwGetLorebookEntries).toHaveBeenCalledWith('target-book');
+  });
+
+  it('总结表仅有隐藏列数据时删除 MemoryStart/MemoryEnd，而不创建空壳记忆条目', async () => {
+    mockMergeAllIndependentTables.mockResolvedValue({
+      sheet_0: {
+        name: '公开表',
+        content: [['row_id', '名称'], ['1', '可见数据']],
+      },
+    });
+    mockFormatJsonToReadable.mockReturnValue({
+      readableText: '公开表数据',
+      importantPersonsTable: null,
+      outlineTable: null,
+      summaryTable: {
+        name: '总结表',
+        sourceData: {
+          ddl: 'CREATE TABLE summary (row_id INTEGER PRIMARY KEY, summary TEXT, legacy_note TEXT);',
+          hiddenPhysicalColumns: ['legacy_note'],
+        },
+        content: [['row_id', '总结', '旧备注'], ['1', '', '隐藏历史']],
+      },
+    });
+    mockGwGetLorebookEntries.mockResolvedValue([
+      { uid: 101, comment: 'TavernDB-ACU-MemoryStart' },
+      { uid: 102, comment: 'TavernDB-ACU-MemoryEnd' },
+    ]);
+
+    await updateReadableLorebookEntry_ACU(true, false);
+
+    expect(mockGwDeleteLorebookEntries).toHaveBeenCalledWith('test-lorebook', [101, 102]);
+    expect(mockGwCreateLorebookEntries).not.toHaveBeenCalledWith(
+      'test-lorebook',
+      expect.arrayContaining([expect.objectContaining({ comment: 'TavernDB-ACU-MemoryStart' })]),
+    );
+  });
+
+  it('全部数据仅存在于隐藏列时按公开视图清理旧世界书条目', async () => {
+    mockMergeAllIndependentTables.mockResolvedValue({
+      sheet_0: {
+        name: '隐藏历史表',
+        sourceData: {
+          ddl: 'CREATE TABLE history (row_id INTEGER PRIMARY KEY, title TEXT, legacy_note TEXT);',
+          hiddenPhysicalColumns: ['legacy_note'],
+        },
+        content: [['row_id', '标题', '旧备注'], ['1', '', '隐藏历史']],
+      },
+    });
+    mockFormatJsonToReadable.mockReturnValue({
+      readableText: '数据库为空。',
+      importantPersonsTable: null,
+      summaryTable: null,
+      outlineTable: null,
+    });
+    mockGwGetLorebookEntries.mockResolvedValue([
+      { uid: 201, comment: 'TavernDB-ACU-ReadableDataTable' },
+      { uid: 202, comment: 'TavernDB-ACU-WrapperStart' },
+      { uid: 203, comment: 'TavernDB-ACU-MemoryStart' },
+    ]);
+
+    await updateReadableLorebookEntry_ACU(true, false);
+
+    expect(mockGwDeleteLorebookEntries).toHaveBeenCalledWith('test-lorebook', [201, 202, 203]);
+    expect(mockUpdateCustomTableExports).toHaveBeenCalledWith(null, false, null);
   });
 });
 

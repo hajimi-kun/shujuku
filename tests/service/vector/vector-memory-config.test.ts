@@ -40,6 +40,28 @@ describe('vector-memory-config hybrid retrieval fields', () => {
     expect(config.rrfK).toBe(7);
   });
 
+  it('V2 rollout 默认保持 telemetry/read-only，并允许显式开启或关闭 writer', () => {
+    const defaults = normalizeVectorMemoryConfig_ACU({});
+    const enabled = normalizeVectorMemoryConfig_ACU({
+      summaryIndexV2WriteEnabled: true,
+    });
+    const override = normalizeVectorMemoryConfig_ACU({
+      summaryIndexV2WriteEnabled: false,
+    });
+
+    expect(defaults.summaryIndexV2WriteEnabled).toBe(true);
+    expect(enabled.summaryIndexV2WriteEnabled).toBe(true);
+    expect(override.summaryIndexV2WriteEnabled).toBe(false);
+  });
+
+  it('V2 writer allowlist 仅保留非空且去重后的 scope fingerprint', () => {
+    const config = normalizeVectorMemoryConfig_ACU({
+      summaryIndexV2WriteScopeAllowlist: [' scope-a ', '', 'scope-a', 1, 'scope-b'],
+    });
+
+    expect(config.summaryIndexV2WriteScopeAllowlist).toEqual(['scope-a', 'scope-b']);
+  });
+
   it('effective config 暴露运行时使用的 summaryIndex hybrid 字段', () => {
     const config = getEffectiveSummaryVectorIndexConfig_ACU({
       embeddingEndpoint: 'https://embedding.test',
@@ -55,5 +77,6 @@ describe('vector-memory-config hybrid retrieval fields', () => {
     expect(config.summaryIndexBm25CandidateLimit).toBe(5);
     expect(config.summaryIndexRrfK).toBe(11);
     expect(config.summaryIndexCandidateLimit).toBe(8);
+    expect(config.summaryIndexV2WriteEnabled).toBe(true);
   });
 });

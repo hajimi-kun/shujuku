@@ -12,6 +12,8 @@ import { ensureStorageProviderReady_ACU } from '../../service/table/table-storag
 import { isSqliteMode } from '../../service/table/storage-mode';
 import { $popupInstance_ACU } from '../state/ui-refs';
 import { createSqlApi } from '../bootstrap/api-groups/sql-api';
+import { isReadOnlySqlStatement_ACU } from '../../service/runtime/template-vars/read-only-sql-validation';
+import { resolveCurrentRuntimeReadSql_ACU } from '../../service/runtime/read-query-resolver';
 
 /** SQL 执行历史记录（内存中保留，不持久化） */
 export const sqlHistory: { sql: string; timestamp: number; success: boolean }[] = [];
@@ -141,7 +143,7 @@ export async function bindSqlConsoleEvents_ACU(): Promise<void> {
  * 判断 SQL 是否为查询语句（SELECT/PRAGMA/EXPLAIN）
  */
 export function isSelectQuery(sql: string): boolean {
-    return /^\s*(SELECT|PRAGMA|EXPLAIN)/i.test(sql);
+    return isReadOnlySqlStatement_ACU(sql);
 }
 
 /**
@@ -156,7 +158,7 @@ export async function executeSql(sql: string, $resultArea: any, $execStatus: any
 
         if (isSelect) {
             // SELECT 查询
-            const result = provider.executeQuery(sql);
+            const result = provider.executeQuery(resolveCurrentRuntimeReadSql_ACU(sql).sql);
             const elapsed = (performance.now() - startTime).toFixed(1);
 
             // 记录历史

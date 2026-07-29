@@ -177,6 +177,8 @@ export let settings_ACU: any = {
     plotSettings: JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU)),
     plotPresetBindings: {},
     currentTemplatePresetName: '',
+    tableTemplateDefaultsRefreshVersion: '',
+    tableFillPromptForceDefaultVersion: '',
     tableContextExtractTags: '',
     tableContextExtractRules: [],
     tableContextExcludeTags: '',

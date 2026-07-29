@@ -1,5 +1,6 @@
 import { TABLE_ORDER_FIELD_ACU } from '../../shared/constants';
 import { parseDDLColumnNames, updateDDLColumnComment, validateDDLTextAgainstHeaders_ACU } from '../../shared/ddl-utils';
+import { allocateStableSheetKeys_ACU, canonicalizeDisplayName_ACU } from '../../shared/sheet-identity';
 import { isSummaryOrOutlineTable_ACU } from '../../shared/utils';
 import type { SchemaMigrationPreflightIntent_ACU } from '../table/schema-migration-preflight';
 import { applySummaryIndexSequenceToTable_ACU, getSummaryIndexColumnIndex_ACU, isSpecialIndexLockEnabled_ACU } from '../runtime/helpers-remaining';
@@ -173,12 +174,19 @@ function assertPatchTargetsCurrentSheet_ACU(op: any, currentSheetKey: string | n
     }
 }
 
-function createUniqueSheetKey_ACU(dataObj: AnyRecord) {
-    let nextKey = '';
-    do {
-        nextKey = `sheet_${Math.random().toString(36).slice(2, 11)}`;
-    } while (dataObj[nextKey]);
-    return nextKey;
+function createUniqueSheetKey_ACU(dataObj: AnyRecord, sheetName: string) {
+    const canonicalName = canonicalizeDisplayName_ACU(sheetName);
+    const existing = Object.entries(dataObj)
+        .filter(([key, sheet]) => key.startsWith('sheet_') && isObject_ACU(sheet))
+        .map(([sheetKey, sheet]: [string, any]) => ({ sheetKey, canonicalName: sheet.name }));
+    if (existing.some(sheet => canonicalizeDisplayName_ACU(sheet.canonicalName) === canonicalName)) {
+        throw new Error(`add_sheet 的表名「${sheetName}」与现有表重复`);
+    }
+    const allocation = allocateStableSheetKeys_ACU([sheetName], { existing });
+    if (allocation.diagnostics.length > 0 || !allocation.keys[0]) {
+        throw new Error(`add_sheet 无法为表「${sheetName}」生成稳定 key`);
+    }
+    return allocation.keys[0];
 }
 
 function getBaseOrderedSheetKeys_ACU(tempData: AnyRecord, sheetOrder: string[] | null | undefined) {
@@ -710,7 +718,8 @@ export function compileTemplateAssistantDraft_ACU(input: {
         if (!opName) throw new Error('存在缺少 op 的操作');
 
         if (opName === 'add_sheet') {
-            const newKey = createUniqueSheetKey_ACU(candidateData);
+            const sheetName = String(op?.sheetName || '').trim();
+            const newKey = createUniqueSheetKey_ACU(candidateData, sheetName);
             const newSheet = buildNewSheet_ACU(op, newKey, orderedSheetKeys.length);
             candidateData[newKey] = newSheet;
             insertAfterAnchor_ACU(orderedSheetKeys, newKey, op.insertAfterSheetKey);

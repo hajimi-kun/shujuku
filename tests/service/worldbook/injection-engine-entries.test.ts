@@ -187,6 +187,26 @@ describe('updateOutlineTableEntry_ACU', () => {
     expect(createArgs[1][0].comment).toBe('TavernDB-ACU-OutlineTable');
   });
 
+  it('总体大纲条目不包含隐藏 physical column，并保持后续列对齐', async () => {
+    await updateOutlineTableEntry_ACU({
+      name: '总体大纲',
+      sourceData: {
+        ddl: 'CREATE TABLE outline (row_id INTEGER PRIMARY KEY, chapter TEXT, legacy_note TEXT, plot TEXT);',
+        hiddenPhysicalColumns: ['legacy_note'],
+      },
+      content: [
+        ['row_id', '章节', '旧备注', '剧情'],
+        ['1', '第一章', '历史秘密', '启程'],
+      ],
+    });
+
+    const content = mockCreateLorebookEntries.mock.calls[0][1][0].content;
+    expect(content).toContain('| 章节 | 剧情 |');
+    expect(content).toContain('| 第一章 | 启程 |');
+    expect(content).not.toContain('旧备注');
+    expect(content).not.toContain('历史秘密');
+  });
+
   it('外部导入模式使用导入前缀', async () => {
     mockGetLorebookEntries.mockResolvedValue([]);
     await updateOutlineTableEntry_ACU({ name: '总体大纲', content: [['', '列1'], ['', '值1']] }, true);
@@ -280,6 +300,25 @@ describe('updateSummaryTableEntries_ACU', () => {
     expect(createArgs[1].length).toBe(2); // 2 行数据
     expect(createArgs[1][0].type).toBe('keyword');
     expect(createArgs[1][0].keys).toEqual(['AM0001']);
+  });
+
+  it('总结条目不包含隐藏 physical column，关键词列投影后仍正确定位', async () => {
+    await updateSummaryTableEntries_ACU({
+      name: '总结表',
+      sourceData: {
+        ddl: 'CREATE TABLE summary (row_id INTEGER PRIMARY KEY, code_index TEXT, legacy_note TEXT, content TEXT);',
+        hiddenPhysicalColumns: ['legacy_note'],
+      },
+      content: [
+        ['row_id', '编码索引', '旧备注', '内容'],
+        ['1', 'AM0001', '历史秘密', '第一条总结'],
+      ],
+    });
+
+    const entry = mockCreateLorebookEntries.mock.calls[0][1][0];
+    expect(entry.keys).toEqual(['AM0001']);
+    expect(entry.content).toBe('| AM0001 | 第一条总结 |\n');
+    expect(entry.content).not.toContain('历史秘密');
   });
 
   it('无"编码索引"列时记录错误', async () => {
@@ -386,6 +425,29 @@ describe('updateImportantPersonsRelatedEntries_ACU', () => {
     // 角色B(别名) 应该生成 ['角色B(别名)', '角色B'] 两个关键词
     const personBEntry = createArgs[1][2]; // 第 3 个条目是角色B
     expect(personBEntry.keys).toContain('角色B');
+  });
+
+  it('重要人物条目与表头不包含隐藏 physical column，姓名索引保持正确', async () => {
+    await updateImportantPersonsRelatedEntries_ACU({
+      name: '重要人物表',
+      sourceData: {
+        ddl: 'CREATE TABLE persons (row_id INTEGER PRIMARY KEY, name TEXT, legacy_note TEXT, description TEXT);',
+        hiddenPhysicalColumns: ['legacy_note'],
+      },
+      content: [
+        ['row_id', '姓名', '旧备注', '描述'],
+        ['1', '角色A', '历史秘密', '描述A'],
+      ],
+    });
+
+    const entries = mockCreateLorebookEntries.mock.calls[0][1];
+    const header = entries.find((entry: any) => String(entry.comment).includes('PersonsHeader'));
+    const person = entries.find((entry: any) => String(entry.comment).startsWith('重要人物条目'));
+    expect(header.content).toContain('| 姓名 | 描述 |');
+    expect(header.content).not.toContain('旧备注');
+    expect(person.keys).toEqual(['角色A']);
+    expect(person.content).toBe('| 角色A | 描述A |');
+    expect(person.content).not.toContain('历史秘密');
   });
 
   it('无"姓名"或"角色名"列时记录错误', async () => {

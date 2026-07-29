@@ -27,6 +27,10 @@ vi.mock('../../../src/service/template/chat-scope', () => ({
   ensureChatSheetGuideSeeded_ACU: (...args: any[]) => mockEnsureChatSheetGuideSeeded(...args),
   attachSeedRowsToCurrentDataFromGuide_ACU: (...args: any[]) => mockAttachSeedRows(...args),
   getSortedSheetKeys_ACU: vi.fn((data: any) => data ? Object.keys(data).filter((k: string) => k.startsWith('sheet_')) : []),
+  // 模板范围默认「未知」，即不过滤，保持既有用例语义。
+  resolveTemplateScope_ACU: vi.fn(() => null),
+  filterSheetKeysByTemplateScope_ACU: vi.fn((keys: string[]) => [...keys]),
+  projectSheetForTemplateScope_ACU: vi.fn((sheet: any) => sheet),
 }));
 
 vi.mock('../../../src/shared/utils', () => ({
@@ -126,6 +130,37 @@ describe('formatTableForSqliteMode', () => {
     expect(result).toContain('CREATE TABLE inventory');
   });
 
+  it('传入 runtimeTableName 时把 DDL 表名重绑定为运行时物理名', () => {
+    // AI 必须看到真实的 runtime 表名（显示名拼音），否则会照抄 DDL 原文英文名，
+    // 生成的 SQL 打到不存在的表上 → no such table。
+    const table = {
+      name: '主角信息',
+      sourceData: {
+        ddl: 'CREATE TABLE protagonist_info (row_id INTEGER PRIMARY KEY, character_name TEXT);',
+        note: '', insertNode: '', updateNode: '', deleteNode: '',
+      },
+      content: [['row_id', 'character_name']],
+      updateConfig: {},
+    };
+    const result = formatTableForSqliteMode(table, 0, 'sheet_zhujue', null, { runtimeTableName: 'zhujuexinxi' });
+    expect(result).toContain('CREATE TABLE zhujuexinxi');
+    expect(result).not.toContain('protagonist_info');
+  });
+
+  it('未传 runtimeTableName 时保持原 DDL 表名（向后兼容）', () => {
+    const table = {
+      name: '主角信息',
+      sourceData: {
+        ddl: 'CREATE TABLE protagonist_info (row_id INTEGER PRIMARY KEY, character_name TEXT);',
+        note: '', insertNode: '', updateNode: '', deleteNode: '',
+      },
+ content: [['row_id', 'character_name']],
+      updateConfig: {},
+    };
+    const result = formatTableForSqliteMode(table, 0, 'sheet_zhujue', null);
+    expect(result).toContain('CREATE TABLE protagonist_info');
+  });
+
   // ═══════════════════════════════════════════════════════════════
   // Note 和 Trigger 注释
   // ═══════════════════════════════════════════════════════════════
@@ -180,6 +215,52 @@ describe('formatTableForSqliteMode', () => {
     expect(result).toContain('-- | row_id | item_name |');
     expect(result).toContain('-- | 1 | 铁剑 |');
     expect(result).toContain('-- | 2 | 药水 |');
+  });
+
+  it('SQLite prompt 隐藏历史列但不修改底层 DDL 与行数据', () => {
+    const table: any = {
+      uid: 'inventory',
+      name: '背包物品表',
+      sourceData: {
+        ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, legacy_note TEXT, quantity INTEGER);',
+        hiddenPhysicalColumns: ['legacy_note'],
+      },
+      content: [['row_id', 'item_name', '旧备注', 'quantity'], ['1', '铁剑', '历史秘密', '3']],
+      updateConfig: {},
+    };
+
+    const result = formatTableForSqliteMode(table, 0, 'sheet_0', null);
+
+    expect(result).toContain('item_name TEXT');
+    expect(result).toContain('quantity INTEGER');
+    expect(result).not.toContain('legacy_note');
+    expect(result).not.toContain('历史秘密');
+    expect(table.sourceData.ddl).toContain('legacy_note TEXT');
+    expect(table.content[1]).toEqual(['1', '铁剑', '历史秘密', '3']);
+  });
+
+  it('隐藏列存在时忽略自定义 SQL 行模板并回退到可见列投影', () => {
+    mockReplaceDbSqlVariables.mockReturnValue('-- | 1 | 铁剑 | 历史秘密 | 3 |');
+    const table: any = {
+      uid: 'inventory',
+      name: '背包物品表',
+      sourceData: {
+        ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, legacy_note TEXT, quantity INTEGER);',
+        hiddenPhysicalColumns: ['legacy_note'],
+      },
+      content: [['row_id', 'item_name', '旧备注', 'quantity'], ['1', '铁剑', '历史秘密', '3']],
+      updateConfig: {
+        sendRowsSqlTemplate: '{[sql "SELECT * FROM inventory"]}',
+      },
+    };
+
+    const result = formatTableForSqliteMode(table, 0, 'sheet_0', null);
+
+    expect(mockReplaceDbSqlVariables).not.toHaveBeenCalled();
+    expect(result).toContain('-- | row_id | item_name | quantity |');
+    expect(result).toContain('-- | 1 | 铁剑 | 3 |');
+    expect(result).not.toContain('legacy_note');
+    expect(result).not.toContain('历史秘密');
   });
 
   it('配置填表发送数据模板时只替换当前数据部分并保留 DDL 与规则', () => {
@@ -380,6 +461,58 @@ describe('prepareAIInput_ACU — 显式 tableData 模式', () => {
     expect(result!.tableDataText).toContain('显式值');
     expect(result!.tableDataText).not.toContain('全局表');
     expect(result!.tableDataText).not.toContain('全局值');
+  });
+
+  it('SQLite prompt 明确标注 DDL 仅用于结构参考并禁止复制 CREATE', async () => {
+    mockIsSqliteMode = true;
+    mockSettings.strictJsonTableFillEnabled = true;
+    mockCurrentJsonTableData = {
+      sheet_0: {
+        uid: 'inventory',
+        name: '背包表',
+        sourceData: {
+          ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT);',
+        },
+        content: [['row_id', 'item_name'], ['1', '铁剑']],
+        updateConfig: {},
+        exportConfig: {},
+        orderNo: 0,
+      },
+    };
+
+    const result = await prepareAIInput_ACU([], 'standard', ['sheet_0'], {
+      tableData: mockCurrentJsonTableData,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.tableDataText).toContain('CREATE TABLE');
+    expect(result!.tableDataText).toContain('上方 CREATE TABLE 仅用于说明表结构');
+    expect(result!.tableDataText).toContain('严禁复制或输出 CREATE、ALTER、DROP、SELECT');
+    expect(result!.tableDataText).toContain('仅使用 INSERT INTO / INSERT OR REPLACE INTO / REPLACE INTO / UPDATE / DELETE FROM 数据变更语句');
+    expect(result!.tableDataText).toContain('按 SQLite 原生整行替换语义执行');
+  });
+
+  it('原生 prompt 使用 physical 投影隐藏历史列并保持右侧可见列对齐', async () => {
+    const result = await prepareAIInput_ACU([], 'standard', null, {
+      tableData: {
+        sheet_0: {
+          uid: 'sheet_0',
+          name: '显式表',
+          sourceData: {
+            ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT, legacy_note TEXT, status TEXT);',
+            hiddenPhysicalColumns: ['legacy_note'],
+          },
+          content: [['row_id', '姓名', '旧备注', '状态'], ['1', '助手', '不可见', '正常']],
+          updateConfig: {},
+        },
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.tableDataText).toContain('[0:姓名], [1:状态]');
+    expect(result!.tableDataText).toContain('[0] 助手, 正常');
+    expect(result!.tableDataText).not.toContain('旧备注');
+    expect(result!.tableDataText).not.toContain('不可见');
   });
 
   it('传入显式 tableData 且存在 guideData 时不调用全局 attach helper，且不污染原始显式对象', async () => {

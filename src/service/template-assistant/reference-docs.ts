@@ -54,6 +54,8 @@ export const TEMPLATE_ASSISTANT_EMBEDDED_REFERENCE_CHUNKS_ACU: TemplateAssistant
             '',
             '底层实现是一个 `Proxy`：`db.背包物品表` 返回一个 `TableQueryBuilder`，后续所有方法是链式调用，最后由**终结方法**决定输出形式。',
             '',
+            'ORM 会在完整只读 SQL 执行前根据当前 SQLite runtime schema 重绑定表和列标识符。表名可使用显示名、原始 DDL 表名、sheetKey、uid 或物理名；列名可使用显示名、物理名和无歧义的原始 DDL 列名。冲突不会按顺序猜测。',
+            '',
             '#### 2.1.1 查询构建方法（返回 `TableQueryBuilder`，可继续链式）',
             '',
             '| 方法 | SQL 等价 | 示例 |',
@@ -79,7 +81,7 @@ export const TEMPLATE_ASSISTANT_EMBEDDED_REFERENCE_CHUNKS_ACU: TemplateAssistant
             '| `.sum(\'列\')` / `.avg(\'列\')` / `.max(\'列\')` / `.min(\'列\')` | `number` | 聚合函数 |',
             '| `.exists()` | `boolean` | 是否存在至少一行 |',
             '| `.value(\'SQL表达式\')` | `string | number | null` | 在当前 WHERE 上下文里跑自定义 `SELECT <表达式>`，见下方示例 |',
-            '| `.toSQL()` | `string` | 生成的 SQL（调试用） |',
+            '| `.toSQL()` | `string` | 构建阶段 SQL（调试用），不保证已按当前 runtime schema 重绑定 |',
         ),
     },
     {

@@ -21,6 +21,8 @@ const {
   mockRunTableWriteTransaction,
   mockCHAT_SHEET_GUIDE_FIELD,
   mockListLorebooks,
+  mockResolveLorebookNameFromList,
+  mockResetPlotAgentWorldbookSessionSnapshot,
 } = vi.hoisted(() => ({
   mockSettings: {
     dataIsolationEnabled: false,
@@ -78,6 +80,14 @@ const {
     runCommit: async (commitTask: any) => commitTask(),
   })),
   mockCHAT_SHEET_GUIDE_FIELD: 'chatSheetGuide',
+  mockResolveLorebookNameFromList: vi.fn((requestedName: unknown, bookList: unknown) => {
+    const requested = String(requestedName ?? '').normalize('NFKC').replace(/[\u200B\uFEFF]/g, '').trim();
+    const matches = (Array.isArray(bookList) ? bookList : []).filter(item =>
+      String(item ?? '').normalize('NFKC').replace(/[\u200B\uFEFF]/g, '').trim() === requested
+    );
+    return matches.length === 1 ? String(matches[0]) : null;
+  }),
+  mockResetPlotAgentWorldbookSessionSnapshot: vi.fn(),
 }));
 
 vi.mock('../../../src/service/settings/settings-readers', () => ({
@@ -107,6 +117,7 @@ vi.mock('../../../src/data/gateways/worldbook-gateway', () => ({
   getCurrentCharPrimaryLorebook_ACU: mockGwGetCurrentCharPrimaryLorebook,
   getCurrentCharacterWorldbookBinding_ACU: mockGetCurrentCharacterWorldbookBinding,
   listLorebooks_ACU: mockListLorebooks,
+  resolveLorebookNameFromList_ACU: mockResolveLorebookNameFromList,
 }));
 
 vi.mock('../../../src/data/gateways/chat-gateway', () => ({
@@ -148,6 +159,10 @@ vi.mock('../../../src/service/table/table-write-transaction', () => ({
   runTableWriteTransaction_ACU: mockRunTableWriteTransaction,
 }));
 
+vi.mock('../../../src/service/agent/agent-worldbook-takeover', () => ({
+  resetPlotAgentWorldbookSessionSnapshot_ACU: mockResetPlotAgentWorldbookSessionSnapshot,
+}));
+
 import {
   resetScriptStateForNewChat_ACU,
   getInjectionTargetLorebook_ACU,
@@ -166,6 +181,7 @@ beforeEach(() => {
     apiSource: 'getCharWorldbookNames',
   });
   mockListLorebooks.mockResolvedValue(['角色世界书', '自定义世界书']);
+  mockResolveLorebookNameFromList.mockClear();
   mockSettings.dataIsolationEnabled = false;
   mockSettings.dataIsolationCode = '';
   mockSettings.knownCustomEntryNames = [];
@@ -226,6 +242,14 @@ describe('getInjectionTargetLorebook_ACU', () => {
     expect(result).toBe('自定义世界书');
   });
 
+  it('配置名称含全角或不可见字符差异时返回宿主真实名称', async () => {
+    mockGetCurrentWorldbookConfig.mockReturnValue({ injectionTarget: 'ＡＢＣ' });
+    mockListLorebooks.mockResolvedValue(['AB\u200BC']);
+
+    const result = await getInjectionTargetLorebook_ACU();
+    expect(result).toBe('AB\u200BC');
+  });
+
   it('角色无主世界书时返回 null', async () => {
     mockGetCurrentWorldbookConfig.mockReturnValue({ injectionTarget: 'character' });
     mockGetCurrentCharacterWorldbookBinding.mockResolvedValue({
@@ -247,6 +271,7 @@ describe('resetScriptStateForNewChat_ACU', () => {
     await resetScriptStateForNewChat_ACU('new-chat.jsonl');
     expect(mockSetCurrentChatFileIdentifier).toHaveBeenCalledWith('clean-chat');
     expect(mockLoadSettings).toHaveBeenCalled();
+    expect(mockResetPlotAgentWorldbookSessionSnapshot).toHaveBeenCalledTimes(1);
     expect(mockSetAllChatMessages).toHaveBeenCalledWith([]);
     expect(mockSetLastTotalAiMessages).toHaveBeenCalledWith(0);
     expect(mockSetCurrentJsonTableData).toHaveBeenCalledWith(null);
@@ -276,6 +301,7 @@ describe('resetScriptStateForNewChat_ACU', () => {
     await resetScriptStateForNewChat_ACU('');
 
     expect(mockSetCurrentChatFileIdentifier).toHaveBeenCalledWith('');
+    expect(mockResetPlotAgentWorldbookSessionSnapshot).toHaveBeenCalledTimes(1);
     expect(mockSetCurrentJsonTableData).toHaveBeenCalledWith(null);
     expect(mockSetIndependentTableStates).toHaveBeenCalledWith({});
     expect(mockSetAllChatMessages).toHaveBeenCalledWith([]);
@@ -292,6 +318,7 @@ describe('resetScriptStateForNewChat_ACU', () => {
 
     expect(mockSetCurrentChatFileIdentifier).not.toHaveBeenCalled();
     expect(mockSetCurrentJsonTableData).not.toHaveBeenCalled();
+    expect(mockResetPlotAgentWorldbookSessionSnapshot).not.toHaveBeenCalled();
     expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('invalid chat file name'));
   });
 

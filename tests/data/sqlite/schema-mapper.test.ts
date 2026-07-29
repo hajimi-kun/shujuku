@@ -15,8 +15,16 @@ import {
   parseDDLColumnComments,
   buildColumnNameMap,
   parseDDLColumnInfos_ACU,
+  resolveEffectiveDDL,
 } from '../../../src/data/sqlite/schema-mapper';
-import { parseDDLTableSuffix_ACU, parseDDLSafeDefaultLiteral_ACU } from '../../../src/shared/ddl-utils';
+import {
+  getSheetColumnProjection_ACU,
+  parseDDLTableSuffix_ACU,
+  parseDDLSafeDefaultLiteral_ACU,
+  projectSheetDDLForVisibleColumns_ACU,
+  projectSheetRowToVisibleColumns_ACU,
+  removeDDLColumnAtIndex_ACU,
+} from '../../../src/shared/ddl-utils';
 import type { Sheet_ACU } from '../../../src/shared/models/table-data';
 
 // ═══════════════════════════════════════════════════════════════
@@ -275,6 +283,90 @@ describe('parseDDLTableSuffix_ACU', () => {
   });
 });
 
+describe('hiddenPhysicalColumns projection', () => {
+  const sheet = makeSheet({
+    sourceData: {
+      note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '',
+      ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, legacy_note TEXT, quantity INTEGER);',
+      hiddenPhysicalColumns: ['legacy_note'],
+    },
+    content: [
+      ['row_id', '名称', '旧备注', '数量'],
+      ['1', '铁剑', '历史秘密', '3'],
+    ],
+  });
+
+  it('按 physical column 投影 DDL 与行，并保留右侧可见列 sourceIndex', () => {
+    const projection = getSheetColumnProjection_ACU(sheet);
+    expect(projection.visibleColumns.map(column => ({ physicalName: column.physicalName, sourceIndex: column.sourceIndex }))).toEqual([
+      { physicalName: 'row_id', sourceIndex: 0 },
+      { physicalName: 'item_name', sourceIndex: 1 },
+      { physicalName: 'quantity', sourceIndex: 3 },
+    ]);
+    expect(projectSheetDDLForVisibleColumns_ACU(sheet)).not.toContain('legacy_note');
+    expect(projectSheetRowToVisibleColumns_ACU(sheet, sheet.content[1])).toEqual(['1', '铁剑', '3']);
+    expect(sheet.content[1]).toEqual(['1', '铁剑', '历史秘密', '3']);
+  });
+  it('隐藏列投影保留剩余列的中文注释', () => {
+    // 注释是中文表头与 SQL 列名的唯一映射依据。投影时丢掉注释会让
+    // resolveInsertColumnMappings 匹配不到任何列，以「表头没有对应的 DDL 列」拒绝写入；
+    // prompt 里的 AI 也会失去列语义。
+    const commented = makeSheet({
+      sourceData: {
+        note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '',
+        ddl: [
+          'CREATE TABLE inventory (',
+          '  row_id INTEGER PRIMARY KEY, -- 行号',
+          '  item_name TEXT, -- 名称',
+          '  legacy_note TEXT, -- 旧备注',
+          '  quantity INTEGER -- 数量',
+          ');',
+        ].join('\n'),
+        hiddenPhysicalColumns: ['legacy_note'],
+      },
+      content: [
+        ['row_id', '名称', '旧备注', '数量'],
+        ['1', '铁剑', '历史秘密', '3'],
+      ],
+    });
+
+    const projected = projectSheetDDLForVisibleColumns_ACU(commented);
+    expect(projected).not.toContain('legacy_note');
+    expect(projected).not.toContain('旧备注');
+    expect(projected).toContain('-- 行号');
+    expect(projected).toContain('-- 名称');
+    expect(projected).toContain('-- 数量');
+  });
+
+
+
+  it('非法 hiddenPhysicalColumns 配置 fail closed', () => {
+    expect(() => getSheetColumnProjection_ACU({ ...sheet, sourceData: { ...sheet.sourceData, hiddenPhysicalColumns: 'legacy_note' as any } }))
+      .toThrow('必须是 physical column 字符串数组');
+    expect(() => getSheetColumnProjection_ACU({ ...sheet, sourceData: { ...sheet.sourceData, hiddenPhysicalColumns: ['legacy_note', 'LEGACY_NOTE'] } }))
+      .toThrow('大小写不敏感的重复');
+    expect(() => getSheetColumnProjection_ACU({ ...sheet, sourceData: { ...sheet.sourceData, hiddenPhysicalColumns: ['row_id'] } }))
+      .toThrow('row_id 不允许隐藏');
+    expect(() => getSheetColumnProjection_ACU({ ...sheet, sourceData: { ...sheet.sourceData, hiddenPhysicalColumns: ['missing_col'] } }))
+      .toThrow('指向不存在的 physical column');
+  });
+
+  it('DDL 与表头无法完整对齐时按名匹配隐藏列，而不是拒绝投影', () => {
+    // 模板范围投影会构造「模板列少于运行时列」的形态：DDL 列数与 content[0] 不等。
+    // 此时不再抛错，而是按 DDL 物理名 / 表头名匹配隐藏列。
+    const projection = getSheetColumnProjection_ACU({
+      ...sheet,
+      sourceData: {
+        ...sheet.sourceData,
+        ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, legacy_note TEXT);',
+      },
+    });
+    // legacy_note 在 DDL 里存在，仍应被识别为隐藏列。
+    expect(projection.hiddenPhysicalColumns).toEqual(['legacy_note']);
+    expect(projection.visibleColumns.some(column => column.header === '旧备注')).toBe(false);
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════
 // generateDDL
 // ═══════════════════════════════════════════════════════════════
@@ -304,6 +396,37 @@ describe('generateDDL', () => {
   });
 });
 
+describe('resolveEffectiveDDL', () => {
+  it('非法显式 DDL 仅生成 runtime fallback，不改写 sourceData.ddl', () => {
+    const sheet = makeSheet({
+      sourceData: { note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '', ddl: 'CREATE TABLE broken ( INVALID SYNTAX;' },
+      content: [['row_id', '姓名', '状态'], ['1', 'A', '就绪']],
+    });
+
+    const resolved = resolveEffectiveDDL(sheet, 'sheet_runtime');
+
+    expect(resolved.source).toBe('fallback_invalid');
+    expect(resolved.effectiveDDL).toContain('CREATE TABLE sheet_runtime');
+    expect(resolved.effectiveDDL).toContain('xing_ming TEXT');
+    expect(resolved.columnMap.mappings.map(mapping => mapping.sqlName)).toEqual(['row_id', 'xing_ming', 'zhuang_tai']);
+    expect(sheet.sourceData.ddl).toBe('CREATE TABLE broken ( INVALID SYNTAX;');
+  });
+
+  it('fallback columnMap 与 DDL 对中文、保留字和物理冲突保持一致', () => {
+    const sheet = makeSheet({
+      content: [['row_id', '物品名称', 'select', 'Name', 'name'], ['1', '铁剑', 'x', 'A', 'B']],
+    });
+
+    const resolved = resolveEffectiveDDL(sheet, 'sheet_mapping');
+
+    expect(resolved.source).toBe('fallback_missing');
+    expect(resolved.columnMap.mappings.map(mapping => mapping.sqlName)).toEqual(['row_id', 'wu_pin_ming_cheng', 'col_select', 'name', 'name_2']);
+    for (const mapping of resolved.columnMap.mappings.slice(1)) {
+      expect(resolved.effectiveDDL).toMatch(new RegExp(`${mapping.sqlName} TEXT,? -- ${mapping.displayName}`));
+    }
+  });
+});
+
 // ═══════════════════════════════════════════════════════════════
 // generateFallbackDDL
 // ═══════════════════════════════════════════════════════════════
@@ -321,16 +444,17 @@ describe('generateFallbackDDL', () => {
 
   it('中文列名生成稳定且唯一的 ASCII 物理列名，并保留表头注释', () => {
     const ddl = generateFallbackDDL('test_table', ['row_id', '姓名', '状态']);
-    expect(ddl).toContain('col_1 TEXT');
+    expect(ddl).toContain('xing_ming TEXT');
     expect(ddl).toContain('-- 姓名');
-    expect(ddl).toContain('col_2 TEXT -- 状态');
+    expect(ddl).toContain('zhuang_tai TEXT -- 状态');
     expect(validateDDLAgainstHeaders(ddl, ['row_id', '姓名', '状态']).valid).toBe(true);
   });
 
-  it('重复 ASCII 表头不会生成重复 DDL 列名', () => {
+  it('物理列冲突按稳定后缀消除，保留显示表头', () => {
     const ddl = generateFallbackDDL('test_table', ['row_id', 'name', 'name']);
     expect(ddl).toContain('name TEXT');
     expect(ddl).toContain('name_2 TEXT');
+    expect(ddl).toContain('-- name');
   });
 
   it('空 headers 生成最小 DDL', () => {
@@ -347,7 +471,8 @@ describe('generateInserts', () => {
     const sheet = makeSheet();
     const inserts = generateInserts(sheet, 'test_table');
     expect(inserts).toHaveLength(2);
-    expect(inserts[0]).toContain('INSERT OR REPLACE INTO');
+    expect(inserts[0]).toContain('INSERT INTO');
+    expect(inserts[0]).not.toContain('INSERT OR REPLACE');
     expect(inserts[0]).toContain('test_table');
   });
 
@@ -421,7 +546,7 @@ describe('generateInserts', () => {
     const inserts = generateInserts(sheet, 'chronicle');
 
     expect(inserts).toEqual([
-      "INSERT OR REPLACE INTO chronicle (row_id, code_index, time_span, summary, chronicle_text, key_dialogue) VALUES (1, 'AM0001', '2026-10-15 14:30 ~ 2026-10-15 15:00', '摘要', '完整纪要正文', NULL);",
+      "INSERT INTO chronicle (row_id, code_index, time_span, summary, chronicle_text, key_dialogue) VALUES (1, 'AM0001', '2026-10-15 14:30 ~ 2026-10-15 15:00', '摘要', '完整纪要正文', NULL);",
     ]);
   });
 
@@ -442,7 +567,7 @@ describe('generateInserts', () => {
     });
 
     expect(generateInserts(sheet, 'inventory')).toEqual([
-      "INSERT OR REPLACE INTO inventory (row_id, item_name) VALUES (1, '铁剑');",
+      "INSERT INTO inventory (row_id, item_name) VALUES (1, '铁剑');",
     ]);
   });
 
@@ -537,7 +662,7 @@ describe('generateInserts', () => {
     });
 
     expect(generateInserts(sheet, 'inventory')).toEqual([
-      "INSERT OR REPLACE INTO inventory (row_id, item_name, quantity) VALUES (1, '铁剑', 3);",
+      "INSERT INTO inventory (row_id, item_name, quantity) VALUES (1, '铁剑', 3);",
     ]);
   });
 
@@ -738,6 +863,19 @@ describe('validateDDLAgainstHeaders', () => {
     expect(result.mismatches).toHaveLength(0);
   });
 
+  it('row_id 的 INTEGER 与 PRIMARY KEY 被行内注释分隔时仍按解析结构校验', () => {
+    const ddl = `CREATE TABLE inventory (
+      row_id INTEGER -- 行号
+        PRIMARY KEY,
+      item_name TEXT -- 名称
+    );`;
+
+    const result = validateDDLAgainstHeaders(ddl, ['row_id', '名称']);
+
+    expect(result.valid).toBe(true);
+    expect(result.mismatches).toEqual([]);
+  });
+
   it('列数不匹配时报告', () => {
     const ddl = `CREATE TABLE test (
       row_id INTEGER PRIMARY KEY,
@@ -768,5 +906,64 @@ describe('validateDDLAgainstHeaders', () => {
     const result = validateDDLAgainstHeaders(ddl, ['row_id', '姓名', '年龄']);
     expect(result.valid).toBe(false);
     expect(result.mismatches.some(m => m.includes('第 1 列不匹配'))).toBe(true);
+  });
+});
+
+describe('removeDDLColumnAtIndex_ACU', () => {
+  it('精确移除目标列并保留其他原始列定义、块注释与 suffix', () => {
+    const ddl = `CREATE TABLE inventory (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  keep TEXT /* 业务兼容说明 */ DEFAULT 'x', -- 保留列
+  obsolete TEXT -- 删除列
+) STRICT;`;
+
+    const result = removeDDLColumnAtIndex_ACU(ddl, 2);
+
+    expect(result).toContain("keep TEXT /* 业务兼容说明 */ DEFAULT 'x' -- 保留列");
+    expect(result).not.toContain("keep TEXT /* 业务兼容说明 */ DEFAULT 'x', -- 保留列");
+    expect(result).toContain(') STRICT;');
+    expect(result).not.toContain('obsolete TEXT');
+  });
+
+  it('删除末尾业务列时移除前一列分隔逗号并保留注释', () => {
+    const ddl = `CREATE TABLE inventory (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  keep TEXT, -- 保留列
+  obsolete TEXT -- 删除列
+);`;
+
+    const result = removeDDLColumnAtIndex_ACU(ddl, 2);
+
+    expect(result).toContain('keep TEXT -- 保留列');
+    expect(result).not.toContain('keep TEXT, -- 保留列');
+  });
+
+  it('目标列被表级约束以无引号名称引用时 fail closed', () => {
+    const ddl = `CREATE TABLE inventory (
+  row_id INTEGER PRIMARY KEY,
+  "note" TEXT,
+  CONSTRAINT note_required CHECK(note IS NOT NULL)
+);`;
+
+    expect(() => removeDDLColumnAtIndex_ACU(ddl, 1)).toThrow('表级约束');
+  });
+
+  it('表级约束与普通列同一物理行时仍 fail closed', () => {
+    const ddl = `CREATE TABLE inventory (
+  row_id INTEGER PRIMARY KEY,
+  "note" TEXT,
+  keep TEXT, CONSTRAINT note_required CHECK(note IS NOT NULL)
+);`;
+
+    expect(() => removeDDLColumnAtIndex_ACU(ddl, 1)).toThrow('表级约束');
+  });
+
+  it('拒绝 row_id、内联约束和无法按行精确删除的 DDL', () => {
+    expect(() => removeDDLColumnAtIndex_ACU('CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT);', 0)).toThrow('row_id');
+    expect(() => removeDDLColumnAtIndex_ACU(`CREATE TABLE inventory (
+  row_id INTEGER PRIMARY KEY,
+  name TEXT UNIQUE
+);`, 1)).toThrow('带有约束');
+    expect(() => removeDDLColumnAtIndex_ACU('CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT, obsolete TEXT);', 2)).toThrow('多行列定义或表级约束');
   });
 });

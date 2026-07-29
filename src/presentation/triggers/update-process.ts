@@ -245,6 +245,10 @@ export async function proceedWithCardUpdate_ACU(
             setTimeout(() => {
                 notifyTableUpdate();
             }, 250);
+        } else if (result.skippedNoSql && !isSilentMode) {
+            // [SQL假保存修复] AI 本轮未产出可执行 SQL：静默跳过，不报成功/失败，仅提示未写入。
+            showToastr_ACU('warning', '未写入：AI 本轮未产出可执行 SQL，已跳过（门禁未推进）。');
+            updateStatusText('未写入：AI 未产出可执行 SQL。', false);
         } else if (!result.success && !result.aborted && !isSilentMode) {
             showToastr_ACU('error', `更新失败: ${result.error || '未知错误'}`);
             updateStatusText('错误：更新失败。', false);
@@ -320,15 +324,14 @@ export async function handleManualUpdate_ACU() {
         const selectedSheetSummary = buildLegacySelectedSheetSummary_ACU(targetKeys);
         const checkpointFloorsLabel = buildLegacyCheckpointFloorsLabel_ACU();
         const manualRefillRangeLabel = buildLegacyManualRefillRangeLabel_ACU();
-        // 弹出确认框：手动填表将使用事务式重填，失败不会改动聊天记录中的旧数据
+        // 弹出确认框：手动填表会先删除范围内选中表的 checkpoint 与增量，再重新填写
         const confirmed = await showCustomConfirm_ACU(
             '手动填表确认',
             `即将执行手动填表。\n\n当前 full checkpoint：${checkpointFloorsLabel}\n本次重填范围：${manualRefillRangeLabel}\n选中表：${selectedSheetSummary}\n\n` +
-            '系统会先在 service 层做重填边界检查，并在内存中按当前上下文和批处理设置准备重填当前选中的表。\n' +
-            '常规路径只会在确认可回放边界后清理本次范围内选中表的 V2 增量日志与 revision 指纹，并在全部成功后写入手动重填进度记录。\n' +
-            '如果边界检查确认重填起点前没有可回放 checkpoint，系统会停止并弹出第二次破坏性确认；只有你在第二次确认中授权后，才会替换本次范围内选中表的旧 checkpoint 基底并写入新的单表 checkpoint。\n' +
+            '高风险操作：系统会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志，再以清理后的状态作为填表基底重新填写，最后写入新的单表 checkpoint。\n' +
+            '如果被删除的 checkpoint 是这些表唯一的数据基线，此前楼层的表格数据将无法恢复。\n' +
             '保留边界 checkpoint 会按 AI 回复楼层计数，在达到保留窗口和 20 个 AI 楼层缓冲后自动滚动建立。\n' +
-            '取消、失败、终止或从中断处继续时，都不会清空本次重填范围之外的聊天记录表格数据，也不会在未二次确认时替换 checkpoint 基底。',
+            '范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或终止时会回滚到本次操作前的状态。',
             { confirmLabel: '确认并继续', cancelLabel: '取消' }
         );
 
@@ -362,7 +365,7 @@ export async function handleManualUpdate_ACU() {
             },
         });
 
-        let result = await orchestrateManualUpdate_ACU(
+        const result = await orchestrateManualUpdate_ACU(
             targetKeys,
             // processBatch 回调保留给兼容路径；当前手动填表主路径由 service grouped helper 执行。
             async (indices, batchMode, batchOptions) => {
@@ -379,36 +382,6 @@ export async function handleManualUpdate_ACU() {
             }
         );
 
-        if (!result.success && result.requiresUserConfirmation) {
-            const request = result.requiresUserConfirmation;
-            const dangerConfirmed = await showCustomConfirm_ACU(
-                '破坏性手动重填确认',
-                `${request.message}\n\n` +
-                `高风险操作：确认后会在一次提交中删除本次重填范围内选中表的旧表基底，并写入新的单表 checkpoint，随后才继续本次手动填表。\n` +
-                `目标表：${request.targetSheetKeys.join('、')}\n` +
-                `目标消息索引：${request.contextScopeIndices.join('、')}\n\n` +
-                '范围外 checkpoint、范围外聊天记录表格数据和未选中的表不会被删除。\n' +
-                '此操作不可撤销。取消将不会执行基底替换，不会写入新的单表 checkpoint，也不会继续本次手动填表。',
-                { confirmLabel: '我已了解风险，继续执行', cancelLabel: '取消' }
-            );
-            if (!dangerConfirmed) {
-                clearLoadingToast(manualProgressToast);
-                manualProgressToast = null;
-                showToastr_ACU('info', '已取消破坏性基底替换。');
-                return;
-            }
-            updateLoadingToastMessage(manualProgressToast, '已确认破坏性基底替换，继续手动填表。');
-            result = await orchestrateManualUpdate_ACU(
-                targetKeys,
-                async (indices, batchMode, batchOptions) => {
-                    return processUpdates_ACU(indices, batchMode, batchOptions);
-                },
-                async () => {
-                    await refreshMergedDataAndNotifyWithUI_ACU();
-                },
-                { clearBeforeUpdate: true, confirmBoundaryReset: true, onProgress: event => handleProgressEvent(event, false, manualProgressToast) }
-            );
-        }
         clearLoadingToast(manualProgressToast);
         manualProgressToast = null;
 

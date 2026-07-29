@@ -10,8 +10,9 @@ import { openAutoCardPopup_ACU } from '../../pages/main-popup';
 import { openNewVisualizer_ACU } from '../../pages/visualizer';
 import { showToastr_ACU } from '../../theme/toast';
 import { handleManualUpdate_ACU } from '../../triggers/update-process';
-import { deleteApiPreset_ACU, loadApiPreset_ACU } from '../../triggers/settings-ui-sync';
 import { saveSettingsAndNotify_ACU } from '../../components/settings-ui-helpers';
+// deleteApiPreset_ACU / loadApiPreset_ACU 不再从公开 API 层直接导入；
+// 内部 UI 仍通过 settings-ui-sync 独立使用，不受公开 API 收敛影响。
 import type { ApiGroupContext } from './callback-api';
 import {
     clonePromptSegments_ACU,
@@ -237,143 +238,77 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
         // API 预设管理 API
         // =========================
 
-        getApiPresets: function() {
+        getApiPresets: function(): any[] {
             try {
-                const presets = settings_ACU.apiPresets || [];
-                return JSON.parse(JSON.stringify(presets));
+                // 已弃用：公开 API 不再返回预设内容，请使用 callAI 受限代理接口发起 AI 请求。
+                logError_ACU('getApiPresets: 已弃用，公开 API 不再暴露预设内容，请使用 callAI');
+                return [];
             } catch (e) {
                 logError_ACU('getApiPresets failed:', e);
                 return [];
             }
         },
 
-        getTableApiPreset: function() {
+        getTableApiPreset: function(): string {
             try {
-                return settings_ACU.tableApiPreset || '';
+                // 已弃用：公开 API 不再暴露内部预设选择状态，请使用 callAI 受限代理接口并在 options 中指定 presetName。
+                logError_ACU('getTableApiPreset: 已弃用，公开 API 不再暴露内部配置状态');
+                return '';
             } catch (e) {
                 logError_ACU('getTableApiPreset failed:', e);
                 return '';
             }
         },
 
-        setTableApiPreset: function(presetName: string) {
+        setTableApiPreset: function(presetName: string): boolean {
             try {
-                if (presetName === '') {
-                    settings_ACU.tableApiPreset = '';
-                    saveSettingsAndNotify_ACU();
-                    logDebug_ACU('Table API preset cleared (use current config)');
-                    return true;
-                }
-
-                const presets = settings_ACU.apiPresets || [];
-                const exists = presets.some((p: any) => p.name === presetName);
-                if (!exists) {
-                    logError_ACU(`setTableApiPreset: Preset "${presetName}" not found`);
-                    return false;
-                }
-
-                settings_ACU.tableApiPreset = presetName;
-                saveSettingsAndNotify_ACU();
-                logDebug_ACU(`Table API preset set to: ${presetName}`);
-                return true;
+                // 已弃用：公开 API 不再允许外部切换内部预设选择，请使用 callAI 受限代理接口并在 options 中指定 presetName。
+                logError_ACU('setTableApiPreset: 已弃用，公开 API 不再允许外部修改内部配置');
+                return false;
             } catch (e) {
                 logError_ACU('setTableApiPreset failed:', e);
                 return false;
             }
         },
 
-        getPlotApiPreset: function() {
+        getPlotApiPreset: function(): string {
             try {
-                return settings_ACU.plotApiPreset || '';
+                // 已弃用：公开 API 不再暴露内部预设选择状态，请使用 callAI 受限代理接口并在 options 中指定 presetName。
+                logError_ACU('getPlotApiPreset: 已弃用，公开 API 不再暴露内部配置状态');
+                return '';
             } catch (e) {
                 logError_ACU('getPlotApiPreset failed:', e);
                 return '';
             }
         },
 
-        setPlotApiPreset: function(presetName: string) {
+        setPlotApiPreset: function(presetName: string): boolean {
             try {
-                if (presetName === '') {
-                    settings_ACU.plotApiPreset = '';
-                    saveSettingsAndNotify_ACU();
-                    logDebug_ACU('Plot API preset cleared (use current config)');
-                    return true;
-                }
-
-                const presets = settings_ACU.apiPresets || [];
-                const exists = presets.some((p: any) => p.name === presetName);
-                if (!exists) {
-                    logError_ACU(`setPlotApiPreset: Preset "${presetName}" not found`);
-                    return false;
-                }
-
-                settings_ACU.plotApiPreset = presetName;
-                saveSettingsAndNotify_ACU();
-                logDebug_ACU(`Plot API preset set to: ${presetName}`);
-                return true;
+                // 已弃用：公开 API 不再允许外部切换内部预设选择，请使用 callAI 受限代理接口并在 options 中指定 presetName。
+                logError_ACU('setPlotApiPreset: 已弃用，公开 API 不再允许外部修改内部配置');
+                return false;
             } catch (e) {
                 logError_ACU('setPlotApiPreset failed:', e);
                 return false;
             }
         },
 
-        saveApiPreset: function(presetData: any) {
+        saveApiPreset: function(presetData: any): boolean {
             try {
-                if (!presetData || typeof presetData !== 'object') {
-                    logError_ACU('saveApiPreset: Invalid presetData');
-                    return false;
-                }
-                if (!presetData.name || typeof presetData.name !== 'string' || presetData.name.trim() === '') {
-                    logError_ACU('saveApiPreset: preset name is required');
-                    return false;
-                }
-
-                const newPreset = {
-                    name: presetData.name.trim(),
-                    apiMode: typeof presetData.apiMode === 'string' && presetData.apiMode.trim()
-                        ? presetData.apiMode.trim()
-                        : (settings_ACU.apiMode || 'custom'),
-                    apiConfig: presetData.apiConfig && typeof presetData.apiConfig === 'object'
-                        ? JSON.parse(JSON.stringify(presetData.apiConfig))
-                        : JSON.parse(JSON.stringify(settings_ACU.apiConfig || {})),
-                    tavernProfile: typeof presetData.tavernProfile === 'string'
-                        ? presetData.tavernProfile
-                        : (settings_ACU.tavernProfile || '')
-                };
-
-                if (!Array.isArray(settings_ACU.apiPresets)) {
-                    settings_ACU.apiPresets = [];
-                }
-                const existingIndex = settings_ACU.apiPresets.findIndex((p: any) => p?.name === newPreset.name);
-                if (existingIndex >= 0) {
-                    settings_ACU.apiPresets[existingIndex] = newPreset;
-                } else {
-                    settings_ACU.apiPresets.push(newPreset);
-                }
-                saveSettingsAndNotify_ACU();
-                logDebug_ACU(`API preset saved from external API: ${newPreset.name}`);
-                return true;
+                // 已弃用：公开 API 不再允许外部保存完整 API 预设（含 apiKey/settings/tavernProfile），请通过插件内部 UI 管理预设，通过 callAI 受限代理接口发起请求。
+                logError_ACU('saveApiPreset: 已弃用，公开 API 不再允许外部保存 API 预设，请使用内部 UI 管理预设');
+                return false;
             } catch (e) {
                 logError_ACU('saveApiPreset failed:', e);
                 return false;
             }
         },
 
-        loadApiPreset: function(presetName: string) {
+        loadApiPreset: function(presetName: string): boolean {
             try {
-                if (!presetName || typeof presetName !== 'string') {
-                    logError_ACU('loadApiPreset: preset name is required');
-                    return false;
-                }
-
-                const result = loadApiPreset_ACU(presetName);
-                if (result) {
-                    logDebug_ACU(`API preset loaded: ${presetName}`);
-                    return true;
-                } else {
-                    logError_ACU(`loadApiPreset: Preset "${presetName}" not found`);
-                    return false;
-                }
+                // 已弃用：公开 API 不再允许外部加载完整 API 预设（含 apiKey/settings/tavernProfile），请通过插件内部 UI 管理预设。
+                logError_ACU('loadApiPreset: 已弃用，公开 API 不再允许外部加载 API 预设');
+                return false;
             } catch (e) {
                 logError_ACU('loadApiPreset failed:', e);
                 return false;
@@ -587,20 +522,11 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
             }
         },
 
-        deleteApiPreset: function(presetName: string) {
+        deleteApiPreset: function(presetName: string): boolean {
             try {
-                if (!presetName || typeof presetName !== 'string') {
-                    logError_ACU('deleteApiPreset: preset name is required');
-                    return false;
-                }
-
-                const deleted = deleteApiPreset_ACU(presetName);
-                if (!deleted) {
-                    logError_ACU(`deleteApiPreset: Preset "${presetName}" not found`);
-                    return false;
-                }
-                logDebug_ACU(`API preset deleted: ${presetName}`);
-                return true;
+                // 已弃用：公开 API 不再允许外部删除 API 预设，请通过插件内部 UI 管理预设。
+                logError_ACU('deleteApiPreset: 已弃用，公开 API 不再允许外部删除 API 预设');
+                return false;
             } catch (e) {
                 logError_ACU('deleteApiPreset failed:', e);
                 return false;

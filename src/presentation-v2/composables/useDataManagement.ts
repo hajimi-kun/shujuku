@@ -13,7 +13,8 @@ import {
 } from '../../shared/defaults-json.js';
 import { normalizeIsolationCode_ACU } from '../../shared/data-constants';
 import { ensureSheetOrderNumbers_ACU, logError_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
-import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, settings_ACU } from '../../service/runtime/state-manager';
+import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
+import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU } from '../../service/runtime/state-manager';
 import {
   applyTemplateScopeForCurrentChat_ACU,
   applyCombinedSettingsImport_ACU,
@@ -33,6 +34,9 @@ import { clearCurrentChatTemplateSnapshots_ACU, sanitizeChatSheetsObject_ACU } f
 import { clearCurrentTableLocks_ACU } from '../../service/runtime/helpers-table-lock';
 import { clearCurrentChatPlotPresetOverride_ACU } from '../../service/plot/plot-logic';
 import { buildCurrentTableCheckpoint_ACU, parseTableCheckpointFile_ACU, restoreTableCheckpointToLatestAi_ACU, type TableCheckpointFileV1_ACU } from '../../service/table/table-checkpoint-transfer';
+import { buildRegisteredMixedStorageSnapshotTransfer_ACU, commitRegisteredMixedStorageDecision_ACU, getActiveMixedStorageDecisionSummary_ACU, type MixedStorageDecisionSummary_ACU } from '../../service/table/mixed-storage-decision-registry';
+import type { MixedStorageCommitAction_ACU } from '../../shared/models/mixed-storage-commit-action';
+import { commitPreparedV2Recovery_ACU, prepareV2Recovery_ACU, scanV2IsolationDiagnostics_ACU, type V2IsolationDiagnostic_ACU, type V2RecoverySummary_ACU } from '../../service/table/table-v2-recovery-service';
 import { useToastStore } from '../stores/toast-store';
 
 export type DataMgmtMessageKind = 'info' | 'success' | 'warning' | 'error';
@@ -160,6 +164,9 @@ export function useDataManagement() {
   const busyAction = ref('');
   const isolationCode = ref('');
   const activeIsolationCode = ref('');
+  const mixedStorageDecision = ref<MixedStorageDecisionSummary_ACU | null>(null);
+  const v2RecoverySummary = ref<V2RecoverySummary_ACU | null>(null);
+  const v2IsolationDiagnostics = ref<V2IsolationDiagnostic_ACU[]>([]);
   const isolationHistory = ref<string[]>([]);
   const deleteRange = reactive({
     startFloor: 1 as number | string,
@@ -199,6 +206,7 @@ export function useDataManagement() {
     deleteRange.endFloor = settings_ACU.deleteEndFloor || '';
     retainRecentLayers.value = normalizeRetainRecentLayers(settings_ACU.retainRecentLayers ?? 100);
     aiMessageCount.value = getAiMessageCount();
+    mixedStorageDecision.value = getActiveMixedStorageDecisionSummary_ACU();
   }
 
   function getCheckpointTargetStorageMode(): 'native' | 'sqlite' {
@@ -341,6 +349,139 @@ export function useDataManagement() {
       logError_ACU('[ACU-V2] exportTableCheckpoint failed', e);
       message.value = null;
       toast.error(`导出 Checkpoint 失败：${e?.message || '未知错误'}`);
+    }
+  }
+
+  function exportMixedStorageSnapshots(): void {
+    const decision = mixedStorageDecision.value;
+    if (!decision) {
+      toast.warning('当前没有可导出的混合存储决议。');
+      return;
+    }
+    busyAction.value = 'export-mixed-storage-snapshots';
+    try {
+      const transfer = buildRegisteredMixedStorageSnapshotTransfer_ACU(decision.decisionId);
+      downloadJson(transfer.legacy.filename, transfer.legacy.payload);
+      downloadJson(transfer.v2.filename, transfer.v2.payload);
+      toast.success('已导出 legacy-v1 与 V2 两份混合存储快照。');
+    } catch (e: any) {
+      logError_ACU('[ACU-V2] exportMixedStorageSnapshots failed', e);
+      mixedStorageDecision.value = getActiveMixedStorageDecisionSummary_ACU();
+      toast.error(`导出混合存储快照失败：${e?.message || '未知错误'}`);
+    } finally {
+      busyAction.value = '';
+    }
+  }
+
+  async function commitMixedStorageDecision(action: MixedStorageCommitAction_ACU): Promise<void> {
+    const decision = mixedStorageDecision.value;
+    if (!decision) {
+      toast.warning('混合存储决议已失效，请重新加载当前聊天。');
+      return;
+    }
+    busyAction.value = `commit-mixed-storage-${action}`;
+    try {
+      const result = await commitRegisteredMixedStorageDecision_ACU(decision.decisionId, action);
+      mixedStorageDecision.value = getActiveMixedStorageDecisionSummary_ACU();
+      if (result.status === 'committed') {
+        toast.success(action === 'keep_v2' ? '已保留 V2 数据并清理冗余 legacy 数据。' : '已提交经验证的混合存储合并候选。');
+      } else if (result.status === 'committed_postcondition_failed') {
+        toast.warning(`数据已保存，但后置校验失败：${result.error || '未知错误'}。请重新加载当前聊天后核对数据。`, { muteable: false, durationMs: 6000 });
+      } else {
+        toast.error(`混合存储提交失败：${result.error || '未知错误'}`);
+      }
+    } catch (e: any) {
+      logError_ACU('[ACU-V2] commitMixedStorageDecision failed', e);
+      mixedStorageDecision.value = getActiveMixedStorageDecisionSummary_ACU();
+      toast.error(`混合存储决议已失效：${e?.message || '未知错误'}`);
+    } finally {
+      busyAction.value = '';
+    }
+  }
+
+  function scanV2IsolationDiagnostics(): void {
+    busyAction.value = 'scan-v2-isolation-diagnostics';
+    try {
+      v2IsolationDiagnostics.value = scanV2IsolationDiagnostics_ACU();
+      if (v2IsolationDiagnostics.value.length === 0) {
+        toast.warning('当前聊天不存在 V2 storage frame，无法生成隔离域恢复诊断。');
+      } else {
+        toast.info(`已完成 ${v2IsolationDiagnostics.value.length} 个 V2 隔离域的只读诊断。`);
+      }
+    } catch (e: any) {
+      logError_ACU('[ACU-V2] scanV2IsolationDiagnostics failed', e);
+      v2IsolationDiagnostics.value = [];
+      toast.error(`V2 隔离域诊断失败：${e?.message || '未知错误'}`);
+    } finally {
+      busyAction.value = '';
+    }
+  }
+
+  function prepareV2Recovery(): void {
+    busyAction.value = 'prepare-v2-recovery';
+    try {
+      v2RecoverySummary.value = prepareV2Recovery_ACU();
+      const summary = v2RecoverySummary.value;
+      if (summary.status === 'recoverable_repaired_checkpoint') {
+        toast.warning('检测到可修复的 V2 full checkpoint。请先导出原始 frame 备份，再确认提交。', { muteable: false, durationMs: 6000 });
+      } else if (summary.status === 'recoverable_orphan_data_replace') {
+        toast.warning('检测到无锚点 data_replace。该恢复必须经过两次明确确认。', { muteable: false, durationMs: 6000 });
+      } else {
+        toast.warning(summary.message, { muteable: false, durationMs: 6000 });
+      }
+    } catch (e: any) {
+      logError_ACU('[ACU-V2] prepareV2Recovery failed', e);
+      v2RecoverySummary.value = null;
+      toast.error(`V2 恢复诊断失败：${e?.message || '未知错误'}`);
+    } finally {
+      busyAction.value = '';
+    }
+  }
+
+  function exportV2RecoveryBackups(): void {
+    const isolationKey = getCurrentIsolationKey_ACU();
+    const backups = getChatArray_ACU().flatMap((message: any, messageIndex: number) => {
+      if (message?.is_user) return [];
+      const backup = readIsolatedTagData_ACU(message, isolationKey)?.recoveryBackup;
+      return backup ? [{ messageIndex, backup: JSON.parse(JSON.stringify(backup)) }] : [];
+    });
+    if (backups.length === 0) {
+      toast.warning('当前隔离标识没有可导出的 V2 恢复原始 frame 备份。');
+      return;
+    }
+    try {
+      const chatName = String(currentChatFileIdentifier_ACU || 'current_chat').replace(/[\/:*?"<>|]+/g, '_');
+      downloadJson(`TavernDB_v2_recovery_backups_${chatName}_${formatCheckpointExportTimestamp()}.json`, { version: 1, isolationKey, backups });
+      toast.success(`已导出 ${backups.length} 份 V2 恢复原始 frame 备份。`);
+    } catch (e: any) {
+      logError_ACU('[ACU-V2] exportV2RecoveryBackups failed', e);
+      toast.error(`导出 V2 恢复备份失败：${e?.message || '未知错误'}`);
+    }
+  }
+
+  async function commitV2Recovery(confirmOrphanDataReplace: boolean): Promise<void> {
+    const summary = v2RecoverySummary.value;
+    if (!summary?.planId || !summary.status.startsWith('recoverable_')) {
+      toast.warning('V2 恢复计划已失效，请重新诊断。');
+      return;
+    }
+    busyAction.value = 'commit-v2-recovery';
+    try {
+      const result = await commitPreparedV2Recovery_ACU(summary.planId, { confirmOrphanDataReplace });
+      if (result.status === 'committed') {
+        v2RecoverySummary.value = null;
+        toast.success('V2 恢复已保存；原始 frame 已写入隔离备份。');
+      } else if (result.status === 'committed_postcondition_failed') {
+        v2RecoverySummary.value = null;
+        toast.warning(`V2 恢复已保存，但后置校验失败：${result.error || '未知错误'}。请重新加载当前聊天核对数据。`, { muteable: false, durationMs: 6000 });
+      } else {
+        toast.error(`V2 恢复提交失败：${result.error || '未知错误'}`);
+      }
+    } catch (e: any) {
+      logError_ACU('[ACU-V2] commitV2Recovery failed', e);
+      toast.error(`V2 恢复提交异常：${e?.message || '未知错误'}`);
+    } finally {
+      busyAction.value = '';
     }
   }
 
@@ -563,6 +704,9 @@ export function useDataManagement() {
     busyAction,
     isolationCode,
     isolationHistory,
+    mixedStorageDecision,
+    v2RecoverySummary,
+    v2IsolationDiagnostics,
     isolationHistoryOptions,
     currentIsolationLabel,
     isolationModeLabel,
@@ -580,6 +724,12 @@ export function useDataManagement() {
     exportCombinedSettings,
     exportJsonData,
     exportTableCheckpoint,
+    exportMixedStorageSnapshots,
+    commitMixedStorageDecision,
+    scanV2IsolationDiagnostics,
+    prepareV2Recovery,
+    exportV2RecoveryBackups,
+    commitV2Recovery,
     parseTableCheckpoint,
     restoreTableCheckpoint,
     resetAllDefaults,

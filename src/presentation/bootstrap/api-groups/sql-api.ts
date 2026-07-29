@@ -5,13 +5,15 @@
 
 import { refreshMergedDataAndNotifyWithUI_ACU } from '../../components/pipeline-ui-helpers';
 import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../../../service/runtime/state-manager';
-import { ensureStorageProviderReady_ACU, getStorageProvider } from '../../../service/table/table-storage-strategy';
-import { getNameMapper } from '../../../service/runtime/template-vars/name-mapper';
-import { parseDDLTableName } from '../../../shared/ddl-utils';
+import { ensureStorageProviderReady_ACU, getStorageProvider, getStorageRuntimeHealth_ACU, isStorageRuntimeReadyForSyncRead_ACU } from '../../../service/table/table-storage-strategy';
+import { isSqliteMode } from '../../../service/table/storage-mode';
+import { resolvePhysicalTableNames_ACU } from '../../../shared/sheet-identity';
 import { runSqliteRuntimeMutationCommit_ACU, runTableUpdateCommit_ACU } from '../../../service/table/table-update-commit';
-import { extractTableNamesFromStatements, mapSqlTableNamesToSheetKeys_ACU, splitSqlStatements } from '../../../service/table/sql-table-service';
+import { buildSqlSheetBatchOperations_ACU, extractTableNamesFromStatements, mapSqlTableNamesToSheetKeys_ACU, rebindSqlMutationTableIdentifiers_ACU, splitSqlStatements } from '../../../service/table/sql-table-service';
 import type { TableWriteConflictUnitV2_ACU } from '../../../service/table/storage-frame-v2-types';
 import type { SqlMutationResult, SqlQueryResult } from '../../../shared/table-storage-provider';
+import { buildSheetColumnAliasMap_ACU, buildSheetTableAliasMap_ACU, type ReadQueryResolveResult_ACU } from '../../../shared/sql-read-resolver';
+import { resolveCurrentRuntimeReadSql_ACU } from '../../../service/runtime/read-query-resolver';
 import { logDebug_ACU, logError_ACU } from '../../../shared/utils';
 import type { ApiGroupContext } from './callback-api';
 
@@ -52,6 +54,44 @@ export type PublicSqlBatchResult_ACU = PublicSqlMutationResult_ACU & {
     modifiedKeys: string[];
     appliedEdits: number;
 };
+
+export type PublicSqlReadError_ACU = {
+    method: 'executeSqlQuery' | 'querySql' | 'queryTableRows' | 'executeSql';
+    code: 'runtime_not_ready' | 'alias_conflict' | 'table_not_found' | 'column_not_resolved' | 'sql_error' | 'read_only_violation';
+    message: string;
+    at: number;
+};
+
+export const RUNTIME_GATED_SQL_READ_METHODS_ACU = [
+    'executeSqlQuery',
+    'querySql',
+    'queryTableRows',
+] as const;
+
+/**
+ * 全局 SQL 读取能力只在 SQLite runtime 完整发布后可见。
+ * 使用 getter 而不是启动时复制函数，确保聊天切换、重载期间会重新隐藏，ready 后自动恢复。
+ */
+export function installRuntimeGatedSqlReadApi_ACU(
+    target: Record<string, any>,
+    sqlApi: Record<string, Function>,
+): void {
+    for (const methodName of RUNTIME_GATED_SQL_READ_METHODS_ACU) {
+        const method = sqlApi[methodName];
+        if (typeof method !== 'function') {
+            throw new Error(`[SQL API] 缺少运行时门控方法: ${methodName}`);
+        }
+        Object.defineProperty(target, methodName, {
+            configurable: false,
+            enumerable: true,
+            get(): Function | undefined {
+                return isSqliteMode() && isStorageRuntimeReadyForSyncRead_ACU()
+                    ? method
+                    : undefined;
+            },
+        });
+    }
+}
 
 function isPlainObjectArg_ACU(value: any): value is Record<string, any> {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -331,57 +371,41 @@ function buildLimitedReadSql_ACU(sql: string, params: SqlParam_ACU[] | undefined
     };
 }
 
-function getEnglishTableName_ACU(sheet: any, fallback: string): string {
-    const ddl = sheet?.sourceData?.ddl;
-    if (ddl) {
-        const parsed = parseDDLTableName(ddl);
-        if (parsed) return parsed;
-    }
-    return fallback;
-}
-
 function findQueryTargetSheet_ACU(tableNameOrSheetKey: string): { sheet: any; sheetKey: string; englishTableName: string } | null {
     const tableData = currentJsonTableData_ACU as Record<string, any> | null;
     const input = String(tableNameOrSheetKey || '').trim();
     if (!tableData || !input) return null;
-
-    if (input.startsWith('sheet_') && tableData[input]) {
-        const sheet = tableData[input];
-        return { sheet, sheetKey: input, englishTableName: getEnglishTableName_ACU(sheet, String(sheet?.name || input)) };
-    }
-
-    const mapper = getNameMapper();
-    const maybeChineseName = mapper.getChineseTableName(input);
-    for (const sheetKey of Object.keys(tableData).filter(key => key.startsWith('sheet_'))) {
-        const sheet = tableData[sheetKey];
-        const english = getEnglishTableName_ACU(sheet, String(sheet?.name || sheetKey));
-        if (sheet?.name === input || sheet?.name === maybeChineseName || english === input) {
-            return { sheet, sheetKey, englishTableName: english };
-        }
-    }
-    return null;
+    const { aliases, conflicts } = buildSheetTableAliasMap_ACU([tableData], { skipInvalidSources: true });
+    const normalized = input.toLowerCase();
+    if (conflicts.has(normalized)) throw new Error(`queryTableRows: ambiguous table alias ${input}.`);
+    const englishTableName = aliases.get(normalized);
+    if (!englishTableName) return null;
+    const sheetKey = [...resolvePhysicalTableNames_ACU(tableData)]
+        .find(([, physicalName]) => physicalName === englishTableName)?.[0];
+    if (!sheetKey || !tableData[sheetKey]) return null;
+    return { sheet: tableData[sheetKey], sheetKey, englishTableName };
 }
 
-function resolveQueryColumn_ACU(englishTableName: string, sheet: any, column: string): string {
+function resolveQueryColumn_ACU(englishTableName: string, column: string): string {
     const raw = String(column || '').trim();
     if (!raw) throw new Error('queryTableRows: column must not be empty.');
     if (raw === '*') return raw;
-    if (raw === 'row_id') return raw;
-    const mapper = getNameMapper();
-    const english = mapper.resolveColumnName(englishTableName, raw);
-    const chinese = mapper.getChineseColumnName(englishTableName, english);
-    const headers = Array.isArray(sheet?.content?.[0]) ? sheet.content[0].map((item: any) => String(item)) : [];
-    if (headers.length > 0 && !headers.includes(raw) && !headers.includes(chinese) && !headers.includes(english)) {
-        throw new Error(`queryTableRows: unknown column ${raw}.`);
+    const tableData = currentJsonTableData_ACU as Record<string, any> | null;
+    const { aliases, conflicts } = buildSheetColumnAliasMap_ACU([tableData]);
+    const normalized = raw.toLowerCase();
+    if (conflicts.get(englishTableName)?.has(normalized)) {
+        throw new Error(`queryTableRows: ambiguous column alias ${raw}.`);
     }
-    return english;
+    const resolved = aliases.get(englishTableName)?.get(normalized);
+    if (!resolved) throw new Error(`queryTableRows: unknown column ${raw}.`);
+    return resolved;
 }
 
-function buildWhereClause_ACU(englishTableName: string, sheet: any, where: any, params: SqlParam_ACU[]): string {
+function buildWhereClause_ACU(englishTableName: string, where: any, params: SqlParam_ACU[]): string {
     if (!where || typeof where !== 'object' || Array.isArray(where)) return '';
     const clauses: string[] = [];
     for (const [column, value] of Object.entries(where)) {
-        const sqlColumn = quoteIdentifier_ACU(resolveQueryColumn_ACU(englishTableName, sheet, column));
+        const sqlColumn = quoteIdentifier_ACU(resolveQueryColumn_ACU(englishTableName, column));
         if (Array.isArray(value)) {
             if (value.length === 0) {
                 clauses.push('1 = 0');
@@ -399,14 +423,14 @@ function buildWhereClause_ACU(englishTableName: string, sheet: any, where: any, 
     return clauses.length > 0 ? ` WHERE ${clauses.join(' AND ')}` : '';
 }
 
-function buildOrderClause_ACU(englishTableName: string, sheet: any, orderBy: any): string {
+function buildOrderClause_ACU(englishTableName: string, orderBy: any): string {
     if (!orderBy) return '';
     const items = Array.isArray(orderBy) ? orderBy : [orderBy];
     const parts = items.map(item => {
         const column = typeof item === 'string' ? item : item?.column;
         const directionRaw = typeof item === 'string' ? 'ASC' : String(item?.direction || 'ASC').toUpperCase();
         const direction = directionRaw === 'DESC' ? 'DESC' : 'ASC';
-        return `${quoteIdentifier_ACU(resolveQueryColumn_ACU(englishTableName, sheet, column))} ${direction}`;
+        return `${quoteIdentifier_ACU(resolveQueryColumn_ACU(englishTableName, column))} ${direction}`;
     });
     return parts.length > 0 ? ` ORDER BY ${parts.join(', ')}` : '';
 }
@@ -419,10 +443,10 @@ function buildQueryTableRowsSql_ACU(options: Record<string, any>): { sql: string
     const columnsInput = Array.isArray(options.columns) && options.columns.length > 0 ? options.columns : ['*'];
     const columns = columnsInput.includes('*')
         ? '*'
-        : columnsInput.map((column: any) => quoteIdentifier_ACU(resolveQueryColumn_ACU(target.englishTableName, target.sheet, String(column)))).join(', ');
+        : columnsInput.map((column: any) => quoteIdentifier_ACU(resolveQueryColumn_ACU(target.englishTableName, String(column)))).join(', ');
     const params: SqlParam_ACU[] = [];
-    const where = buildWhereClause_ACU(target.englishTableName, target.sheet, options.where, params);
-    const order = buildOrderClause_ACU(target.englishTableName, target.sheet, options.orderBy || options.order);
+    const where = buildWhereClause_ACU(target.englishTableName, options.where, params);
+    const order = buildOrderClause_ACU(target.englishTableName, options.orderBy || options.order);
     const limit = normalizeLimit_ACU(options.limit, 100) ?? 100;
     const offset = normalizeOffset_ACU(options.offset);
     const sql = `SELECT ${columns} FROM ${quoteIdentifier_ACU(target.englishTableName)}${where}${order} LIMIT ? OFFSET ?`;
@@ -453,14 +477,63 @@ function buildRawSqlWriteSet_ACU(options: SqlMutationOptions_ACU): TableWriteCon
         : [{ kind: 'all' as const }];
 }
 
-function buildRawSqlBatchOperations_ACU(sql: string) {
-    const statements = splitSqlStatements(String(sql || '').replace(/<!--|-->/g, '').trim());
-    return statements.length > 0 ? [{ kind: 'sql_batch' as const, statements }] : [];
+/**
+ * 对外只读 SQL API 仍是同步契约，不能在这里异步 hydrate 并返回半初始化数据库。
+ * 因此只接受已完整发布的 runtime；调用者可显式走重载/诊断入口恢复。
+ */
+function resolveReadSqlForCurrentData_ACU(sql: string): ReadQueryResolveResult_ACU {
+    return resolveCurrentRuntimeReadSql_ACU(sql);
+}
+
+function executeReadyReadQuery_ACU(sql: string, params?: SqlParam_ACU[]): { result: SqlQueryResult; sql: string } {
+    if (!isStorageRuntimeReadyForSyncRead_ACU()) {
+        const health = getStorageRuntimeHealth_ACU();
+        throw new Error(`SQL runtime 未就绪: status=${health.status}, expected=${health.expectedMode}, active=${health.activeMode || 'none'}, code=${health.failureCode || 'none'}`);
+    }
+    return { result: getStorageProvider().executeQuery(sql, params), sql };
 }
 
 export function createSqlApi(ctx: ApiGroupContext): Record<string, Function> {
+    let lastReadError: PublicSqlReadError_ACU | null = null;
+    const captureReadError = (
+        method: PublicSqlReadError_ACU['method'],
+        error: unknown,
+        resolved?: ReadQueryResolveResult_ACU,
+    ): void => {
+        const message = error instanceof Error ? error.message : String(error);
+        const hasRelevantAliasConflict = (resolved?.conflicts?.length || 0) > 0 && /no such table|no such column/i.test(message);
+        const code: PublicSqlReadError_ACU['code'] = /runtime 未就绪/i.test(message)
+            ? 'runtime_not_ready'
+            : /only SELECT\/PRAGMA\/EXPLAIN\/WITH/i.test(message)
+                ? 'read_only_violation'
+                : /ambiguous (?:table|column) alias/i.test(message)
+                    ? 'alias_conflict'
+                    : /queryTableRows: unknown column/i.test(message)
+                        ? 'column_not_resolved'
+                : hasRelevantAliasConflict
+                    ? 'alias_conflict'
+                    : /no such table/i.test(message)
+                        ? 'table_not_found'
+                        : /no such column/i.test(message)
+                            ? 'column_not_resolved'
+                            : 'sql_error';
+        lastReadError = { method, code, message, at: Date.now() };
+        logError_ACU(`[${method}] read query failed`, {
+            code,
+            message,
+            sql: resolved?.sql.slice(0, 500),
+            tableRebindCount: resolved?.tableRebindCount || 0,
+            columnRebindCount: resolved?.columnRebindCount || 0,
+            conflicts: resolved?.conflicts || [],
+            runtime: getStorageRuntimeHealth_ACU(),
+        });
+    };
     return {
+        getLastSqlApiError: function(): PublicSqlReadError_ACU | null {
+            return lastReadError ? { ...lastReadError } : null;
+        },
         executeSqlQuery: function(sqlOrOptions: any, params?: any, options?: any): PublicSqlQueryResult_ACU | null {
+            let resolved: ReadQueryResolveResult_ACU | undefined;
             try {
                 const args = parseSqlArgs_ACU(sqlOrOptions, params, options, 'executeSqlQuery');
                 if (!isSqlReadStatement_ACU(args.sql)) {
@@ -469,15 +542,18 @@ export function createSqlApi(ctx: ApiGroupContext): Record<string, Function> {
                 const optionSource = isPlainObjectArg_ACU(sqlOrOptions) ? sqlOrOptions : (isPlainObjectArg_ACU(options) ? options : null);
                 const limit = normalizeLimit_ACU(optionSource?.limit);
                 const offset = normalizeOffset_ACU(optionSource?.offset);
-                const query = buildLimitedReadSql_ACU(args.sql, args.params, limit, offset);
-                return toPublicSqlQueryResult_ACU(getStorageProvider().executeQuery(query.sql, query.params), { sql: query.sql, limit, offset });
+                resolved = resolveReadSqlForCurrentData_ACU(args.sql);
+                const query = buildLimitedReadSql_ACU(resolved.sql, args.params, limit, offset);
+                const executed = executeReadyReadQuery_ACU(query.sql, query.params);
+                return toPublicSqlQueryResult_ACU(executed.result, { sql: executed.sql, limit, offset });
             } catch (error) {
-                logError_ACU('executeSqlQuery failed:', error);
+                captureReadError('executeSqlQuery', error, resolved);
                 return null;
             }
         },
 
         querySql: function(sqlOrOptions: any, params?: any, options?: any): PublicSqlQueryResult_ACU | null {
+            let resolved: ReadQueryResolveResult_ACU | undefined;
             try {
                 const args = parseSqlArgs_ACU(sqlOrOptions, params, options, 'querySql');
                 if (!isSqlReadStatement_ACU(args.sql)) {
@@ -486,27 +562,32 @@ export function createSqlApi(ctx: ApiGroupContext): Record<string, Function> {
                 const optionSource = isPlainObjectArg_ACU(sqlOrOptions) ? sqlOrOptions : (isPlainObjectArg_ACU(options) ? options : null);
                 const limit = normalizeLimit_ACU(optionSource?.limit);
                 const offset = normalizeOffset_ACU(optionSource?.offset);
-                const query = buildLimitedReadSql_ACU(args.sql, args.params, limit, offset);
-                return toPublicSqlQueryResult_ACU(getStorageProvider().executeQuery(query.sql, query.params), { sql: query.sql, limit, offset });
+                resolved = resolveReadSqlForCurrentData_ACU(args.sql);
+                const query = buildLimitedReadSql_ACU(resolved.sql, args.params, limit, offset);
+                const executed = executeReadyReadQuery_ACU(query.sql, query.params);
+                return toPublicSqlQueryResult_ACU(executed.result, { sql: executed.sql, limit, offset });
             } catch (error) {
-                logError_ACU('querySql failed:', error);
+                captureReadError('querySql', error, resolved);
                 return null;
             }
         },
 
         queryTableRows: function(options: any = {}): PublicSqlQueryResult_ACU | null {
+            let resolved: ReadQueryResolveResult_ACU | undefined;
             try {
                 if (!isPlainObjectArg_ACU(options)) {
                     throw new Error('queryTableRows: options must be an object.');
                 }
                 const query = buildQueryTableRowsSql_ACU(options);
-                return toPublicSqlQueryResult_ACU(getStorageProvider().executeQuery(query.sql, query.params), {
-                    sql: query.sql,
+                resolved = resolveReadSqlForCurrentData_ACU(query.sql);
+                const executed = executeReadyReadQuery_ACU(resolved.sql, query.params);
+                return toPublicSqlQueryResult_ACU(executed.result, {
+                    sql: executed.sql,
                     limit: query.limit,
                     offset: query.offset,
                 });
             } catch (error) {
-                logError_ACU('queryTableRows failed:', error);
+                captureReadError('queryTableRows', error, resolved);
                 return null;
             }
         },
@@ -568,11 +649,17 @@ export function createSqlApi(ctx: ApiGroupContext): Record<string, Function> {
                     updateGroupKeys: args.updateGroupKeys,
                     trackingSheetKeys: args.trackingSheetKeys === undefined ? [] : args.trackingSheetKeys,
                     trackAsUpdate: false,
-                    operations: buildRawSqlBatchOperations_ACU(args.sql),
                     skipChatSave: args.skipChatSave,
-                }, async () => {
+                }, async ({ workingData }) => {
                     const provider = await ensureStorageProviderReady_ACU();
-                    const batchResult = provider.applyEdits(args.sql, 'raw_sql_api');
+                    const runtimeStatements = rebindSqlMutationTableIdentifiers_ACU(
+                        splitSqlStatements(String(args.sql || '').replace(/<!--|-->/g, '').trim()),
+                        (workingData || currentJsonTableData_ACU) as any,
+                    );
+                    const batchResult = typeof provider.applyEditsBatch === 'function'
+                        ? provider.applyEditsBatch(runtimeStatements, 'raw_sql_api')
+                        // 保留语句边界，避免可选 batch 能力缺失时将多条 SQL 拼成非法单句。
+                        : provider.applyEdits(runtimeStatements.join(';\n'), 'raw_sql_api');
                     if (!batchResult.success) {
                         return { success: false, error: batchResult.error || 'executeSqlBatch failed' };
                     }
@@ -580,10 +667,21 @@ export function createSqlApi(ctx: ApiGroupContext): Record<string, Function> {
                     if (!tableData) {
                         return { success: false, error: 'SQLite runtime data export failed' };
                     }
+                    const operationBuild = buildSqlSheetBatchOperations_ACU(
+                        runtimeStatements,
+                        tableData as any,
+                        {
+                            fallbackTargetSheetKeys: args.targetSheetKeys || undefined,
+                            allowSingleTargetFallback: true,
+                            keepLegacyForUnclassified: true,
+                            reason: 'manual_crud',
+                        },
+                    );
                     return {
                         success: true,
                         tableData: tableData as any,
                         mutationResult: { changes: batchResult.appliedEdits, errors: [] },
+                        persist: { operations: operationBuild.operations },
                         value: {
                             success: true,
                             modifiedKeys: batchResult.modifiedKeys,
@@ -609,13 +707,17 @@ export function createSqlApi(ctx: ApiGroupContext): Record<string, Function> {
         },
 
         executeSql: async function(sqlOrOptions: any, params?: any, options?: any): Promise<PublicSqlExecutionResult_ACU | null> {
+            let resolved: ReadQueryResolveResult_ACU | undefined;
+            let isReadAttempt = false;
             try {
                 const args = parseSqlArgs_ACU(sqlOrOptions, params, options, 'executeSql');
                 if (isSqlReadStatement_ACU(args.sql)) {
-                    const queryResult = getStorageProvider().executeQuery(args.sql, args.params);
+                    isReadAttempt = true;
+                    resolved = resolveReadSqlForCurrentData_ACU(args.sql);
+                    const executed = executeReadyReadQuery_ACU(resolved.sql, args.params);
                     return {
                         type: 'query',
-                        result: toPublicSqlQueryResult_ACU(queryResult, { sql: args.sql }),
+                        result: toPublicSqlQueryResult_ACU(executed.result, { sql: executed.sql }),
                     };
                 }
 
@@ -623,7 +725,8 @@ export function createSqlApi(ctx: ApiGroupContext): Record<string, Function> {
                 const result = await this.executeSqlMutation(writeArgs);
                 return { type: 'mutation', result };
             } catch (error) {
-                logError_ACU('executeSql failed:', error);
+                if (isReadAttempt) captureReadError('executeSql', error, resolved);
+                else logError_ACU('executeSql failed:', error);
                 return null;
             }
         },

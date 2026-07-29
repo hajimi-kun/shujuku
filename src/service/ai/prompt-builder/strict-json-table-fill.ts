@@ -1,4 +1,5 @@
 import { getSortedSheetKeys_ACU } from '../../template/chat-scope';
+import { getSheetColumnProjection_ACU } from '../../../shared/ddl-utils';
 
 export type StrictJsonTableFillFormat_ACU = 'table_edit_ops_v1' | 'table_edit_sql_v1';
 
@@ -69,11 +70,11 @@ function resolveSheet(sheet: any, tableData: any, targetSheetKeys?: string[] | n
 }
 
 function getHeaderMap(table: any) {
-  const header = Array.isArray(table?.content?.[0]) ? table.content[0] : [];
   const map = new Map<string, number>();
-  header.slice(1).forEach((field: any, idx: number) => {
-    const key = String(field ?? '').trim();
-    if (key) map.set(key, idx);
+  getSheetColumnProjection_ACU(table).visibleColumns.forEach((column) => {
+    if (column.sourceIndex === 0) return;
+    const key = String(column.header ?? '').trim();
+    if (key) map.set(key, column.sourceIndex - 1);
   });
   return map;
 }

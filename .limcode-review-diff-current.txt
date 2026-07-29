@@ -1,0 +1,657 @@
+diff --git a/src/service/table/sql-table-service.ts b/src/service/table/sql-table-service.ts
+index 245e536..64e121f 100644
+--- a/src/service/table/sql-table-service.ts
++++ b/src/service/table/sql-table-service.ts
+@@ -92,6 +92,8 @@ interface SqlMutationIdentifierToken_ACU {
+   end: number;
+   value: string;
+   quote: '"' | '`' | '[' | null;
++  depth: number;
++  commaBefore: boolean;
+ }
+ 
+ function isSqlMutationIdentifierStart_ACU(char: string): boolean {
+@@ -110,6 +112,8 @@ function isSqlMutationIdentifierPart_ACU(char: string): boolean {
+ function tokenizeSqlMutationIdentifiers_ACU(statement: string): SqlMutationIdentifierToken_ACU[] {
+   const tokens: SqlMutationIdentifierToken_ACU[] = [];
+   let index = 0;
++  let depth = 0;
++  const commaBeforeDepths = new Set<number>();
+   while (index < statement.length) {
+     const char = statement[index];
+     const next = statement[index + 1];
+@@ -140,6 +144,22 @@ function tokenizeSqlMutationIdentifiers_ACU(statement: string): SqlMutationIdent
+       if (index > statement.length || statement[index - 1] !== "'") throw new Error('SQL 字符串未闭合，无法安全重绑定表名。');
+       continue;
+     }
++    if (char === ',') {
++      commaBeforeDepths.add(depth);
++      index += 1;
++      continue;
++    }
++    if (char === '(') {
++      commaBeforeDepths.delete(depth);
++      depth += 1;
++      index += 1;
++      continue;
++    }
++    if (char === ')') {
++      depth = Math.max(0, depth - 1);
++      index += 1;
++      continue;
++    }
+     if (char === '"' || char === '`' || char === '[') {
+       const closing = char === '[' ? ']' : char;
+       const start = index;
+@@ -159,14 +179,14 @@ function tokenizeSqlMutationIdentifiers_ACU(statement: string): SqlMutationIdent
+         }
+       }
+       if (!closed) throw new Error('SQL 引号标识符未闭合，无法安全重绑定表名。');
+-      tokens.push({ start, end: index, value, quote: char });
++      tokens.push({ start, end: index, value, quote: char, depth, commaBefore: commaBeforeDepths.delete(depth) });
+       continue;
+     }
+     if (isSqlMutationIdentifierStart_ACU(char)) {
+       const start = index;
+       index += 1;
+       while (index < statement.length && isSqlMutationIdentifierPart_ACU(statement[index])) index += 1;
+-      tokens.push({ start, end: index, value: statement.slice(start, index), quote: null });
++      tokens.push({ start, end: index, value: statement.slice(start, index), quote: null, depth, commaBefore: commaBeforeDepths.delete(depth) });
+       continue;
+     }
+     index += 1;
+@@ -181,8 +201,18 @@ function isSqlMutationKeyword_ACU(token: SqlMutationIdentifierToken_ACU | undefi
+ function getSqlMutationTargetToken_ACU(tokens: SqlMutationIdentifierToken_ACU[]): SqlMutationIdentifierToken_ACU {
+   const first = tokens[0];
+   if (isSqlMutationKeyword_ACU(first, 'INSERT') || isSqlMutationKeyword_ACU(first, 'REPLACE')) {
+-    if (!isSqlMutationKeyword_ACU(tokens[1], 'INTO') || !tokens[2]) throw new Error('INSERT/REPLACE SQL 缺少可验证的目标表。');
+-    return tokens[2];
++    let index = 1;
++    if (isSqlMutationKeyword_ACU(first, 'INSERT') && isSqlMutationKeyword_ACU(tokens[index], 'OR')) {
++      const action = tokens[index + 1];
++      if (!action || action.quote !== null || !new Set(['ROLLBACK', 'ABORT', 'REPLACE', 'FAIL', 'IGNORE']).has(action.value.toUpperCase())) {
++        throw new Error('INSERT OR 子句非法，无法安全重绑定表名。');
++      }
++      index += 2;
++    }
++    if (!isSqlMutationKeyword_ACU(tokens[index], 'INTO') || !tokens[index + 1]) {
++      throw new Error('INSERT/REPLACE SQL 缺少可验证的目标表。');
++    }
++    return tokens[index + 1];
+   }
+   if (isSqlMutationKeyword_ACU(first, 'UPDATE')) {
+     let index = 1;
+@@ -203,6 +233,52 @@ function getSqlMutationTargetToken_ACU(tokens: SqlMutationIdentifierToken_ACU[])
+   throw new Error(`不支持安全重绑定的 SQL 语句类型：${first?.value || 'empty'}。`);
+ }
+ 
++function collectSqlMutationTableReferenceTokens_ACU(
++  tokens: SqlMutationIdentifierToken_ACU[],
++  mutationTarget: SqlMutationIdentifierToken_ACU,
++): SqlMutationIdentifierToken_ACU[] {
++  const fromClauseTerminators = new Set([
++    'WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW', 'RETURNING', 'VALUES', 'SET',
++  ]);
++  const references = new Map<number, SqlMutationIdentifierToken_ACU>([[mutationTarget.start, mutationTarget]]);
++  const cteNames = new Set<string>();
++  for (let index = 0; index + 2 < tokens.length; index += 1) {
++    if (isSqlMutationKeyword_ACU(tokens[index], 'WITH') && isSqlMutationKeyword_ACU(tokens[index + 2], 'AS')) {
++      cteNames.add(tokens[index + 1].value.toLowerCase());
++    }
++  }
++  const activeFromDepths = new Set<number>();
++  for (let index = 0; index < tokens.length; index += 1) {
++    const token = tokens[index];
++    const keyword = token.quote === null ? token.value.toUpperCase() : '';
++    if (fromClauseTerminators.has(keyword)) activeFromDepths.delete(token.depth);
++    if (keyword === 'FROM') activeFromDepths.add(token.depth);
++
++    if (keyword === 'FROM' || keyword === 'JOIN') {
++      const reference = tokens[index + 1];
++      if (reference && reference.depth === token.depth && !cteNames.has(reference.value.toLowerCase())) {
++        references.set(reference.start, reference);
++      }
++      continue;
++    }
++    if (token.commaBefore && activeFromDepths.has(token.depth) && !cteNames.has(token.value.toLowerCase())) {
++      references.set(token.start, token);
++    }
++  }
++  return [...references.values()];
++}
++
++function applySqlMutationIdentifierReplacements_ACU(
++  statement: string,
++  replacements: Array<{ token: SqlMutationIdentifierToken_ACU; physicalName: string }>,
++): string {
++  let result = statement;
++  for (const { token, physicalName } of [...replacements].sort((a, b) => b.token.start - a.token.start)) {
++    result = `${result.slice(0, token.start)}${formatSqlMutationIdentifier_ACU(physicalName, token.quote)}${result.slice(token.end)}`;
++  }
++  return result;
++}
++
+ function formatSqlMutationIdentifier_ACU(value: string, quote: SqlMutationIdentifierToken_ACU['quote']): string {
+   if (quote === '"') return `"${value.replace(/"/g, '""')}"`;
+   if (quote === '`') return `\`${value.replace(/`/g, '``')}\``;
+@@ -211,11 +287,14 @@ function formatSqlMutationIdentifier_ACU(value: string, quote: SqlMutationIdenti
+ }
+ 
+ /**
+- * Rebinds a mutation target from a unique display/legacy alias to the
+- * authoritative runtime physical name. Only the verified target identifier is
+- * changed; comments and string literals are never rewritten.
++ * Rebinds mutation table identifiers from unique DDL/runtime aliases to their
++ * authoritative runtime physical names. Comments and string literals are never
++ * rewritten. Strict sheet-scoped callers may reject references resolved to a
++ * different physical table so the emitted sql_sheet_batch remains replayable.
+  */
+-export function rebindSqlMutationTableIdentifiers_ACU(statements: string[], tableData: TableDataObject_ACU): string[] {
++export function rebindSqlMutationTableIdentifiers_ACU(
++  statements: string[], tableData: TableDataObject_ACU, options: { requireSinglePhysicalTable?: boolean } = {},
++): string[] {
+   const physicalNames = resolvePhysicalTableNames_ACU(tableData);
+   const targets = new Map<string, string>();
+   for (const [sheetKey, physicalName] of physicalNames) {
+@@ -230,9 +309,10 @@ export function rebindSqlMutationTableIdentifiers_ACU(statements: string[], tabl
+     }
+   }
+   return statements.map(statement => {
++    const tokens = tokenizeSqlMutationIdentifiers_ACU(statement);
+     let target: SqlMutationIdentifierToken_ACU;
+     try {
+-      target = getSqlMutationTargetToken_ACU(tokenizeSqlMutationIdentifiers_ACU(statement));
++      target = getSqlMutationTargetToken_ACU(tokens);
+     } catch (error: any) {
+       if (String(error?.message || error).startsWith('不支持安全重绑定的 SQL 语句类型：')) return statement;
+       throw error;
+@@ -240,7 +320,17 @@ export function rebindSqlMutationTableIdentifiers_ACU(statements: string[], tabl
+     const physicalName = targets.get(target.value.toLowerCase());
+     if (physicalName === undefined) return statement;
+     if (!physicalName) throw new Error(`无法唯一解析 SQL 目标表标识符：${target.value}。`);
+-    return `${statement.slice(0, target.start)}${formatSqlMutationIdentifier_ACU(physicalName, target.quote)}${statement.slice(target.end)}`;
++    const replacements: Array<{ token: SqlMutationIdentifierToken_ACU; physicalName: string }> = [];
++    for (const reference of collectSqlMutationTableReferenceTokens_ACU(tokens, target)) {
++      const resolved = targets.get(reference.value.toLowerCase());
++      if (resolved === undefined) continue;
++      if (!resolved) throw new Error(`无法唯一解析 SQL 表引用：${reference.value}。`);
++      if (options.requireSinglePhysicalTable === true && resolved !== physicalName) {
++        throw new Error(`SQL mutation 跨 Sheet 表引用被拒绝：target=${target.value}, reference=${reference.value}。`);
++      }
++      replacements.push({ token: reference, physicalName: resolved });
++    }
++    return applySqlMutationIdentifierReplacements_ACU(statement, replacements);
+   });
+ }
+ 
+@@ -1015,7 +1105,9 @@ export async function applyParameterizedSqlMutationToTableDataSnapshot_ACU(
+   try {
+     const normalizedSql = normalizeStatementValues(normalizeSqlStructure(sql));
+     const snapshotCopy = JSON.parse(JSON.stringify(tableData || {})) as TableDataObject_ACU;
+-    const runtimeSql = rebindSqlMutationTableIdentifiers_ACU([normalizedSql], snapshotCopy)[0];
++    const runtimeSql = rebindSqlMutationTableIdentifiers_ACU([normalizedSql], snapshotCopy, {
++      requireSinglePhysicalTable: operationOptions.requireSheetScopedOperations === true,
++    })[0];
+     await engine.init();
+     syncBridge.loadFromTableData(snapshotCopy, { strict: true });
+     const result = engine.run(runtimeSql, params);
+@@ -1080,6 +1172,9 @@ export async function applySqlEditsToTableDataSnapshot_ACU(
+     const statements = rebindSqlMutationTableIdentifiers_ACU(
+       rawStatements.map(stmt => normalizeStatementValues(normalizeSqlStructure(stmt))),
+       snapshotCopy,
++      {
++        requireSinglePhysicalTable: operationOptions.requireSheetScopedOperations === true,
++      },
+     );
+     await engine.init();
+     syncBridge.loadFromTableData(snapshotCopy, { strict: true });
+diff --git a/src/service/table/storage-frame-v2-replay.ts b/src/service/table/storage-frame-v2-replay.ts
+index a27896b..292f0e3 100644
+--- a/src/service/table/storage-frame-v2-replay.ts
++++ b/src/service/table/storage-frame-v2-replay.ts
+@@ -290,6 +290,8 @@ interface SqlReplayIdentifierToken_ACU {
+   end: number;
+   value: string;
+   quote: '"' | '`' | '[' | null;
++  depth: number;
++  commaBefore: boolean;
+ }
+ 
+ function isSqlReplayIdentifierStart_ACU(char: string): boolean {
+@@ -312,6 +314,8 @@ function isSqlReplayIdentifierPart_ACU(char: string): boolean {
+ function tokenizeSqlReplayIdentifiers_ACU(statement: string): SqlReplayIdentifierToken_ACU[] {
+   const tokens: SqlReplayIdentifierToken_ACU[] = [];
+   let index = 0;
++  let depth = 0;
++  const commaBeforeDepths = new Set<number>();
+   while (index < statement.length) {
+     const char = statement[index];
+     const next = statement[index + 1];
+@@ -344,6 +348,22 @@ function tokenizeSqlReplayIdentifiers_ACU(statement: string): SqlReplayIdentifie
+       if (index > statement.length || statement[index - 1] !== "'") throw new Error('[V2 Replay] SQL 字符串未闭合，无法安全重绑定表名。');
+       continue;
+     }
++    if (char === ',') {
++      commaBeforeDepths.add(depth);
++      index += 1;
++      continue;
++    }
++    if (char === '(') {
++      commaBeforeDepths.delete(depth);
++      depth += 1;
++      index += 1;
++      continue;
++    }
++    if (char === ')') {
++      depth = Math.max(0, depth - 1);
++      index += 1;
++      continue;
++    }
+     if (char === '"' || char === '`' || char === '[') {
+       const closing = char === '[' ? ']' : char;
+       const start = index;
+@@ -365,14 +385,14 @@ function tokenizeSqlReplayIdentifiers_ACU(statement: string): SqlReplayIdentifie
+         break;
+       }
+       if (!closed) throw new Error('[V2 Replay] SQL 引号标识符未闭合，无法安全重绑定表名。');
+-      tokens.push({ start, end: index, value, quote: char });
++      tokens.push({ start, end: index, value, quote: char, depth, commaBefore: commaBeforeDepths.delete(depth) });
+       continue;
+     }
+     if (isSqlReplayIdentifierStart_ACU(char)) {
+       const start = index;
+       index += 1;
+       while (index < statement.length && isSqlReplayIdentifierPart_ACU(statement[index])) index += 1;
+-      tokens.push({ start, end: index, value: statement.slice(start, index), quote: null });
++      tokens.push({ start, end: index, value: statement.slice(start, index), quote: null, depth, commaBefore: commaBeforeDepths.delete(depth) });
+       continue;
+     }
+     index += 1;
+@@ -387,10 +407,18 @@ function sqlReplayKeyword_ACU(token: SqlReplayIdentifierToken_ACU | undefined, k
+ function getSqlReplayMutationTargetToken_ACU(tokens: SqlReplayIdentifierToken_ACU[]): SqlReplayIdentifierToken_ACU {
+   const first = tokens[0];
+   if (sqlReplayKeyword_ACU(first, 'INSERT') || sqlReplayKeyword_ACU(first, 'REPLACE')) {
+-    if (!sqlReplayKeyword_ACU(tokens[1], 'INTO') || !tokens[2]) {
++    let index = 1;
++    if (sqlReplayKeyword_ACU(first, 'INSERT') && sqlReplayKeyword_ACU(tokens[index], 'OR')) {
++      const action = tokens[index + 1];
++      if (!action || action.quote !== null || !new Set(['ROLLBACK', 'ABORT', 'REPLACE', 'FAIL', 'IGNORE']).has(action.value.toUpperCase())) {
++        throw new Error('[V2 Replay] INSERT OR 子句非法，无法安全重绑定表名。');
++      }
++      index += 2;
++    }
++    if (!sqlReplayKeyword_ACU(tokens[index], 'INTO') || !tokens[index + 1]) {
+       throw new Error('[V2 Replay] INSERT/REPLACE SQL 缺少可验证的目标表。');
+     }
+-    return tokens[2];
++    return tokens[index + 1];
+   }
+   if (sqlReplayKeyword_ACU(first, 'UPDATE')) {
+     let index = 1;
+@@ -413,6 +441,52 @@ function getSqlReplayMutationTargetToken_ACU(tokens: SqlReplayIdentifierToken_AC
+   throw new Error(`[V2 Replay] 不支持安全重绑定的 SQL 语句类型：${first?.value || 'empty'}。`);
+ }
+ 
++function collectSqlReplayTableReferenceTokens_ACU(
++  tokens: SqlReplayIdentifierToken_ACU[],
++  mutationTarget: SqlReplayIdentifierToken_ACU,
++): SqlReplayIdentifierToken_ACU[] {
++  const fromClauseTerminators = new Set([
++    'WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW', 'RETURNING', 'VALUES', 'SET',
++  ]);
++  const references = new Map<number, SqlReplayIdentifierToken_ACU>([[mutationTarget.start, mutationTarget]]);
++  const cteNames = new Set<string>();
++  for (let index = 0; index + 2 < tokens.length; index += 1) {
++    if (sqlReplayKeyword_ACU(tokens[index], 'WITH') && sqlReplayKeyword_ACU(tokens[index + 2], 'AS')) {
++      cteNames.add(tokens[index + 1].value.toLowerCase());
++    }
++  }
++  const activeFromDepths = new Set<number>();
++  for (let index = 0; index < tokens.length; index += 1) {
++    const token = tokens[index];
++    const keyword = token.quote === null ? token.value.toUpperCase() : '';
++    if (fromClauseTerminators.has(keyword)) activeFromDepths.delete(token.depth);
++    if (keyword === 'FROM') activeFromDepths.add(token.depth);
++
++    if (keyword === 'FROM' || keyword === 'JOIN') {
++      const reference = tokens[index + 1];
++      if (reference && reference.depth === token.depth && !cteNames.has(reference.value.toLowerCase())) {
++        references.set(reference.start, reference);
++      }
++      continue;
++    }
++    if (token.commaBefore && activeFromDepths.has(token.depth) && !cteNames.has(token.value.toLowerCase())) {
++      references.set(token.start, token);
++    }
++  }
++  return [...references.values()];
++}
++
++function applySqlReplayIdentifierReplacements_ACU(
++  statement: string,
++  replacements: Array<{ token: SqlReplayIdentifierToken_ACU; physicalName: string }>,
++): string {
++  let result = statement;
++  for (const { token, physicalName } of [...replacements].sort((a, b) => b.token.start - a.token.start)) {
++    result = `${result.slice(0, token.start)}${formatSqlReplayIdentifier_ACU(physicalName, token.quote)}${result.slice(token.end)}`;
++  }
++  return result;
++}
++
+ function formatSqlReplayIdentifier_ACU(value: string, quote: SqlReplayIdentifierToken_ACU['quote']): string {
+   if (quote === '"') return `"${value.replace(/"/g, '""')}"`;
+   if (quote === '`') return `\`${value.replace(/`/g, '``')}\``;
+@@ -478,7 +552,24 @@ function rebindSqlReplayTableIdentifiers_ACU(
+       const sheetKey = operation.kind === 'sql_sheet_batch' ? operation.sheetKey : '(legacy sql_batch)';
+       throw new Error(`[V2 Replay] sql_sheet_batch 跨 Sheet 引用被拒绝：sheetKey=${sheetKey}, table=${target.value}。`);
+     }
+-    return `${statement.slice(0, target.start)}${formatSqlReplayIdentifier_ACU(physicalName, target.quote)}${statement.slice(target.end)}`;
++    const replacements: Array<{ token: SqlReplayIdentifierToken_ACU; physicalName: string }> = [];
++    for (const reference of collectSqlReplayTableReferenceTokens_ACU(tokens, target)) {
++      if (reference.start === target.start) {
++        replacements.push({ token: reference, physicalName });
++        continue;
++      }
++      const referenceName = reference.value.toLowerCase();
++      const resolved = referenceName === targetName
++        ? physicalName
++        : targets.get(referenceName);
++      if (resolved === undefined) continue;
++      if (!resolved) throw new Error(`[V2 Replay] 无法唯一解析 SQL 表引用：${reference.value}。`);
++      if (scopedPhysicalName && resolved !== scopedPhysicalName) {
++        throw new Error(`[V2 Replay] sql_sheet_batch 跨 Sheet 引用被拒绝：sheetKey=${operation.kind === 'sql_sheet_batch' ? operation.sheetKey : '(legacy sql_batch)'}, table=${reference.value}。`);
++      }
++      replacements.push({ token: reference, physicalName: resolved });
++    }
++    return applySqlReplayIdentifierReplacements_ACU(statement, replacements);
+   });
+ }
+ 
+diff --git a/tests/service/table/sql-table-service.test.ts b/tests/service/table/sql-table-service.test.ts
+index 46593fa..6cd6a5d 100644
+--- a/tests/service/table/sql-table-service.test.ts
++++ b/tests/service/table/sql-table-service.test.ts
+@@ -354,6 +354,30 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
+     expect(result.success).toBe(false);
+     expect(result.error).toContain('SQL 语句无法归属到单表日志');
+   });
++
++  it('严格单表日志模式下拒绝 mutation 引用其他 Sheet', async () => {
++    const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
++    inputSnapshot.sheet_1 = {
++      uid: 'quest_log',
++      name: '任务表',
++      sourceData: { ddl: 'CREATE TABLE quest_log (row_id INTEGER PRIMARY KEY, item_name TEXT NOT NULL, quantity INTEGER DEFAULT 1);' },
++      content: [['row_id', 'item_name', 'quantity'], ['2', '支线任务', '1']],
++      updateConfig: {},
++      exportConfig: {},
++      orderNo: 1,
++    };
++
++    const result = await applySqlEditsToTableDataSnapshot_ACU(
++      'INSERT INTO inventory SELECT row_id, item_name, quantity FROM quest_log;',
++      inputSnapshot,
++      'auto_standard',
++      { targetSheetKeys: ['sheet_0'], requireSheetScopedOperations: true, allowSingleTargetFallback: true },
++    );
++
++    expect(result.success).toBe(false);
++    expect(result.error).toContain('跨 Sheet 表引用被拒绝');
++    expect(inputSnapshot.sheet_0.content).toEqual([['row_id', 'item_name', 'quantity'], ['1', '铁剑', '3']]);
++  });
+ });
+ 
+ describe('rebindSqlMutationTableIdentifiers_ACU', () => {
+@@ -364,15 +388,39 @@ describe('rebindSqlMutationTableIdentifiers_ACU', () => {
+   it('将唯一 DDL alias 的目标标识符改写为 runtime 物理名', () => {
+     expect(rebindSqlMutationTableIdentifiers_ACU([
+       "INSERT INTO `inventory` VALUES (1, 'inventory');",
++      "INSERT OR REPLACE INTO inventory VALUES (2, 'replace');",
+       'UPDATE inventory SET value = \'inventory\' WHERE row_id = 1;',
+       'DELETE FROM inventory WHERE value = \'inventory\';',
+     ], tableData)).toEqual([
+       "INSERT INTO `beibaowupinbiao` VALUES (1, 'inventory');",
++      "INSERT OR REPLACE INTO beibaowupinbiao VALUES (2, 'replace');",
+       'UPDATE beibaowupinbiao SET value = \'inventory\' WHERE row_id = 1;',
+       'DELETE FROM beibaowupinbiao WHERE value = \'inventory\';',
+     ]);
+   });
+ 
++  it('同时重绑定 INSERT/UPDATE/DELETE 目标与嵌套 FROM/JOIN 中的 DDL alias', () => {
++    expect(rebindSqlMutationTableIdentifiers_ACU([
++      "INSERT INTO inventory (row_id, value) VALUES ((SELECT COALESCE(MAX(row_id), 0) + 1 FROM inventory), '新值');",
++      'UPDATE inventory SET value = (SELECT value FROM inventory WHERE row_id = 1) WHERE row_id = 1;',
++      'DELETE FROM inventory WHERE row_id IN (SELECT row_id FROM inventory WHERE row_id = 99);',
++      'INSERT INTO inventory SELECT a.row_id + 1, a.value FROM inventory a JOIN inventory b ON a.row_id = b.row_id;',
++    ], tableData)).toEqual([
++      "INSERT INTO beibaowupinbiao (row_id, value) VALUES ((SELECT COALESCE(MAX(row_id), 0) + 1 FROM beibaowupinbiao), '新值');",
++      'UPDATE beibaowupinbiao SET value = (SELECT value FROM beibaowupinbiao WHERE row_id = 1) WHERE row_id = 1;',
++      'DELETE FROM beibaowupinbiao WHERE row_id IN (SELECT row_id FROM beibaowupinbiao WHERE row_id = 99);',
++      'INSERT INTO beibaowupinbiao SELECT a.row_id + 1, a.value FROM beibaowupinbiao a JOIN beibaowupinbiao b ON a.row_id = b.row_id;',
++    ]);
++  });
++
++  it('保留字符串与注释内容，并按原 quoting 风格重绑定标识符', () => {
++    expect(rebindSqlMutationTableIdentifiers_ACU([
++      "UPDATE `inventory` SET value = 'FROM inventory' /* JOIN inventory */ WHERE row_id IN (SELECT row_id FROM [inventory]);",
++    ], tableData)).toEqual([
++      "UPDATE `beibaowupinbiao` SET value = 'FROM inventory' /* JOIN inventory */ WHERE row_id IN (SELECT row_id FROM [beibaowupinbiao]);",
++    ]);
++  });
++
+   it('拒绝多个 sheet 共用的 DDL alias', () => {
+     const ambiguousData = {
+       sheet_0: { name: '表A', sourceData: { ddl: 'CREATE TABLE legacy (row_id INTEGER PRIMARY KEY);' } },
+@@ -383,6 +431,32 @@ describe('rebindSqlMutationTableIdentifiers_ACU', () => {
+       .toThrow('无法唯一解析 SQL 目标表标识符：legacy');
+   });
+ 
++  it('拒绝嵌套表引用命中歧义 DDL alias', () => {
++    const ambiguousReferenceData = {
++      ...tableData,
++      sheet_1: { name: '表A', sourceData: { ddl: 'CREATE TABLE legacy (row_id INTEGER PRIMARY KEY);' } },
++      sheet_2: { name: '表B', sourceData: { ddl: 'CREATE TABLE legacy (row_id INTEGER PRIMARY KEY);' } },
++    } as any;
++
++    expect(() => rebindSqlMutationTableIdentifiers_ACU([
++      'UPDATE inventory SET value = (SELECT MAX(row_id) FROM legacy) WHERE row_id = 1;',
++    ], ambiguousReferenceData)).toThrow('无法唯一解析 SQL 表引用：legacy');
++  });
++
++  it('严格单表模式拒绝可解析到其他物理表的 FROM/JOIN/逗号连接引用', () => {
++    const multiSheetData = {
++      ...tableData,
++      sheet_1: { name: '任务表', sourceData: { ddl: 'CREATE TABLE quest_log (row_id INTEGER PRIMARY KEY);' } },
++    } as any;
++
++    expect(() => rebindSqlMutationTableIdentifiers_ACU([
++      'INSERT INTO inventory SELECT row_id, value FROM quest_log;',
++    ], multiSheetData, { requireSinglePhysicalTable: true })).toThrow('跨 Sheet 表引用被拒绝');
++    expect(() => rebindSqlMutationTableIdentifiers_ACU([
++      'INSERT INTO inventory SELECT a.row_id + 1, a.value FROM inventory a, quest_log q;',
++    ], multiSheetData, { requireSinglePhysicalTable: true })).toThrow('跨 Sheet 表引用被拒绝');
++  });
++
+   it('不把 uid 或显示名当作 runtime SQL alias', () => {
+     expect(rebindSqlMutationTableIdentifiers_ACU(['INSERT INTO legacy_uid VALUES (1);'], tableData))
+       .toEqual(['INSERT INTO legacy_uid VALUES (1);']);
+diff --git a/tests/service/table/storage-frame-v2-replay.test.ts b/tests/service/table/storage-frame-v2-replay.test.ts
+index f5f676b..2cb951d 100644
+--- a/tests/service/table/storage-frame-v2-replay.test.ts
++++ b/tests/service/table/storage-frame-v2-replay.test.ts
+@@ -288,6 +288,45 @@ describe('loadTableStateFromFramesV2_ACU', () => {
+     expect(result?.sheet_0.sourceData.ddl).toBe('CREATE TABLE chronicle (row_id INTEGER PRIMARY KEY, name TEXT);');
+   });
+ 
++  it('回放 INSERT 时同时重绑定目标表与 VALUES 子查询中的历史 DDL alias', async () => {
++    const checkpointData = makeCheckpointData();
++    checkpointData.sheet_0.uid = 'chronicle';
++    checkpointData.sheet_0.name = '纪要表';
++    checkpointData.sheet_0.sourceData.ddl = 'CREATE TABLE chronicle (row_id INTEGER PRIMARY KEY, name TEXT);';
++    const chat = [{
++      is_user: false,
++      TavernDB_ACU_IsolatedData: {
++        '': {
++          _acu_storage_version: 2,
++          storageFrame: {
++            version: 2,
++            checkpoint: {
++              kind: 'full', createdAt: 1, reason: 'init', data: checkpointData,
++              event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] },
++            },
++            logEntries: [{
++              seq: 1, entryId: 'legacy-chronicle-insert-subquery', createdAt: 2, source: 'manual_crud', targetMessageIndex: 0, aiFloor: 1,
++              filledSheetKeys: [], changedSheetKeys: ['sheet_0'], groupKeys: [],
++              operations: [{
++                kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 'chronicle',
++                statements: ["INSERT INTO chronicle (row_id, name) VALUES ((SELECT COALESCE(MAX(row_id), 0) + 1 FROM chronicle), '子查询重绑定成功')"],
++                reason: 'manual_crud',
++              }],
++            }],
++          },
++        },
++      },
++    }];
++
++    const result = await loadTableStateFromFramesV2_ACU(chat, '');
++
++    expect(result?.sheet_0.content).toEqual([
++      ['row_id', 'name'],
++      ['1', '铁剑'],
++      ['2', '子查询重绑定成功'],
++    ]);
++  });
++
+   it('将历史 physical tableName 重绑定到同 sheet 当前 physical 表名', async () => {
+     const checkpointData = makeCheckpointData();
+     // 旧日志写入时该 sheet 的显示名为“旧背包”，之后重命名为“背包”。
+@@ -321,6 +360,42 @@ describe('loadTableStateFromFramesV2_ACU', () => {
+     expect(result?.sheet_0.content).toEqual([['row_id', 'name'], ['1', '重命名后仍可回放']]);
+   });
+ 
++  it('历史 physical tableName 出现在 VALUES 子查询时也重绑定到当前 physical 表名', async () => {
++    const checkpointData = makeCheckpointData();
++    const chat = [{
++      is_user: false,
++      TavernDB_ACU_IsolatedData: {
++        '': {
++          _acu_storage_version: 2,
++          storageFrame: {
++            version: 2,
++            checkpoint: {
++              kind: 'full', createdAt: 1, reason: 'init', data: checkpointData,
++              event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] },
++            },
++            logEntries: [{
++              seq: 1, entryId: 'renamed-physical-subquery', createdAt: 2, source: 'manual_crud', targetMessageIndex: 0, aiFloor: 1,
++              filledSheetKeys: [], changedSheetKeys: ['sheet_0'], groupKeys: [],
++              operations: [{
++                kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 'jiubeibao',
++                statements: ["INSERT INTO jiubeibao (row_id, name) VALUES ((SELECT COALESCE(MAX(row_id), 0) + 1 FROM jiubeibao), '历史物理名子查询')"],
++                reason: 'manual_crud',
++              }],
++            }],
++          },
++        },
++      },
++    }];
++
++    const result = await loadTableStateFromFramesV2_ACU(chat, '');
++
++    expect(result?.sheet_0.content).toEqual([
++      ['row_id', 'name'],
++      ['1', '铁剑'],
++      ['2', '历史物理名子查询'],
++    ]);
++  });
++
+   it('sql_sheet_batch 的 tableName 与 sheetKey 不一致时 fail closed', async () => {
+     const checkpointData = makeCheckpointData();
+     const chat = [{
+@@ -351,6 +426,86 @@ describe('loadTableStateFromFramesV2_ACU', () => {
+     expect(checkpointData.sheet_0.content).toEqual([['row_id', 'name'], ['1', '铁剑']]);
+   });
+ 
++  it('回放 UPDATE、DELETE、INSERT SELECT、JOIN 与多个同表子查询时完整重绑定 DDL alias', async () => {
++    const state = makeCheckpointData();
++
++    await applyTableOperationV2_ACU(state, {
++      kind: 'sql_sheet_batch',
++      sheetKey: 'sheet_0',
++      tableName: 'inventory',
++      statements: [
++        "UPDATE inventory SET name = (SELECT name FROM inventory WHERE row_id = 1) || '-更新' WHERE row_id = 1",
++        "INSERT OR REPLACE INTO inventory SELECT row_id + 1, name || '-复制' FROM inventory WHERE row_id = 1",
++        "UPDATE inventory SET name = name || '-关联' WHERE EXISTS (SELECT 1 FROM inventory a JOIN inventory b ON a.row_id = b.row_id)",
++        "UPDATE inventory SET name = name || '-逗号' WHERE EXISTS (SELECT 1 FROM inventory a, inventory b WHERE a.row_id = b.row_id)",
++        'DELETE FROM inventory WHERE row_id IN (SELECT row_id FROM inventory WHERE row_id = 999)',
++      ],
++      reason: 'manual_crud',
++    } as any);
++
++    expect(state.sheet_0.content).toEqual([
++      ['row_id', 'name'],
++      ['1', '铁剑-更新-关联-逗号'],
++      ['2', '铁剑-更新-复制-关联-逗号'],
++    ]);
++  });
++
++  it('回放时保留字符串和注释，并按原 quoting 风格重绑定表引用', async () => {
++    const state = makeCheckpointData();
++
++    await applyTableOperationV2_ACU(state, {
++      kind: 'sql_sheet_batch',
++      sheetKey: 'sheet_0',
++      tableName: 'inventory',
++      statements: ["UPDATE `inventory` SET name = 'FROM inventory JOIN inventory' /* FROM inventory */ WHERE row_id IN (SELECT row_id FROM [inventory] WHERE row_id = 1)"],
++      reason: 'manual_crud',
++    } as any);
++
++    expect(state.sheet_0.content).toEqual([
++      ['row_id', 'name'],
++      ['1', 'FROM inventory JOIN inventory'],
++    ]);
++  });
++
++  it('sql_sheet_batch 的嵌套 FROM 或逗号连接引用其他 Sheet 时 fail closed', async () => {
++    const state = makeCheckpointData();
++    state.sheet_1 = {
++      uid: 'quest_log', name: '任务表', content: [['row_id', 'name'], ['2', '支线任务']],
++      sourceData: { ddl: 'CREATE TABLE quest_log (row_id INTEGER PRIMARY KEY, name TEXT);' },
++      updateConfig: {}, exportConfig: {}, orderNo: 1,
++    };
++
++    await expect(applyTableOperationV2_ACU(state, {
++      kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 'inventory',
++      statements: ['INSERT INTO inventory SELECT row_id, name FROM quest_log'], reason: 'manual_crud',
++    } as any)).rejects.toThrow('sql_sheet_batch 跨 Sheet 引用被拒绝');
++    await expect(applyTableOperationV2_ACU(state, {
++      kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 'inventory',
++      statements: ['INSERT INTO inventory SELECT a.row_id + 1, a.name FROM inventory a, quest_log q'], reason: 'manual_crud',
++    } as any)).rejects.toThrow('sql_sheet_batch 跨 Sheet 引用被拒绝');
++    expect(state.sheet_0.content).toEqual([['row_id', 'name'], ['1', '铁剑']]);
++  });
++
++  it('sql_sheet_batch 的嵌套表引用命中歧义 DDL alias 时 fail closed', async () => {
++    const state = makeCheckpointData();
++    state.sheet_1 = {
++      uid: 'legacy_a', name: '表A', content: [['row_id'], ['1']],
++      sourceData: { ddl: 'CREATE TABLE legacy (row_id INTEGER PRIMARY KEY);' },
++      updateConfig: {}, exportConfig: {}, orderNo: 1,
++    };
++    state.sheet_2 = {
++      uid: 'legacy_b', name: '表B', content: [['row_id'], ['1']],
++      sourceData: { ddl: 'CREATE TABLE legacy (row_id INTEGER PRIMARY KEY);' },
++      updateConfig: {}, exportConfig: {}, orderNo: 2,
++    };
++
++    await expect(applyTableOperationV2_ACU(state, {
++      kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 'inventory',
++      statements: ['UPDATE inventory SET name = (SELECT MAX(row_id) FROM legacy) WHERE row_id = 1'], reason: 'manual_crud',
++    } as any)).rejects.toThrow('无法唯一解析 SQL 表引用：legacy');
++    expect(state.sheet_0.content).toEqual([['row_id', 'name'], ['1', '铁剑']]);
++  });
++
+   it('同楼层单表 checkpoint 引入新 DDL/CHECK 后再回放 sql_batch', async () => {
+     const oldData = {
+       mate: { type: 'acu', version: 1 },

@@ -1,8 +1,10 @@
 import { logDebug_ACU, logWarn_ACU } from '../../../shared/utils';
-import { getNameMapper } from './name-mapper';
 import { evaluateRawSqlExpression, TableQueryBuilder } from './sql-query-var';
 import { isSqliteMode } from '../../table/storage-mode';
 import { validateReadOnlySql_ACU } from './read-only-sql-validation';
+import { currentJsonTableData_ACU } from '../state-manager';
+import { getNameMapper } from './name-mapper';
+import { resolveReadQuerySql_ACU } from '../../../shared/sql-read-resolver';
 
 export interface AgentTemplatePart_ACU {
   kind: 'text' | 'query';
@@ -233,7 +235,8 @@ export function renderAgentReadOnlyQueryTemplates_ACU(content: string): AgentRea
         const rawSql = extractRawSql_ACU(expression);
         if (rawSql === null) throw new Error('query_tag_not_supported');
         const before = validateReadOnlySql_ACU(rawSql);
-        const translated = getNameMapper().translateSql(rawSql);
+        const mapper = getNameMapper();
+        const translated = resolveReadQuerySql_ACU(rawSql, currentJsonTableData_ACU as any, mapper.translateSql.bind(mapper)).sql;
         const after = validateReadOnlySql_ACU(translated);
         if (!before.valid || !after.valid) throw new Error(before.reason || after.reason || 'sql_not_allowed');
         value = evaluateRawSqlExpression(`sql ${JSON.stringify(rawSql)}`, {

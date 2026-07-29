@@ -12,8 +12,8 @@ async function importComposable() {
   let activeScope: 'global' | 'chat' = 'global';
   let activeMode = 'inherit_global';
   let archiveEntries: any[] = [];
-  const applyTemplatePresetToCurrent_ACU = vi.fn(async () => ({ presetName: selectedChat }));
-  const restoreChatTemplateArchiveEntry_ACU = vi.fn(async (archiveKey: string) => ({ archiveKey, presetName: selectedChat }));
+  const applyTemplateSnapshotToScope_ACU = vi.fn(async () => ({ saved: true, presetName: selectedChat }));
+  const applyTemplatePresetToCurrent_ACU = vi.fn(async () => ({ saved: true, presetName: selectedChat }));
   const resolveTemplateForExport_ACU = vi.fn(() => ({ jsonData: { sheet_1: {} }, fromPresetName: selectedChat || '默认预设' }));
   const ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU = vi.fn(async () => ({ success: true, dataWasReset: false }));
 
@@ -35,7 +35,6 @@ async function importComposable() {
       ? { mode: 'chat_override', presetName: selectedChat, templateStr: '{"sheet_1":{"name":"当前快照"}}', guideData: { sheet_1: {} } }
       : null,
     listChatTemplateArchiveEntries_ACU: () => archiveEntries,
-    restoreChatTemplateArchiveEntry_ACU,
     sanitizeChatSheetsObject_ACU: (value: any) => value,
   }));
   vi.doMock('../../../src/shared/template-preset-utils', () => ({
@@ -45,6 +44,7 @@ async function importComposable() {
     deriveTemplatePresetNameForImport_ACU: () => '导入模板',
   }));
   vi.doMock('../../../src/service/template/template-preset-service', () => ({
+    applyTemplateSnapshotToScope_ACU,
     applyTemplatePresetToCurrent_ACU,
     deleteTemplatePreset_ACU: vi.fn(() => true),
     getActiveTemplatePresetMeta_ACU: () => ({ presetName: selectedChat, scope: activeScope, mode: activeMode }),
@@ -70,8 +70,8 @@ async function importComposable() {
     useTableTemplatePresets,
     toast: useToastStore(),
     dialog: useDialogStore(),
+    applyTemplateSnapshotToScope_ACU,
     applyTemplatePresetToCurrent_ACU,
-    restoreChatTemplateArchiveEntry_ACU,
     resolveTemplateForExport_ACU,
     ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU,
     setSelectedGlobal: (value: string) => { selectedGlobal = value; },
@@ -151,8 +151,46 @@ describe('useTableTemplatePresets', () => {
     expect(applyTemplatePresetToCurrent_ACU).not.toHaveBeenCalled();
   });
 
+  it('聊天模板切换被破坏性变更阻断时，经明确确认后以 destructiveChangeConfirmed 重试', async () => {
+    const { useTableTemplatePresets, dialog, applyTemplatePresetToCurrent_ACU } = await importComposable();
+    const presets = useTableTemplatePresets();
+    applyTemplatePresetToCurrent_ACU
+      .mockResolvedValueOnce({ saved: false, blockers: ['删除表「旧表」需要显式确认。'], error: '删除表「旧表」需要显式确认。' })
+      .mockResolvedValueOnce({ saved: true, mode: 'v2_commit' });
+
+    const pending = presets.selectChatPreset('chat-A');
+    await vi.waitFor(() => expect(dialog.active).toMatchObject({
+      kind: 'confirm',
+      title: '确认破坏性模板变更',
+      confirmVariant: 'danger',
+    }));
+    dialog.submitActive();
+    await pending;
+
+    expect(applyTemplatePresetToCurrent_ACU).toHaveBeenNthCalledWith(1, 'chat-A', expect.objectContaining({
+      destructiveChangeConfirmed: false,
+    }));
+    expect(applyTemplatePresetToCurrent_ACU).toHaveBeenNthCalledWith(2, 'chat-A', expect.objectContaining({
+      destructiveChangeConfirmed: true,
+    }));
+  });
+
+  it('拒绝破坏性变更确认时不重试模板切换', async () => {
+    const { useTableTemplatePresets, dialog, applyTemplatePresetToCurrent_ACU } = await importComposable();
+    const presets = useTableTemplatePresets();
+    applyTemplatePresetToCurrent_ACU.mockResolvedValueOnce({ saved: false, blockers: ['删除列「旧列」需要显式确认。'], error: '删除列「旧列」需要显式确认。' });
+
+    const pending = presets.selectChatPreset('chat-A');
+    await vi.waitFor(() => expect(dialog.active?.kind).toBe('confirm'));
+    dialog.cancelActive();
+    await pending;
+
+    expect(applyTemplatePresetToCurrent_ACU).toHaveBeenCalledOnce();
+    expect(presets.message.value).toMatchObject({ kind: 'error', text: '删除列「旧列」需要显式确认。' });
+  });
+
   it('恢复历史归档通过单独对话框选择，并恢复选中的归档', async () => {
-    const { useTableTemplatePresets, dialog, restoreChatTemplateArchiveEntry_ACU, setChatEntries } = await importComposable();
+    const { useTableTemplatePresets, dialog, applyTemplateSnapshotToScope_ACU, setChatEntries } = await importComposable();
     setChatEntries([{ archiveKey: 'archive-B', presetName: 'chat-B', templateStr: '{"sheet_1":{"name":"历史归档"}}', label: 'chat-B（聊天历史快照）' }]);
     const presets = useTableTemplatePresets();
 
@@ -162,7 +200,29 @@ describe('useTableTemplatePresets', () => {
     dialog.submitActive('archive-B');
     await pending;
 
-    expect(restoreChatTemplateArchiveEntry_ACU).toHaveBeenCalledWith('archive-B', { save: true });
+    expect(applyTemplateSnapshotToScope_ACU).toHaveBeenCalledWith(
+      '{"sheet_1":{"name":"历史归档"}}',
+      expect.objectContaining({
+        scope: 'chat',
+        source: 'v2_table_chat_archive_restore',
+        presetName: 'chat-B',
+        registerChatPresetEntry: false,
+      }),
+    );
+  });
+
+  it('模板已保存但 SQLite 重建失败时显示警告而不是成功提示', async () => {
+    const { useTableTemplatePresets, toast, applyTemplatePresetToCurrent_ACU } = await importComposable();
+    const presets = useTableTemplatePresets();
+    applyTemplatePresetToCurrent_ACU.mockResolvedValueOnce({
+      saved: true,
+      runtimeReady: false,
+      postCommitWarning: '模板已保存，但 SQLite 运行时重建失败。',
+    });
+
+    await presets.selectChatPreset('chat-A');
+
+    expect(toast.items.at(-1)).toMatchObject({ kind: 'warning', text: '模板已保存，但 SQLite 运行时重建失败。' });
   });
 
   it('操作失败时保留局部错误并显示短 toast', async () => {

@@ -112,6 +112,8 @@ export interface AgentWorldbookStateMeta_ACU {
 /** Agent 世界书接管快照条目结构；用于禁用原生触发后按原状态恢复。 */
 export interface AgentWorldbookControlSnapshotEntry_ACU {
   uid: string | number;
+  /** 未标注的历史快照默认视为已实际接管；pending 不参与 UI、正文绿灯或恢复。 */
+  takeoverStatus?: 'pending' | 'applied';
   previousEnabled: boolean;
   previousKeys?: string[];
   previousType?: string;

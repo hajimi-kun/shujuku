@@ -15,13 +15,24 @@ export function createStableRowIdReservation_ACU(rows: unknown[] | null | undefi
 }
 
 /**
- * Allocates the smallest unused positive integer ID and reserves it immediately.
+ * Allocates an ID greater than every already-reserved canonical positive integer
+ * and reserves it immediately. Gaps from deleted rows are intentionally not reused:
+ * row_id is a stable identity, not a display position.
  * This is only for newly created rows; it must not be used to rewrite persisted IDs.
  */
 export function allocateStableRowId_ACU(reserved: Set<string>): string {
-  let candidate = 1;
-  while (reserved.has(String(candidate))) candidate += 1;
-  const rowId = String(candidate);
+  let maxRowId = 0;
+  for (const value of reserved) {
+    if (!/^[1-9]\d*$/.test(value)) continue;
+    const numericId = Number(value);
+    if (Number.isSafeInteger(numericId) && String(numericId) === value) {
+      maxRowId = Math.max(maxRowId, numericId);
+    }
+  }
+  if (maxRowId >= Number.MAX_SAFE_INTEGER) {
+    throw new Error('无法分配 row_id：已达到正安全整数上限。');
+  }
+  const rowId = String(maxRowId + 1);
   reserved.add(rowId);
   return rowId;
 }

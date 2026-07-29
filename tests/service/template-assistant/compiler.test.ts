@@ -93,6 +93,7 @@ describe('compileTemplateAssistantDraft_ACU', () => {
 
     expect(result.diff.addedSheets).toHaveLength(1);
     const addedKey = result.diff.addedSheets[0].sheetKey;
+    expect(addedKey).toBe('sheet_zhan_li_pin_biao');
     expect(result.candidateData[addedKey].content[0]).toEqual(['row_id', '物品', '品质']);
     expect(result.candidateData[addedKey].updateConfig.groupId).toBe(-1);
     expect(result.candidateData[addedKey].sourceData.initNode).toContain('初始化');
@@ -120,6 +121,21 @@ describe('compileTemplateAssistantDraft_ACU', () => {
     expect(result.candidateData[addedKey].sourceData.updateNode).toContain('数量');
     expect(result.candidateData[addedKey].sourceData.updateNode).toContain('更新');
     expect(result.candidateData[addedKey].sourceData.deleteNode).toContain('删除');
+  });
+
+  it('add_sheet 拒绝与现有表 canonical 重名的名称', () => {
+    const data = buildTempData_ACU();
+    data.sheet_a.name = '背包';
+
+    expect(() => compileTemplateAssistantDraft_ACU({
+      tempData: data,
+      sheetOrder: ['sheet_a'],
+      draft: {
+        version: 2,
+        selectedSheetKey: 'sheet_a',
+        operations: [{ op: 'add_sheet', sheetName: ' 背包 ', headers: ['物品'] }],
+      },
+    } as any)).toThrow('与现有表重复');
   });
 
   it('add_sheet 拒绝重复表头', () => {

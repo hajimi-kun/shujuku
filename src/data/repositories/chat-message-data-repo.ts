@@ -764,6 +764,14 @@ export function purgeSheetKeysFromMessageForIsolation_ACU(msg: any, isolationKey
 // ════════════════════════════════════════════════════════════════
 
 /**
+ * 读取消息上的完整隔离标签容器。
+ * 返回原始容器引用；调用方如需修改必须先克隆，避免绕过仓储写入契约。
+ */
+export function readIsolatedDataContainer_ACU(msg: any): IsolatedDataContainer_ACU | null {
+    return parseIsolatedDataField(msg);
+}
+
+/**
  * 从消息读取指定隔离标签的 IsolationTagData。
  * 统一处理 IsolatedData 字段的 string/object 两种格式。
  *
@@ -772,7 +780,7 @@ export function purgeSheetKeysFromMessageForIsolation_ACU(msg: any, isolationKey
  * @returns 标签数据，或 null（不存在时）
  */
 export function readIsolatedTagData_ACU(msg: any, isolationKey: string): IsolationTagData_ACU | null {
-    const container = parseIsolatedDataField(msg);
+    const container = readIsolatedDataContainer_ACU(msg);
     if (!container) return null;
     const tagData = container[isolationKey];
     if (!tagData || typeof tagData !== 'object') return null;

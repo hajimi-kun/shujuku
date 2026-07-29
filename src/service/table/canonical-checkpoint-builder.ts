@@ -8,6 +8,7 @@ import type {
   ManualRefillProgressV2_ACU,
   TableCheckpointScheduleSummaryV2_ACU,
   TableCheckpointV2_ACU,
+  TableMigrationProvenanceV1_ACU,
   TableMutationEventV2_ACU,
   TableSheetCheckpointV2_ACU,
 } from './storage-frame-v2-types';
@@ -59,6 +60,7 @@ export interface BuildCanonicalFullCheckpointOptions_ACU {
   scheduleSummary?: Record<string, TableCheckpointScheduleSummaryV2_ACU>;
   event?: TableMutationEventV2_ACU;
   manualRefillProgress?: ManualRefillProgressV2_ACU;
+  migrationProvenance?: TableMigrationProvenanceV1_ACU;
   context?: CanonicalCheckpointValidationContext_ACU;
 }
 
@@ -73,6 +75,7 @@ export function buildCanonicalFullCheckpoint_ACU(
     ...(options.scheduleSummary ? { scheduleSummary: deepClone_ACU(options.scheduleSummary) } : {}),
     ...(options.event ? { event: deepClone_ACU(options.event) } : {}),
     ...(options.manualRefillProgress ? { manualRefillProgress: deepClone_ACU(options.manualRefillProgress) } : {}),
+    ...(options.migrationProvenance ? { migrationProvenance: deepClone_ACU(options.migrationProvenance) } : {}),
   };
   return validateCandidate_ACU(checkpoint, { ...options.context, reason: options.reason });
 }

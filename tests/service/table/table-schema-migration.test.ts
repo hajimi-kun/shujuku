@@ -146,20 +146,18 @@ describe('table schema migration P1 contract', () => {
     }
   });
 
-  it('表级约束或物理表名变化均 fail closed', async () => {
+  it('表级约束变更 fail closed，DDL 作者表名变化不改变 runtime 物理名', async () => {
     const before = makeSheet();
     await expect(buildSheetSchemaMigrationOperation_ACU('sheet_inventory', before, makeSheet({
       sourceData: { ddl: 'CREATE TABLE inventory (\n row_id INTEGER PRIMARY KEY, -- 行号\n item_name TEXT, -- 名称\n UNIQUE (item_name)\n);' },
     }))).rejects.toThrow('表级 constraint');
-    await expect(buildSheetSchemaMigrationOperation_ACU('sheet_inventory', before, makeSheet({
+    const renamedDdl = makeSheet({
       sourceData: { ddl: 'CREATE TABLE inventory_next (\n row_id INTEGER PRIMARY KEY, -- 行号\n item_name TEXT -- 名称\n);' },
-    }))).rejects.toThrow('物理表名');
-    const quotedBefore = makeSheet({
-      sourceData: { ddl: 'CREATE TABLE "inventory(x)" (\n row_id INTEGER PRIMARY KEY, -- 行号\n item_name TEXT -- 名称\n);' },
     });
-    await expect(buildSheetSchemaMigrationOperation_ACU('sheet_inventory', quotedBefore, makeSheet({
-      sourceData: { ddl: 'CREATE TABLE "inventory(y)" (\n row_id INTEGER PRIMARY KEY, -- 行号\n item_name TEXT -- 名称\n);' },
-    }))).rejects.toThrow('物理表名');
+    const operation = await buildSheetSchemaMigrationOperation_ACU('sheet_inventory', before, renamedDdl);
+    const result = await applySheetSchemaMigrationOperation_ACU(makeState(before), operation);
+
+    expect(result.sheet_inventory.sourceData.ddl).toContain('CREATE TABLE inventory_next');
   });
 
   it('完整 candidate 中其他 sheet 的 SQLite 约束失败时拒绝且原 state 不变', async () => {
@@ -240,7 +238,7 @@ describe('table schema migration P2 contract', () => {
     expect(state).toEqual(makeState(before));
   });
 
-  it('physical add/drop 未完整 mapping 或缺 fillStrategy 均 fail closed', async () => {
+  it('physical rename 仍要求 mapping，新增列仍要求 fillStrategy', async () => {
     const before = makeSheet({
       content: [['row_id', 'name'], ['1', '铁剑']],
       sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT);' },
@@ -249,10 +247,11 @@ describe('table schema migration P2 contract', () => {
       content: [['row_id', 'item_name'], ['1', '铁剑']],
       sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT);' },
     });
-    await expect(buildSheetSchemaMigrationOperationV2_ACU('sheet_inventory', before, renamed, {
+    const renameWithoutMapping = buildSheetSchemaMigrationOperationV2_ACU('sheet_inventory', before, renamed, {
       physicalColumnMappings: [], fills: {}, conversions: [],
-      migrationPolicy: { destructiveChangeConfirmed: false, lossyConversionConfirmed: false },
-    })).rejects.toThrow('physicalColumnMappings');
+      migrationPolicy: { destructiveChangeConfirmed: true, lossyConversionConfirmed: false },
+    });
+    await expect(renameWithoutMapping).rejects.toThrow('fillStrategy');
 
     const added = makeSheet({
       content: [['row_id', 'item_name', 'quality'], ['1', '铁剑', null]],

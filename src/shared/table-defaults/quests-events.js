@@ -9,7 +9,7 @@ export const questsEventsSheet = {
     initNode: "游戏初始化时，根据剧情与设定添加一条主线剧情。",
     deleteNode: "任务完成、失败或过期时删除。\nSQL示例: DELETE FROM quests_events WHERE quest_name = '已完成的任务';",
     updateNode: "任务取得关键进展时进行更新。\nSQL示例: UPDATE quests_events SET current_progress = '已完成第一阶段', time_limit = '剩余3天' WHERE quest_name = '拯救公主';",
-    insertNode: "主角接取或触发新的主线或支线任务时添加。\nSQL示例: INSERT INTO quests_events (row_id, quest_name, quest_type, issuer, detail_desc, current_progress, time_limit, reward, penalty) VALUES ((SELECT MAX(row_id)+1 FROM quests_events), '新任务', '支线任务', '村长', '任务描述', '刚接取', '7天', '金币100', '声望降低');",
+    insertNode: "主角接取或触发新的主线或支线任务时添加。\nSQL示例: INSERT INTO quests_events (quest_name, quest_type, issuer, detail_desc, current_progress, time_limit, reward, penalty) VALUES ('新任务', '支线任务', '村长', '任务描述', '刚接取', '7天', '金币100', '声望降低');",
     ddl: `CREATE TABLE quests_events ( -- 任务与事件表
   row_id INTEGER PRIMARY KEY, -- 行号
   quest_name TEXT NOT NULL UNIQUE, -- 任务名称

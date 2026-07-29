@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   hasLegacyTopLevelTableData_ACU,
+  hasV2TableHistoryEvidence_ACU,
   isLegacyV1TagData_ACU,
   isV2TagData_ACU,
   resolveTableStorageStrategy_ACU,
@@ -63,6 +64,46 @@ describe('storage-strategy-resolver', () => {
 
     expect(isV2TagData_ACU(tagData)).toBe(true);
     expect(resolveTableStorageStrategy_ACU(chat, 'tag-a', isolationConfig)).toEqual({ mode: 'v2' });
+  });
+
+  it('畸形 V2 frame 仍按 v2 历史处理，禁止误判为 empty 后重分配 key', () => {
+    const tagData = { storageFrame: { version: 2, logEntries: 'broken' }, _acu_storage_version: 2 };
+    const chat = [aiMessage({ TavernDB_ACU_IsolatedData: { 'tag-a': tagData } })];
+
+    expect(isV2TagData_ACU(tagData)).toBe(false);
+    expect(resolveTableStorageStrategy_ACU(chat, 'tag-a', isolationConfig)).toEqual({ mode: 'v2' });
+  });
+
+  it('只有 V2 版本标记但 frame 缺失时也 fail-closed 为 v2', () => {
+    const chat = [aiMessage({
+      TavernDB_ACU_IsolatedData: {
+        'tag-a': { _acu_storage_version: 2, summaryIndexManifest: { id: 'm1' } },
+      },
+    })];
+
+    expect(resolveTableStorageStrategy_ACU(chat, 'tag-a', isolationConfig)).toEqual({ mode: 'v2' });
+  });
+
+  it.each([
+    ['full checkpoint', { checkpoint: { kind: 'full', data: {} } }],
+    ['per-sheet checkpoint', { perSheetCheckpoints: { sheet_a: { kind: 'sheet_full', data: {} } } }],
+    ['non-empty log', { logEntries: [{ seq: 1 }] }],
+    ['head revision', { headRevision: 'checkpoint:orphan' }],
+    ['manual refill progress', { manualRefillProgress: { status: 'in_progress' } }],
+  ])('缺失版本标记但残留 %s 时仍按 v2 历史 fail-closed', (_label, storageFrame) => {
+    const tagData = { storageFrame };
+    const chat = [aiMessage({ TavernDB_ACU_IsolatedData: { 'tag-a': tagData } })];
+
+    expect(hasV2TableHistoryEvidence_ACU(tagData)).toBe(true);
+    expect(resolveTableStorageStrategy_ACU(chat, 'tag-a', isolationConfig)).toEqual({ mode: 'v2' });
+  });
+
+  it('其他 isolationKey 的 markerless V2 artifact 不阻止当前隔离域 pristine', () => {
+    const chat = [aiMessage({
+      TavernDB_ACU_IsolatedData: { 'tag-b': { storageFrame: { headRevision: 'checkpoint:other' } } },
+    })];
+
+    expect(resolveTableStorageStrategy_ACU(chat, 'tag-a', isolationConfig)).toEqual({ mode: 'empty' });
   });
 
   it('V2 tag 上的空 legacy 兼容字段不触发 legacy-v1', () => {

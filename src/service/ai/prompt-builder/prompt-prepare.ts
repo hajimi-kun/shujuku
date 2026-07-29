@@ -5,19 +5,53 @@
  */
 import { manualExtraHint_ACU } from '../../runtime/state-manager';
 import { currentJsonTableData_ACU, settings_ACU } from '../../runtime/state-manager';
+import type { TemplateScope_ACU } from '../../template/chat-scope';
+import type { SqlTableApplyScope_ACU } from '../../../shared/table-storage-provider';
 import { getUserName_ACU } from '../../../data/gateways/host-state-gateway';
-import { attachSeedRowsToCurrentDataFromGuide_ACU, ensureChatSheetGuideSeeded_ACU, getEffectiveSeedRowsForSheet_ACU, getSortedSheetKeys_ACU } from '../../template/chat-scope';
+import { attachSeedRowsToCurrentDataFromGuide_ACU, ensureChatSheetGuideSeeded_ACU, getEffectiveSeedRowsForSheet_ACU, getSortedSheetKeys_ACU, filterSheetKeysByTemplateScope_ACU, projectSheetForTemplateScope_ACU, resolveTemplateScope_ACU } from '../../template/chat-scope';
 import { getCombinedWorldbookContent_ACU, getWorldBooks_ACU } from '../../worldbook/pipeline';
 import { isDatabaseGeneratedLorebookEntry_ACU, resolveGeneratedEntriesForTable_ACU } from '../../worldbook/worldbook-placeholder-classification';
 import { resolvePreTakeoverWorldbookSnapshot_ACU } from '../../agent/agent-worldbook-takeover';
 import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, normalizeExcludeRules_ACU, normalizeExtractRules_ACU } from '../../../shared/utils';
 import { applyContextTagFilters_ACU } from '../../runtime/helpers-remaining';
 import { isSqliteMode } from '../../table/storage-mode';
-import { ensureStorageProviderReady_ACU } from '../../table/table-storage-strategy';
-import { parseDDLColumnNames } from '../../../shared/ddl-utils';
+import { ensureStorageProviderReady_ACU, getStorageRuntimeHealth_ACU } from '../../table/table-storage-strategy';
+import { resolveEffectiveDDL, type EffectiveDDLColumnMap_ACU } from '../../../data/sqlite/schema-mapper';
+import { getSheetColumnProjection_ACU, projectSheetDDLForVisibleColumns_ACU, projectSheetRowToVisibleColumns_ACU } from '../../../shared/ddl-utils';
+import { getPhysicalTableNameForSheet_ACU } from '../../../shared/sheet-identity';
 import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var';
 
-  async function resolvePromptSourceTableData_ACU(options: any, sqlMode: boolean) {
+  export interface PrepareAIInputFailure_ACU {
+    ok: false;
+    failureCode: string;
+    message: string;
+    retryable: boolean;
+  }
+
+  function createPromptRuntimeFailure_ACU(
+    failureCode: string,
+    message: string,
+    retryable: boolean,
+  ): PrepareAIInputFailure_ACU {
+    return { ok: false, failureCode, message, retryable };
+  }
+
+  function getPromptRuntimeFailureFromHealth_ACU(): PrepareAIInputFailure_ACU {
+    const health = getStorageRuntimeHealth_ACU();
+    if (health.status === 'loading') {
+      return createPromptRuntimeFailure_ACU('runtime_loading', 'SQLite 运行时正在加载，请等待加载完成后重试。', true);
+    }
+    if (health.failureCode === 'provider_fallback' || health.activeMode === 'native') {
+      return createPromptRuntimeFailure_ACU('provider_fallback', 'SQLite 运行时加载失败，当前未使用 SQLite 数据库。', false);
+    }
+    return createPromptRuntimeFailure_ACU(
+      health.failureCode || 'provider_load_failed',
+      'SQLite 运行时未就绪，已阻止准备 AI 输入。',
+      health.status === 'idle',
+    );
+  }
+
+  async function resolvePromptSourceTableData_ACU(options: any, sqlMode: boolean): Promise<any | PrepareAIInputFailure_ACU> {
     if (!sqlMode) {
         return options?.tableData || currentJsonTableData_ACU;
     }
@@ -25,19 +59,33 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
     try {
         const provider = await ensureStorageProviderReady_ACU();
         if (provider.mode !== 'sqlite') {
-            logError_ACU(`prepareAIInput_ACU: SQLite mode expected runtime DB provider, got ${provider.mode}.`);
-            return null;
+            logError_ACU('prepareAIInput_ACU: SQLite mode expected a SQLite runtime provider.');
+            return createPromptRuntimeFailure_ACU('provider_fallback', 'SQLite 运行时加载失败，当前未使用 SQLite 数据库。', false);
         }
-        return provider.getCurrentData();
+        const runtimeData = provider.getCurrentData();
+        if (!runtimeData) {
+            logError_ACU('prepareAIInput_ACU: SQLite runtime exported no table data.');
+            return createPromptRuntimeFailure_ACU('runtime_export_null', 'SQLite 运行时未导出可用表格数据。', true);
+        }
+        return runtimeData;
     } catch (e) {
-        logError_ACU('prepareAIInput_ACU: 无法从 SQLite 运行时 DB 获取权威表格数据。', e);
-        return null;
+        const failure = getPromptRuntimeFailureFromHealth_ACU();
+        logError_ACU(`prepareAIInput_ACU: SQLite runtime unavailable (${failure.failureCode}).`, e);
+        return failure;
     }
   }
 
-  export async function prepareAIInput_ACU(messages: any[], updateMode = 'standard', targetSheetKeys: string[] | null = null, options: any = {}) {
+  export async function prepareAIInput_ACU(
+    messages: any[],
+    updateMode = 'standard',
+    targetSheetKeys: string[] | null = null,
+    options: { tableData?: any; excludeImportTaggedWorldbookEntries?: boolean; agentGreenlights?: any[]; isolationKey?: string; templateScope?: TemplateScope_ACU; sqlApplyScope?: SqlTableApplyScope_ACU } = {},
+  ) {
     const sqlMode = isSqliteMode();
     const sourceTableData = await resolvePromptSourceTableData_ACU(options, sqlMode);
+    if (sourceTableData && typeof sourceTableData === 'object' && sourceTableData.ok === false) {
+        return sourceTableData;
+    }
     if (!sourceTableData) {
         logError_ACU(sqlMode
             ? 'prepareAIInput_ACU: Cannot prepare AI input, SQLite runtime DB data is null.'
@@ -73,10 +121,17 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
 
     let tableDataText = '';
     let _seedRowsTablesUsed_ACU: string[] = [];
-    const tableIndexes = getSortedSheetKeys_ACU(workingTableData);
+    // 模板只起指导作用：只有模板声明的表参与 prompt。
+    // 范围未知（解析失败）时不过滤，避免把所有表判成不参与。
+    const templateScope = Object.prototype.hasOwnProperty.call(options, 'templateScope')
+        ? options.templateScope ?? null
+        : resolveTemplateScope_ACU(options.isolationKey);
+    const tableIndexes = filterSheetKeysByTemplateScope_ACU(getSortedSheetKeys_ACU(workingTableData), templateScope);
     tableIndexes.forEach((sheetKey, tableIndex) => {
-        const table = workingTableData[sheetKey];
-        if (!table || !table.name || !table.content) return;
+        const rawTable = workingTableData[sheetKey];
+        if (!rawTable || !rawTable.name || !rawTable.content) return;
+        // 模板未声明的列合并进 hiddenPhysicalColumns，只影响投影，不改写持久化数据。
+        const table: any = projectSheetForTemplateScope_ACU(rawTable, templateScope, sheetKey);
 
         if (targetSheetKeys && Array.isArray(targetSheetKeys)) {
             if (!targetSheetKeys.includes(sheetKey)) return;
@@ -104,8 +159,15 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
         }
 
         // SQLite 模式：输出 DDL + 注释数据格式；数据只来自运行时 DB，不再从模板 seedRows 兜底。
-        if (sqlMode && table.sourceData?.ddl) {
-            tableDataText += formatTableForSqliteMode(table, tableIndex, sheetKey, _seedGuideDataForThisPrepare_ACU, { allowSeedRowsFallback: false });
+        if (sqlMode) {
+            // 物理表名必须与提交阶段使用同一请求前模板快照解析；运行时数据可能仍保留旧模板显示名。
+            const runtimeNameSource = options.sqlApplyScope?.templateData?.[sheetKey]
+                ? options.sqlApplyScope.templateData
+                : workingTableData;
+            tableDataText += formatTableForSqliteMode(table, tableIndex, sheetKey, _seedGuideDataForThisPrepare_ACU, {
+                allowSeedRowsFallback: false,
+                runtimeTableName: resolveRuntimeTableNameForPrompt_ACU(runtimeNameSource, sheetKey),
+            });
             return;
         }
 
@@ -121,6 +183,8 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
             try { _seedRowsTablesUsed_ACU.push(String(table.name || sheetKey)); } catch (e) {}
         }
         const effectiveAllRows = (allRows.length > 0) ? allRows : (seedRows.length > 0 ? seedRows : []);
+        const visibleColumns = getSheetColumnProjection_ACU(table).visibleColumns.filter(column => column.sourceIndex > 0);
+        const visibleHeaders = visibleColumns.map(column => column.header);
 
         if (effectiveAllRows.length === 0) {
             tableDataText += `[${tableIndex}:${table.name}]\n`;
@@ -128,7 +192,7 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
             // 原先使用 i + 1 导致列头标注为 [1:列名],[2:列名]...，
             // 而默认提示词示例使用 {"0":"...","1":"..."} 的 0 基格式，
             // 模型会把列头编号 "1" 跟对象键 "1" 做映射，导致所有数据整体右移一列。
-            const headers = table.content[0] ? table.content[0].slice(1).map((h: any, i: number) => `[${i}:${h}]`).join(', ') : 'No Headers';
+            const headers = visibleHeaders.length > 0 ? visibleHeaders.map((h: any, i: number) => `[${i}:${h}]`).join(', ') : 'No Headers';
             tableDataText += `  Columns: ${headers}\n`;
 
             if (table.sourceData) {
@@ -140,7 +204,7 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
         } else {
             tableDataText += `[${tableIndex}:${table.name}]\n`;
             // [修复] 同上——列头编号 0 基，与原生 DSL 对象键语义对齐
-            const headers = table.content[0] ? table.content[0].slice(1).map((h: any, i: number) => `[${i}:${h}]`).join(', ') : 'No Headers';
+            const headers = visibleHeaders.length > 0 ? visibleHeaders.map((h: any, i: number) => `[${i}:${h}]`).join(', ') : 'No Headers';
             tableDataText += `  Columns: ${headers}\n`;
             if (table.sourceData) {
                 tableDataText += `  - Note: ${table.sourceData.note || 'N/A'}\n`;
@@ -173,7 +237,7 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
             if (rowsToProcess.length > 0) {
                 rowsToProcess.forEach((row: any, index: number) => {
                     const originalRowIndex = startIndex + index;
-                    const rowData = row.slice(1).join(', ');
+                    const rowData = visibleColumns.map(column => Array.isArray(row) ? row[column.sourceIndex] : null).join(', ');
                     tableDataText += `  [${originalRowIndex}] ${rowData}\n`;
                 });
             } else {
@@ -258,9 +322,9 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
     // SQLite 模式下追加 SQL 编辑格式兜底说明（Q17 确认：$0 自带格式说明）
     if (isSqliteMode() && tableDataText) {
         if (settings_ACU.strictJsonTableFillEnabled === true) {
-            tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在响应 JSON 的 sql 字符串中使用标准 SQL 语句（INSERT INTO / UPDATE / DELETE FROM）\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- INSERT 时 row_id 值为当前表最大 row_id + 1\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新等标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
+            tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在响应 JSON 的 sql 字符串中仅使用 INSERT INTO / INSERT OR REPLACE INTO / REPLACE INTO / UPDATE / DELETE FROM 数据变更语句\n-- 上方 CREATE TABLE 仅用于说明表结构，严禁复制或输出 CREATE、ALTER、DROP、SELECT、PRAGMA、VACUUM、BEGIN、COMMIT、ROLLBACK 等语句\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- 普通 INSERT 必须显式列出业务列，不得包含 row_id；row_id 由系统在执行前分配稳定身份\n-- INSERT OR REPLACE / REPLACE INTO 按 SQLite 原生整行替换语义执行，应显式提供目标列及用于冲突定位的 row_id 或 UNIQUE 列\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
         } else {
-            tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在 <tableEdit> 标签内使用标准 SQL 语句（INSERT INTO / UPDATE / DELETE FROM）\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- INSERT 时 row_id 值为当前表最大 row_id + 1\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新等标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
+            tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在 <tableEdit> 标签内仅使用 INSERT INTO / INSERT OR REPLACE INTO / REPLACE INTO / UPDATE / DELETE FROM 数据变更语句\n-- 上方 CREATE TABLE 仅用于说明表结构，严禁复制或输出 CREATE、ALTER、DROP、SELECT、PRAGMA、VACUUM、BEGIN、COMMIT、ROLLBACK 等语句\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- 普通 INSERT 必须显式列出业务列，不得包含 row_id；row_id 由系统在执行前分配稳定身份\n-- INSERT OR REPLACE / REPLACE INTO 按 SQLite 原生整行替换语义执行，应显式提供目标列及用于冲突定位的 row_id 或 UNIQUE 列\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新等标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
         }
     }
 
@@ -275,16 +339,53 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
 }
 
 /**
+ * 解析提示词用的 runtime 物理表名（显示名拼音）。
+ * 拼音冲突等异常下返回 undefined：提示词构建不应因此硬失败，
+ * 退回未重绑定的 DDL 仍能让 AI 看到列结构，冲突本身由启动自检负责上报。
+ */
+function resolveRuntimeTableNameForPrompt_ACU(data: any, sheetKey: string): string | undefined {
+    try {
+        return getPhysicalTableNameForSheet_ACU(data, sheetKey);
+    } catch (e: any) {
+        logWarn_ACU(`[AI输入准备] 无法解析 runtime 物理表名，提示词将使用原 DDL 表名: ${sheetKey}: ${e?.message || e}`);
+        return undefined;
+    }
+}
+
+
+/**
  * SQLite 模式下的表格格式化
  * 输出 DDL + Note/Trigger 注释 + 当前数据（注释格式）
  */
-export function formatTableForSqliteMode(table: any, tableIndex: number, sheetKey: string, guideData: any, options: { allowSeedRowsFallback?: boolean } = {}): string {
+export function formatTableForSqliteMode(table: any, tableIndex: number, sheetKey: string, guideData: any, options: { allowSeedRowsFallback?: boolean; runtimeTableName?: string } = {}): string {
     let text = '';
-    const ddl = table.sourceData.ddl;
+    const projection = getSheetColumnProjection_ACU(table);
+    const hasHiddenPhysicalColumns = projection.hiddenPhysicalColumns.length > 0;
+    const visibleDDL = projectSheetDDLForVisibleColumns_ACU(table);
+    const promptSchemaTable = hasHiddenPhysicalColumns
+        ? {
+            ...table,
+            sourceData: { ...table.sourceData, ddl: visibleDDL, hiddenPhysicalColumns: [] },
+            content: (Array.isArray(table.content) ? table.content : []).map((row: unknown[]) =>
+                projectSheetRowToVisibleColumns_ACU(table, row)),
+        }
+        : table;
+    const runtimeSchema = table?._acu_runtimeEffectiveSchema;
+    // 必须把 runtime 物理表名（显示名拼音）传进去重绑定 CREATE TABLE 标识符。
+    // 漏传会让提示词出现 DDL 原文英文名，AI 照抄后 SQL 打到不存在的表上（no such table）。
+    const resolvedDDL = (!hasHiddenPhysicalColumns && runtimeSchema)
+        || resolveEffectiveDDL(promptSchemaTable, table.uid || sheetKey, options.runtimeTableName);
+    const ddl = hasHiddenPhysicalColumns
+        ? resolvedDDL.effectiveDDL
+        : projectSheetDDLForVisibleColumns_ACU(table, resolvedDDL.effectiveDDL);
+    const visiblePhysicalNames = new Set(projection.visibleColumns.map(column => column.physicalName.toLowerCase()));
     const allowSeedRowsFallback = options.allowSeedRowsFallback !== false;
 
     // 输出 DDL
     text += ddl.trim() + '\n';
+    if (resolvedDDL.source !== 'explicit') {
+        text += `-- WARNING: ${resolvedDDL.diagnostics[0]} 原始 DDL 未被改写。\n`;
+    }
 
     // 输出 Note 和 Trigger（作为 SQL 注释）
     if (table.sourceData) {
@@ -298,7 +399,10 @@ export function formatTableForSqliteMode(table: any, tableIndex: number, sheetKe
     const allRows = table.content.slice(1);
     const seedRows = allowSeedRowsFallback ? getEffectiveSeedRowsForSheet_ACU(sheetKey, { guideData, allowTemplateFallback: true }) : [];
     const isUsingSeedRows = (allRows.length === 0 && seedRows.length > 0);
-    const effectiveAllRows = (allRows.length > 0) ? allRows : (seedRows.length > 0 ? seedRows : []);
+    const sourceRows = (allRows.length > 0) ? allRows : (seedRows.length > 0 ? seedRows : []);
+    const effectiveAllRows = hasHiddenPhysicalColumns
+        ? sourceRows.map((row: unknown[]) => projectSheetRowToVisibleColumns_ACU(table, row))
+        : sourceRows;
 
     if (effectiveAllRows.length === 0) {
         if (table.sourceData?.initNode) {
@@ -312,13 +416,15 @@ export function formatTableForSqliteMode(table: any, tableIndex: number, sheetKe
         text += `-- SeedRows: 已提供模板基础数据（尚未写入聊天楼层数据；本次填表可直接基于这些行更新）\n`;
     }
 
-    const ddlColumnNames = parseDDLColumnNames(ddl);
-    const headers = (ddlColumnNames.length > 0) ? ddlColumnNames : (table.content[0] || []);
+    const columnMappings: EffectiveDDLColumnMap_ACU['mappings'] = projection.hiddenPhysicalColumns.length === 0
+        ? resolvedDDL.columnMap.mappings
+        : resolvedDDL.columnMap.mappings.filter((mapping: EffectiveDDLColumnMap_ACU['mappings'][number]) => visiblePhysicalNames.has(mapping.sqlName.toLowerCase()));
+    const headers = columnMappings.map(mapping => mapping.sqlName);
     const sendRowsSqlTemplate = typeof table.updateConfig?.sendRowsSqlTemplate === 'string'
         ? table.updateConfig.sendRowsSqlTemplate.trim()
         : '';
 
-    if (sendRowsSqlTemplate) {
+    if (sendRowsSqlTemplate && !hasHiddenPhysicalColumns) {
         const renderedRows = replaceDbSqlVariables(sendRowsSqlTemplate).trim();
         text += `\n-- 当前数据\n`;
         text += renderedRows
@@ -326,6 +432,9 @@ export function formatTableForSqliteMode(table: any, tableIndex: number, sheetKe
             : '-- (No data rows)\n';
         text += '\n';
         return text;
+    }
+    if (sendRowsSqlTemplate) {
+        logWarn_ACU(`[SQLite prompt] 已忽略表 ${table.name || sheetKey} 的 sendRowsSqlTemplate：隐藏 physical columns 时无法证明自定义 SQL 不会泄露隐藏数据。`);
     }
 
     // 行数限制逻辑（与原生模式一致）
@@ -351,7 +460,8 @@ export function formatTableForSqliteMode(table: any, tableIndex: number, sheetKe
     text += `\n-- 当前数据 (${rowsToProcess.length} rows)\n`;
     text += `-- | ${headers.join(' | ')} |\n`;
     rowsToProcess.forEach((row: any) => {
-        text += `-- | ${row.join(' | ')} |\n`;
+        const orderedValues = columnMappings.map(mapping => Array.isArray(row) ? row[mapping.sourceIndex] : null);
+        text += `-- | ${orderedValues.join(' | ')} |\n`;
     });
     text += '\n';
 

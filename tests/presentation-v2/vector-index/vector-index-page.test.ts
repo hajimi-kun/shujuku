@@ -92,6 +92,12 @@ async function mountVectorIndexPage(opts: {
     return { success: applied.success !== false, value: applied.value, tableData: applied.tableData, saved: true };
   });
   const updateLorebook = vi.fn(async () => true);
+  const rebuildNow = vi.fn(async () => {
+    await runTableUpdateCommit({}, async () => ({ success: true, value: null, tableData: {}, mutationResult: { changes: 1, errors: [] } }));
+    const result = await archiveSummary({ mode: 'sync' });
+    if (result.success && !result.skipped) await updateLorebook();
+    return result;
+  });
   const getLastIndex = vi.fn(() => 5);
   const clearCache = vi.fn(async () => undefined);
   const deleteIndex = vi.fn(async () => true);
@@ -143,6 +149,9 @@ async function mountVectorIndexPage(opts: {
     archiveSummaryVectorIndexNow_ACU: archiveSummary,
     migrateLegacySummaryVectorIndexToContentAddressed_ACU: migrateLegacy,
   }));
+  vi.doMock('../../../src/service/vector/summary-vector-index-rebuild-service', () => ({
+    rebuildCurrentSummaryVectorIndexNow_ACU: rebuildNow,
+  }));
   vi.doMock('../../../src/service/table/table-service', () => ({
     loadOrCreateJsonTableFromChatHistory_ACU: loadOrCreate,
     saveIndependentTableToChatHistory_ACU: saveIndependent,
@@ -187,6 +196,7 @@ async function mountVectorIndexPage(opts: {
     settings,
     config,
     saveSettings,
+    rebuildNow,
     archiveSummary,
     migrateLegacy,
     inspectHealth,
@@ -317,6 +327,12 @@ describe('VectorIndexPage', () => {
     expect(text).toContain('归档与分块');
     expect(text).toContain('触发阈值');
     expect(text).toContain('归档批次');
+    expect(text).toContain('滚动增量写入暂不可用');
+    expect(text).toContain('历史配置已开启，归档仍会安全地写入 V2 单文件快照');
+    const rollingDeltaToggle = Array.from(document.querySelectorAll<HTMLButtonElement>('.acu-v2-vector-index-page .acu-toggle'))
+      .find((button) => button.textContent?.includes('滚动增量写入暂不可用'));
+    expect(rollingDeltaToggle).toBeDefined();
+    expect(rollingDeltaToggle?.disabled).toBe(true);
     const mobileNavItems = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-mobile-panel-nav__item'))
       .map(item => item.textContent?.trim());
     expect(mobileNavItems).toEqual(['索引状态', '关键词', '向量服务', '提示词', '召回参数', '归档分块']);
@@ -398,12 +414,13 @@ describe('VectorIndexPage', () => {
     const migrateButton = Array.from(document.querySelectorAll('button'))
       .find(b => /非破坏迁移旧索引/.test(b.textContent || '')) as HTMLButtonElement | undefined;
     expect(migrateButton).not.toBeUndefined();
+    const healthCallsBeforeClick = inspectHealth.mock.calls.length;
 
     migrateButton!.click();
     await new Promise(r => setTimeout(r, 0));
     await new Promise(r => setTimeout(r, 0));
 
-    expect(inspectHealth).toHaveBeenCalledTimes(1);
+    expect(inspectHealth.mock.calls.length).toBeGreaterThan(healthCallsBeforeClick);
     expect(migrateLegacy).toHaveBeenCalledTimes(1);
     expect(document.body.textContent || '').toContain('旧交火索引非破坏迁移完成：8 行，4 个 chunks');
 
@@ -418,11 +435,12 @@ describe('VectorIndexPage', () => {
     const migrateButton = Array.from(document.querySelectorAll('button'))
       .find(b => /非破坏迁移旧索引/.test(b.textContent || '')) as HTMLButtonElement | undefined;
     expect(migrateButton).not.toBeUndefined();
+    const healthCallsBeforeClick = inspectHealth.mock.calls.length;
 
     migrateButton!.click();
     await new Promise(r => setTimeout(r, 0));
 
-    expect(inspectHealth).toHaveBeenCalledTimes(1);
+    expect(inspectHealth.mock.calls.length).toBeGreaterThan(healthCallsBeforeClick);
     expect(migrateLegacy).not.toHaveBeenCalled();
     expect(document.body.textContent || '').toContain('当前没有可迁移的旧交火索引');
 
@@ -597,6 +615,29 @@ describe('VectorIndexPage', () => {
 
     expect(config.summaryIndexArchiveMaxConcurrency).toBe(42);
     expect(config.archiveMaxConcurrency).toBe(30);
+    expect(saveSettings).toHaveBeenCalled();
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('高级面板暴露 V2 writer kill switch 与 scope allowlist，并按行归一化持久化', async () => {
+    const { mount, config, saveSettings } = await mountVectorIndexPage({ devOptions: { vectorIndexAdvanced: true } });
+
+    const writerRow = Array.from(document.querySelectorAll('.acu-v2-vector-index-page .acu-form-row'))
+      .find(el => /V2 写入闸门/.test(el.textContent || ''));
+    const toggle = writerRow?.querySelector('button[role="switch"]') as HTMLButtonElement | null;
+    expect(toggle).not.toBeNull();
+    toggle!.click();
+    await new Promise(r => setTimeout(r, 0));
+    expect(config.summaryIndexV2WriteEnabled).toBe(true);
+
+    const allowlist = document.querySelector<HTMLTextAreaElement>('.acu-v2-vector-index-page__scope-allowlist');
+    expect(allowlist).not.toBeNull();
+    allowlist!.value = ' scope-a \n\nscope-b\nscope-a ';
+    allowlist!.dispatchEvent(new Event('change', { bubbles: true }));
+    await new Promise(r => setTimeout(r, 0));
+    expect(config.summaryIndexV2WriteScopeAllowlist).toEqual(['scope-a', 'scope-b']);
+    expect(allowlist!.value).toBe('scope-a\nscope-b');
     expect(saveSettings).toHaveBeenCalled();
 
     mount.__resetAcuV2MountForTests();

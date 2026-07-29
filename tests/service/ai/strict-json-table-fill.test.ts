@@ -163,6 +163,38 @@ describe('strict-json-table-fill', () => {
     expect(items.oneOf).toHaveLength(3);
   });
 
+  it('strong schema 与 ops 校验都排除 hidden physical column', () => {
+    const data: any = {
+      sheet_status: {
+        uid: 'sheet_status',
+        name: '角色状态',
+        sourceData: {
+          ddl: 'CREATE TABLE character_status (row_id INTEGER PRIMARY KEY, name TEXT, legacy_note TEXT, status TEXT);',
+          hiddenPhysicalColumns: ['legacy_note'],
+        },
+        content: [
+          ['row_id', '姓名', '旧备注', '状态'],
+          ['1', '小玉', '历史秘密', '正常'],
+        ],
+      },
+    };
+
+    const schemaResult = buildStrictJsonTableFillResponseFormatForData_ACU(false, data, ['sheet_status']);
+    const branches = schemaResult.responseFormat.json_schema.schema.properties.ops.items.oneOf;
+    const serialized = JSON.stringify(branches);
+    expect(serialized).toContain('姓名');
+    expect(serialized).toContain('状态');
+    expect(serialized).not.toContain('旧备注');
+    expect(serialized).not.toContain('legacy_note');
+
+    const extraction = extractStrictJsonTableFillResponse_ACU(JSON.stringify({
+      format: 'table_edit_ops_v1',
+      ops: [{ op: 'update', sheet: '角色状态', where: { 姓名: '小玉' }, set: { 旧备注: '改写' } }],
+    }), { tableData: data });
+    expect(extraction.ok).toBe(false);
+    expect(extraction.error).toContain('字段名不存在');
+  });
+
   it('falls back to wide schema when sheet threshold is exceeded', () => {
     const data: any = {};
     for (let i = 0; i < 9; i += 1) {

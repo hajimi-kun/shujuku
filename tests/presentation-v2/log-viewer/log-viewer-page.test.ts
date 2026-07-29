@@ -11,14 +11,16 @@ async function waitForUi(ms = 0) {
   await new Promise(r => setTimeout(r, ms));
 }
 
-async function mountAdvancedToolsLogPanel(seedLogs = true) {
+async function mountAdvancedToolsLogPanel(seedLogs = true, warnLogEnabled = seedLogs) {
   vi.resetModules();
   document.body.innerHTML = '';
   document.head.innerHTML = '';
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ router: { activePageId: 'advanced-tools' } }));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({
+    router: { activePageId: 'advanced-tools' },
+    devOptions: { warnLogEnabled },
+  }));
 
   const logBuffer = await import('../../../src/shared/log-buffer');
-  logBuffer._resetForTesting();
   if (seedLogs) {
     logBuffer.setDebugLogEnabled(true);
     logBuffer.pushLog('debug', ['[ACU]', '[调试] Debug 初始化日志']);
@@ -102,7 +104,7 @@ describe('AdvancedToolsPage log panel', () => {
     expect(toggles.classList.contains('acu-v2-advanced-tools-page__toggles')).toBe(true);
     const toggleLabels = Array.from(toggles.querySelectorAll<HTMLButtonElement>('.acu-toggle'))
       .map(toggle => toggle.textContent?.trim());
-    expect(toggleLabels).toEqual(['自动滚动', 'Debug']);
+    expect(toggleLabels).toEqual(['自动滚动', 'Warn', 'Debug']);
     expect(hint.textContent || '').toContain('当前显示');
 
     mount.__resetAcuV2MountForTests();
@@ -137,8 +139,42 @@ describe('AdvancedToolsPage log panel', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it('Warn 默认关闭，开启后持久化并恢复采集', async () => {
+    const { mount, logBuffer } = await mountAdvancedToolsLogPanel(false, false);
+
+    expect(logBuffer.isWarnLogEnabled()).toBe(false);
+    logBuffer.pushLog('warn', ['[ACU]', '[SQL] 默认隐藏']);
+    await waitForUi(30);
+    expect(getPage().textContent || '').not.toContain('默认隐藏');
+
+    const warnToggle = Array.from(document.querySelectorAll<HTMLButtonElement>('.acu-v2-advanced-tools-page .acu-toggle'))
+      .find(button => button.textContent?.includes('Warn'));
+    expect(warnToggle).not.toBeUndefined();
+    expect(warnToggle!.getAttribute('aria-checked')).toBe('false');
+    warnToggle!.click();
+    await waitForUi();
+
+    const persisted = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
+    expect(persisted?.devOptions?.warnLogEnabled).toBe(true);
+    expect(warnToggle!.getAttribute('aria-checked')).toBe('true');
+    expect(logBuffer.isWarnLogEnabled()).toBe(true);
+
+    logBuffer.pushLog('warn', ['[ACU]', '[SQL] 开启后显示']);
+    await waitForUi(30);
+    expect(getPage().textContent || '').toContain('开启后显示');
+
+    mount.__resetAcuV2MountForTests();
+    vi.resetModules();
+
+    const reloadedLogBuffer = await import('../../../src/shared/log-buffer');
+    expect(reloadedLogBuffer.isWarnLogEnabled()).toBe(true);
+    reloadedLogBuffer.pushLog('warn', ['[ACU]', '[SQL] 重载后仍显示']);
+    expect(reloadedLogBuffer.getAllLogs().some(entry => entry.message.includes('重载后仍显示'))).toBe(true);
+    reloadedLogBuffer._resetForTesting();
+  });
+
   it('暂停时新日志进入积压，恢复后刷新显示', async () => {
-    const { mount, logBuffer } = await mountAdvancedToolsLogPanel(false);
+    const { mount, logBuffer } = await mountAdvancedToolsLogPanel(false, true);
 
     findButton('暂停').click();
     await waitForUi();
@@ -183,7 +219,7 @@ describe('AdvancedToolsPage log panel', () => {
   });
 
   it('清空与导出使用当前筛选后的日志数据', async () => {
-    const { mount, logBuffer } = await mountAdvancedToolsLogPanel(false);
+    const { mount, logBuffer } = await mountAdvancedToolsLogPanel(false, true);
     logBuffer.clearLogs();
     logBuffer.setDebugLogEnabled(true);
     logBuffer.pushLog('debug', ['[ACU]', '[调试] Debug 导出日志']);

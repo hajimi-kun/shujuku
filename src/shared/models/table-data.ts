@@ -54,6 +54,19 @@ export interface SheetSourceData_ACU {
   insertNode: string;
   /** SQLite 模式下的建表 DDL（可选，仅 sqlite 模式使用） */
   ddl?: string;
+  /**
+   * 仅从活动模板/UI/AI 投影中隐藏的 SQLite physical column。
+   * 底层 DDL、content 表头与历史行仍完整保留这些列。
+   */
+  hiddenPhysicalColumns?: string[];
+  /**
+   * 列的历史显示名声明：physical column name → 曾用过的显示名列表。
+   *
+   * 列身份以 canonical 显示名为准；改名后 canonical 不再相等，靠该声明认回同一列，
+   * 使数据能继续继承。切模板时由协调器自动累积，模板作者也可显式声明。
+   * 这是显式声明而非推断：没有声明就不会把两列当成同一列，避免把无关字段的数据混在一起。
+   */
+  columnAliases?: Record<string, string[]>;
 }
 
 /** 单张表格（sheet）的完整结构 */

@@ -39,6 +39,23 @@ export interface CanonicalCheckpointValidationResult_ACU {
   issues: CanonicalCheckpointIssue_ACU[];
 }
 
+export type MigrationProvenanceIssueType_ACU =
+  | 'provenance_not_object'
+  | 'unsupported_provenance_version'
+  | 'invalid_legacy_fingerprint'
+  | 'invalid_source_indices'
+  | 'invalid_source_ai_floors'
+  | 'invalid_last_changed_floor_by_sheet'
+  | 'invalid_target_message_index'
+  | 'invalid_target_ai_floor'
+  | 'invalid_provenance_isolation_key'
+  | 'invalid_migrated_at';
+
+export interface MigrationProvenanceValidationResult_ACU {
+  valid: boolean;
+  issues: MigrationProvenanceIssueType_ACU[];
+}
+
 function isRecord_ACU(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -128,6 +145,58 @@ export function validateCanonicalCheckpointData_ACU(
     result.issues.push(...validation.issues);
   }
   return result;
+}
+
+function isNonNegativeInteger_ACU(value: unknown): boolean {
+  return Number.isInteger(value) && Number(value) >= 0;
+}
+
+function isPositiveInteger_ACU(value: unknown): boolean {
+  return Number.isInteger(value) && Number(value) > 0;
+}
+
+/**
+ * 仅供 mixed-storage evaluator 信任 migration lineage 前调用。
+ * 它故意不接入 canonical checkpoint 校验，以保持历史无 provenance frame 的 replay 兼容。
+ */
+export function validateMigrationProvenanceV1_ACU(
+  provenance: unknown,
+): MigrationProvenanceValidationResult_ACU {
+  const issues: MigrationProvenanceIssueType_ACU[] = [];
+  if (!isRecord_ACU(provenance)) {
+    return { valid: false, issues: ['provenance_not_object'] };
+  }
+  if (provenance.version !== 1) issues.push('unsupported_provenance_version');
+  if (typeof provenance.legacyDataFingerprint !== 'string' || provenance.legacyDataFingerprint.trim() === '') {
+    issues.push('invalid_legacy_fingerprint');
+  }
+
+  const sourceIndices = provenance.legacySourceMessageIndices;
+  if (!Array.isArray(sourceIndices)
+    || sourceIndices.length === 0
+    || !sourceIndices.every(isNonNegativeInteger_ACU)
+    || sourceIndices.some((index, position) => position > 0 && index <= sourceIndices[position - 1])) {
+    issues.push('invalid_source_indices');
+  }
+  const sourceAiFloors = provenance.legacySourceAiFloors;
+  if (!Array.isArray(sourceAiFloors)
+    || !Array.isArray(sourceIndices)
+    || sourceAiFloors.length !== sourceIndices.length
+    || !sourceAiFloors.every(isPositiveInteger_ACU)) {
+    issues.push('invalid_source_ai_floors');
+  }
+
+  const lastChangedBySheet = provenance.legacyLastChangedAiFloorBySheet;
+  if (!isRecord_ACU(lastChangedBySheet)
+    || Object.keys(lastChangedBySheet).some(sheetKey => !sheetKey.startsWith('sheet_') || !isNonNegativeInteger_ACU(lastChangedBySheet[sheetKey]))) {
+    issues.push('invalid_last_changed_floor_by_sheet');
+  }
+  if (!isNonNegativeInteger_ACU(provenance.targetMessageIndex)) issues.push('invalid_target_message_index');
+  if (!isPositiveInteger_ACU(provenance.targetAiFloor)) issues.push('invalid_target_ai_floor');
+  if (typeof provenance.isolationKey !== 'string') issues.push('invalid_provenance_isolation_key');
+  if (!Number.isFinite(provenance.migratedAt) || Number(provenance.migratedAt) < 0) issues.push('invalid_migrated_at');
+
+  return { valid: issues.length === 0, issues };
 }
 
 export function validateCanonicalCheckpoint_ACU(

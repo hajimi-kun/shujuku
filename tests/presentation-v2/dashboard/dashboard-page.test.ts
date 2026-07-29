@@ -119,6 +119,7 @@ async function mountDashboardPage(
   options: {
     chatFileIdentifier?: string;
     developerOptionsEnabled?: boolean;
+    warnLogEnabled?: boolean;
     failStorageSwitch?: boolean;
   } = {},
 ) {
@@ -131,6 +132,7 @@ async function mountDashboardPage(
       router: { activePageId: "dashboard" },
       devOptions: {
         developerOptionsEnabled: options.developerOptionsEnabled === true,
+        warnLogEnabled: options.warnLogEnabled === true,
       },
     }),
   );
@@ -591,6 +593,7 @@ describe("DashboardPage", () => {
 
     const developer = await mountDashboardPage(createSettings(), createTableData(), {
       developerOptionsEnabled: true,
+      warnLogEnabled: true,
     });
     logBuffer = await import("../../../src/shared/log-buffer");
     logBuffer.pushLog("warn", ["[ACU]", "开发者警告"]);

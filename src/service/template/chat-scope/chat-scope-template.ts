@@ -405,32 +405,6 @@ import { normalizeIsolationCode_ACU } from '../../../shared/data-constants';
       }));
   }
 
-  export async function restoreChatTemplateArchiveEntry_ACU(archiveKey: string, { chat = getChatArray_ACU(), isolationKey = getCurrentIsolationKey_ACU(), save = true } = {}) {
-      const normalizedKey = normalizeTemplateScopeIsolationKey_ACU(isolationKey);
-      const normalizedArchiveKey = String(archiveKey || '').trim();
-      if (!normalizedArchiveKey) return false;
-      const entry = getChatTemplateArchiveEntries_ACU({ chat, isolationKey: normalizedKey }).find((item: any) => item.archiveKey === normalizedArchiveKey);
-      if (!entry?.templateStr) return false;
-
-      persistTemplateScopeSelectionState_ACU(entry.presetName, {
-          source: entry.source || 'ui_chat_archive_restore',
-          updateGlobal: false,
-          save,
-          persistChatScope: true,
-          templateSource: entry.templateStr,
-          guideData: entry.guideData,
-          archivePreviousChatScope: true,
-      });
-      applyTemplateScopeForCurrentChat_ACU({ isolationKey: normalizedKey });
-
-      try { await refreshMergedDataAndNotify_ACU(); } catch (e) {}
-      return {
-          archiveKey: normalizedArchiveKey,
-          presetName: entry.presetName || '',
-          label: getChatTemplateArchiveOptionLabel_ACU(entry),
-          templateStr: entry.templateStr,
-      };
-  }
 
   export function getCurrentChatTemplateScopeState_ACU({ chat = getChatArray_ACU(), isolationKey = getCurrentIsolationKey_ACU() } = {}): any | null {
       const container = getChatScopedConfigContainer_ACU(chat);

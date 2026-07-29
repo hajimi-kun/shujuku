@@ -17,6 +17,7 @@ import { getLatestSummaryVectorIndexSnapshotState_ACU } from '../vector/summary-
 import { getEffectiveSummaryVectorIndexConfig_ACU } from '../vector/vector-memory-config';
 import { isSqliteMode } from '../table/storage-mode';
 import { buildExternalCustomTableExportComment_ACU, type ExternalCustomTableExportMarker_ACU } from './worldbook-placeholder-classification';
+import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
 
   // [新增] 处理自定义表格导出逻辑
   // [修复] 当 mergedData 为空/null 时，仍需执行"清理旧自定义导出条目"逻辑，
@@ -317,8 +318,9 @@ import { buildExternalCustomTableExportComment_ACU, type ExternalCustomTableExpo
                   : '';
               const entryPlacement = normalizePlacementConfig_ACU(config.entryPlacement, DEFAULT_ENTRY_PLACEMENT_ACU);
               const extraIndexPlacement = normalizePlacementConfig_ACU(config.extraIndexPlacement, DEFAULT_EXTRA_INDEX_PLACEMENT_ACU);
-              const headers: string[] = table.content[0] ? table.content[0].slice(1) : [];
-              const rows = table.content.slice(1).map((row: any[]) => row.slice(1));
+              const visibleColumns = getSheetColumnProjection_ACU(table).visibleColumns.filter(column => column.sourceIndex > 0);
+              const headers: string[] = visibleColumns.map(column => column.header);
+              const rows = table.content.slice(1).map((row: any[]) => visibleColumns.map(column => row[column.sourceIndex]));
               const hasAnyNonEmptyExportCell_ACU = (row: any[]) => Array.isArray(row) && row.some((cell: any) => {
                   const text = cell === null || cell === undefined ? '' : String(cell);
                   return text.trim() !== '';

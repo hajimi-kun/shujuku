@@ -34,6 +34,7 @@ import {
 } from '../../../service/table/table-history';
 import { isSqliteMode } from '../../../service/table/storage-mode';
 import { commitCurrentFloorTemplateChanges_ACU } from '../../../service/table/storage-frame-v2-persist';
+import { captureTableRuntimeRevisionForWriteSet_ACU } from '../../../service/table/table-write-transaction';
 import { preflightSchemaMigrations_ACU } from '../../../service/table/schema-migration-preflight';
 import { normalizeCanonicalTableRows_ACU } from '../../../shared/canonical-row-normalizer';
 import { reloadStorageProvider } from '../../../service/table/table-storage-strategy';
@@ -61,6 +62,7 @@ import { deleteCurrentSummaryVectorIndexFromChat_ACU } from '../../../service/ve
 import {
   applyVisualizerPendingDataOps_ACU,
   hasVisualizerPendingDataOps_ACU,
+  replaceVisualizerTemporaryRowIds_ACU,
 } from '../../../service/visualizer/visualizer-data-ops';
 import { useToastStore } from '../../stores/toast-store';
 import { useVisualizerStore, type VisualizerLockDraft, type VisualizerSaveTarget } from '../../stores/visualizer-store';
@@ -68,6 +70,16 @@ import { useVisualizerStore, type VisualizerLockDraft, type VisualizerSaveTarget
 export interface VisualizerSaveInteractions {
   requestGlobalPresetName?: (defaultName: string) => string | null | Promise<string | null>;
   confirmOverwriteGlobalPreset?: (presetName: string) => boolean | Promise<boolean>;
+  confirmDestructiveSchemaChange?: (summary: VisualizerDestructiveSchemaChangeSummary) => boolean | Promise<boolean>;
+}
+
+export interface VisualizerDestructiveSchemaChangeSummary {
+  sheets: Array<{
+    sheetKey: string;
+    tableName: string;
+    droppedColumns: Array<{ physicalName: string; displayHeader: string; index: number }>;
+    affectedRowCount: number;
+  }>;
 }
 
 type GlobalTemplateSaveResult =
@@ -98,6 +110,12 @@ function buildOrderedData(
   tempData: Record<string, any> | null,
   sheetOrder: string[],
   lockDrafts: Record<string, VisualizerLockDraft>,
+  options: {
+    /** When false, preserve existing orderNo values (sparse holes allowed). Default true. */
+    renumberOrder?: boolean;
+    /** When false, skip summary special-index rewrite that mutates content. Default true. */
+    applySpecialIndex?: boolean;
+  } = {},
 ): Record<string, any> {
   const source = tempData || { mate: { type: 'chatSheets', version: 1 } };
   const orderedData: Record<string, any> = {};
@@ -107,8 +125,10 @@ function buildOrderedData(
   sheetOrder.forEach(key => {
     if (source[key]) orderedData[key] = cloneData(source[key]);
   });
-  applySheetOrderNumbers_ACU(orderedData, sheetOrder);
-  applySpecialIndexSequenceFromDrafts(orderedData, lockDrafts);
+  const renumberOrder = options.renumberOrder !== false;
+  const applySpecialIndex = options.applySpecialIndex !== false;
+  if (renumberOrder) applySheetOrderNumbers_ACU(orderedData, sheetOrder);
+  if (applySpecialIndex) applySpecialIndexSequenceFromDrafts(orderedData, lockDrafts);
   return orderedData;
 }
 
@@ -400,13 +420,21 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
       const deletedSheetKeys = [...new Set((visualizer.deletedSheetKeys || [])
         .filter(key => typeof key === 'string' && key.startsWith('sheet_')),
       )];
-      const result = await applyVisualizerPendingDataOps_ACU(visualizer);
+      const hasDataChanges = hasVisualizerPendingDataOps_ACU(visualizer);
+      if (hasDataChanges && deletedSheetKeys.length > 0) {
+        toastStore.error('行数据增量与整表删除无法原子提交；请分别保存行数据和删表操作。', { muteable: false });
+        return false;
+      }
+      const hasLockChanges = visualizer.lockDirty;
+      const result = hasDataChanges
+        ? await applyVisualizerPendingDataOps_ACU(visualizer)
+        : { success: true, changed: false };
       if (!result.success) {
         toastStore.error(result.error || '数据保存失败。', { muteable: false });
         return false;
       }
-      if (!result.changed && deletedSheetKeys.length === 0) {
-        toastStore.info('没有需要保存的数据增量。', { muteable: false });
+      if (!result.changed && deletedSheetKeys.length === 0 && !hasLockChanges) {
+        toastStore.info('没有需要保存的数据、锁或删表增量。', { muteable: false });
         return false;
       }
       if (deletedSheetKeys.length > 0) {
@@ -419,14 +447,25 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           }
         }
       }
-      saveLockDrafts(visualizer.tableLockDrafts);
-      await refreshMergedDataAndNotify_ACU();
+      if (hasLockChanges) saveLockDrafts(visualizer.tableLockDrafts);
+      try {
+        await refreshMergedDataAndNotify_ACU();
+      } catch (error: any) {
+        if (visualizer.pendingDataOps?.committed) {
+          throw new Error(`数据已持久化，但本地运行时刷新失败：${error?.message || String(error)}`);
+        }
+        throw error;
+      }
+      replaceVisualizerTemporaryRowIds_ACU(visualizer, result.insertedRowIds || {});
       try {
         (topLevelWindow_ACU as any).AutoCardUpdaterAPI?._notifyTableUpdate?.();
       } catch {}
       visualizer.markSaved('data');
       toastStore.success(
-        deletedSheetKeys.length > 0 ? '数据增量与删表清理已保存到当前消息。' : '数据增量已保存到当前消息。',
+        deletedSheetKeys.length > 0 ? '数据增量、锁设置与删表清理已保存到当前消息。'
+          : result.changed && hasLockChanges ? '数据增量与锁设置已保存到当前消息。'
+            : result.changed ? '数据增量已保存到当前消息。'
+            : '表格锁设置已保存。',
         { muteable: false },
       );
       return true;
@@ -439,7 +478,10 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         toastStore.error('存在未保存的数据增量；本次是模板保存，已阻止混合提交。', { muteable: false });
         return false;
       }
-      const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder, visualizer.tableLockDrafts);
+      const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder, visualizer.tableLockDrafts, {
+        renumberOrder: false,
+        applySpecialIndex: false,
+      });
       const changes = classifyVisualizerTemplateChanges_ACU(
         visualizer.templateBaseData,
         orderedData,
@@ -457,7 +499,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
       const hasRemainingSummarySheet = Object.keys(orderedData).some(sheetKey => sheetKey.startsWith('sheet_')
         && !!orderedData[sheetKey]?.name && isSummaryOrOutlineTable_ACU(String(orderedData[sheetKey].name)));
       if (changedSheetKeys.length === 0 && deletedSheetKeys.length === 0) {
-        if (visualizer.pendingLockChanges.length > 0 || visualizer.lockDraftsDirty) {
+        if (visualizer.pendingLockChanges.length > 0 || visualizer.lockDirty) {
           saveLockDrafts(visualizer.tableLockDrafts);
           visualizer.markSaved('template-chat');
           toastStore.success('表格锁定设置已保存。', { muteable: false });
@@ -466,6 +508,12 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         toastStore.info('模板结构没有变化。', { muteable: false });
         return false;
       }
+      const guideIsolationKey = getCurrentIsolationKey_ACU();
+      const baseRevision = captureTableRuntimeRevisionForWriteSet_ACU(
+        [...new Set([...changedSheetKeys, ...deletedSheetKeys])]
+          .map(sheetKey => ({ kind: 'schema' as const, sheetKey })),
+        { isolationKey: guideIsolationKey },
+      );
       let schemaOperations: any[] = [];
       if (changes.schemaChangedSheetKeys.length > 0 && visualizer.templateBaseData) {
         const preflightSnapshot = {
@@ -476,15 +524,56 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           deletedSheetKeys: [...visualizer.deletedSheetKeys],
           tableLockDrafts: cloneData(visualizer.tableLockDrafts),
           pendingLockChanges: cloneData(visualizer.pendingLockChanges),
-          lockDraftsDirty: visualizer.lockDraftsDirty,
+          lockDirty: visualizer.lockDirty,
         };
-        const preflight = await preflightSchemaMigrations_ACU({
+        let preflight = await preflightSchemaMigrations_ACU({
           baselineData: visualizer.templateBaseData as any,
           candidateData: orderedData as any,
+          destructiveChangeConfirmed: false,
         });
         if (preflight.blockers.length > 0) {
-          toastStore.error(`模板结构未通过 schema migration preflight：${preflight.blockers.join('；')}`, { muteable: false });
-          return false;
+          const confirmationIssues = preflight.issues || [];
+          const onlyDestructiveDropConfirmation = confirmationIssues.length > 0
+            && confirmationIssues.length === preflight.blockers.length
+            && confirmationIssues.every(issue => issue.code === 'DESTRUCTIVE_COLUMN_DROP_CONFIRMATION_REQUIRED');
+          if (!onlyDestructiveDropConfirmation) {
+            toastStore.error(`模板结构未通过 schema migration preflight：${preflight.blockers.join('；')}`, { muteable: false });
+            return false;
+          }
+          const confirmed = interactions.confirmDestructiveSchemaChange
+            ? await interactions.confirmDestructiveSchemaChange({
+              sheets: confirmationIssues.map(issue => ({
+                sheetKey: issue.sheetKey,
+                tableName: issue.tableName,
+                droppedColumns: issue.droppedColumns.map(column => ({ ...column })),
+                affectedRowCount: issue.affectedRowCount,
+              })),
+            })
+            : false;
+          if (!confirmed) return false;
+          const currentConfirmationSnapshot = {
+            tempData: cloneData(visualizer.tempData),
+            sheetOrder: [...visualizer.sheetOrder],
+            templateBaseData: cloneData(visualizer.templateBaseData),
+            templateBaseSheetOrder: [...visualizer.templateBaseSheetOrder],
+            deletedSheetKeys: [...visualizer.deletedSheetKeys],
+            tableLockDrafts: cloneData(visualizer.tableLockDrafts),
+            pendingLockChanges: cloneData(visualizer.pendingLockChanges),
+            lockDirty: visualizer.lockDirty,
+          };
+          if (!sameTemplateValue_ACU(preflightSnapshot, currentConfirmationSnapshot)) {
+            toastStore.warning('模板结构在危险确认期间已变化；请重新保存。', { muteable: false });
+            return false;
+          }
+          preflight = await preflightSchemaMigrations_ACU({
+            baselineData: visualizer.templateBaseData as any,
+            candidateData: orderedData as any,
+            destructiveChangeConfirmed: true,
+          });
+          if (preflight.blockers.length > 0) {
+            toastStore.error(`模板结构未通过已确认 schema migration preflight：${preflight.blockers.join('；')}`, { muteable: false });
+            return false;
+          }
         }
         const operationKeys = preflight.operations.map(operation => String(operation?.sheetKey || ''));
         const preflightChangedKeys = [...preflight.changedSheetKeys].sort();
@@ -507,14 +596,13 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           deletedSheetKeys: [...visualizer.deletedSheetKeys],
           tableLockDrafts: cloneData(visualizer.tableLockDrafts),
           pendingLockChanges: cloneData(visualizer.pendingLockChanges),
-          lockDraftsDirty: visualizer.lockDraftsDirty,
+          lockDirty: visualizer.lockDirty,
         };
         if (!sameTemplateValue_ACU(preflightSnapshot, currentPreflightSnapshot)) {
           toastStore.warning('模板结构在 schema migration preflight 期间已变化；请重新保存。', { muteable: false });
           return false;
         }
       }
-      const guideIsolationKey = getCurrentIsolationKey_ACU();
       const existingGuide = getChatSheetGuideDataForIsolationKey_ACU(guideIsolationKey);
       const guideData = buildChatSheetGuideDataFromData_ACU(orderedData, {
         preserveSeedRowsFromGuideData: existingGuide,
@@ -561,6 +649,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         presetName: resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true, isolationKey: guideIsolationKey }),
         source: 'visualizer_v2_save',
         reason: 'visualizer_v2_schema_change',
+        baseRevision,
       });
       if (!commitResult.saved) {
         toastStore.error(commitResult.error || '模板/结构保存失败。', { muteable: false });
@@ -589,7 +678,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         toastStore.warning('模板已保存，但已删除表的锁定状态清理失败；请重新载入当前聊天后重试。', { muteable: false });
       }
       let lockSaveFailed = false;
-      const hasPendingLocks = visualizer.lockDraftsDirty || visualizer.pendingLockChanges.length > 0;
+      const hasPendingLocks = visualizer.lockDirty || visualizer.pendingLockChanges.length > 0;
       if (hasPendingLocks) try {
         saveLockDrafts(visualizer.tableLockDrafts);
       } catch (error) {
@@ -626,7 +715,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
       try {
         (topLevelWindow_ACU as any).AutoCardUpdaterAPI?._notifyTableUpdate?.();
       } catch {}
-      if (lockSaveFailed && (visualizer.lockDraftsDirty || visualizer.pendingLockChanges.length > 0)) {
+      if (lockSaveFailed && (visualizer.lockDirty || visualizer.pendingLockChanges.length > 0)) {
         visualizer.markTemplateSavedWithPendingLocks();
       } else {
         visualizer.markSaved('template-chat');
@@ -647,13 +736,16 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         toastStore.error('存在未保存的数据增量；本次是模板保存，已阻止混合提交。', { muteable: false });
         return false;
       }
-      const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder, visualizer.tableLockDrafts);
+      const orderedData = buildOrderedData(visualizer.tempData, visualizer.sheetOrder, visualizer.tableLockDrafts, {
+        renumberOrder: false,
+        applySpecialIndex: false,
+      });
       const globalTemplateResult = await saveGlobalTemplateSnapshot(orderedData, interactions);
       if (globalTemplateResult.status === 'cancelled') return false;
       saveLockDrafts(visualizer.tableLockDrafts);
       if (isSqliteMode()) await reloadStorageProvider();
       await refreshMergedDataAndNotify_ACU();
-      visualizer.markSaved('template-global');
+      visualizer.recordGlobalTemplateSaved();
       if (globalTemplateResult.status === 'saved') {
         toastStore.success(`模板/结构已保存到全局预设：${globalTemplateResult.presetName}。`, { muteable: false });
       } else {

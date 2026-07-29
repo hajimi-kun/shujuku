@@ -6,6 +6,7 @@
  * 验证 initStorageProvider/switchStorageMode/reloadStorageProvider 的编排逻辑
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { _resetTableWriteTransactionLocksForTest_ACU, runTableWriteTransaction_ACU } from '../../../src/service/table/table-write-transaction';
 
 // ═══════════════════════════════════════════════════════════════
 // Mock 设置
@@ -37,6 +38,8 @@ vi.mock('../../../src/service/table/table-service', () => ({
 // ═══════════════════════════════════════════════════════════════
 let sqliteLoadResult: { loaded: boolean; source: 'merged' | 'initialized' | 'empty'; error?: string } = { loaded: true, source: 'merged' };
 let sqliteLoadShouldThrow: Error | null = null;
+let nativeReloadGate: Promise<void> | null = null;
+let nativeReloadStarted: (() => void) | null = null;
 
 // 记录所有创建的 provider 实例，用于验证 dispose 等调用
 let allCreatedProviders: Array<ReturnType<typeof createMockProvider>> = [];
@@ -50,6 +53,10 @@ function createMockProvider(mode: 'native' | 'sqlite') {
       }
       if (mode === 'sqlite') {
         return { ...sqliteLoadResult };
+      }
+      if (nativeReloadGate) {
+        nativeReloadStarted?.();
+        await nativeReloadGate;
       }
       return { loaded: true, source: 'merged' as const };
     }),
@@ -92,14 +99,27 @@ import {
   reloadStorageProvider,
   disposeStorageProvider,
   getCurrentProviderMode,
+  getStorageRuntimeHealth_ACU,
+  didSqliteFallbackAfterReload_ACU,
 } from '../../../src/service/table/table-storage-strategy';
+
+function deferred_ACU<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
 
 describe('table-storage-strategy', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
+    _resetTableWriteTransactionLocksForTest_ACU();
     mockStorageMode = 'native';
     sqliteLoadResult = { loaded: true, source: 'merged' };
     sqliteLoadShouldThrow = null;
+    nativeReloadGate = null;
+    nativeReloadStarted = null;
     allCreatedProviders = [];
     mockLoadOrCreateJsonTableFromChatHistory.mockResolvedValue({ loaded: true, source: 'merged', data: { mate: {} } });
     // 重置模块内部状态
@@ -191,9 +211,51 @@ describe('table-storage-strategy', () => {
       mockStorageMode = 'sqlite';
       sqliteLoadResult = { loaded: false, source: 'empty', error: 'sql.js 加载失败' };
 
-      await initStorageProvider();
+      const result = await initStorageProvider();
       // fallback 后应该是 native 模式
       expect(getCurrentProviderMode()).toBe('native');
+      expect(result).toMatchObject({ ok: false, degraded: true, failureCode: 'provider_fallback' });
+      expect(getStorageRuntimeHealth_ACU()).toMatchObject({
+        status: 'degraded', expectedMode: 'sqlite', activeMode: 'native', failureCode: 'provider_fallback',
+      });
+    });
+
+    it('同一 SQLite 初始化航班复用单次 canonical replay', async () => {
+      mockStorageMode = 'sqlite';
+      let releaseReplay: ((value: any) => void) | undefined;
+      mockLoadOrCreateJsonTableFromChatHistory.mockImplementationOnce(() => new Promise(resolve => {
+        releaseReplay = resolve;
+      }));
+
+      const first = initStorageProvider();
+      const second = initStorageProvider();
+
+      expect(mockLoadOrCreateJsonTableFromChatHistory).toHaveBeenCalledTimes(1);
+      releaseReplay?.({ loaded: true, source: 'merged', data: { mate: {} } });
+
+      await expect(first).resolves.toMatchObject({ ok: true, degraded: false, source: 'merged' });
+      await expect(second).resolves.toMatchObject({ ok: true, degraded: false, source: 'merged' });
+      expect(allCreatedProviders.filter(provider => provider.mode === 'sqlite')).toHaveLength(1);
+    });
+
+    it('设置在候选 SQLite hydrate 期间切换时丢弃陈旧候选', async () => {
+      mockStorageMode = 'sqlite';
+      let releaseReplay: ((value: any) => void) | undefined;
+      mockLoadOrCreateJsonTableFromChatHistory.mockImplementationOnce(() => new Promise(resolve => {
+        releaseReplay = resolve;
+      }));
+
+      const initialization = initStorageProvider();
+      expect(mockLoadOrCreateJsonTableFromChatHistory).toHaveBeenCalledTimes(1);
+      mockStorageMode = 'native';
+      releaseReplay?.({ loaded: true, source: 'merged', data: { mate: {} } });
+
+      await expect(initialization).resolves.toMatchObject({ ok: false, degraded: false, failureCode: 'stale_load_discarded' });
+      expect(getCurrentProviderMode()).toBe('native');
+      expect(allCreatedProviders.find(provider => provider.mode === 'sqlite')?.dispose).toHaveBeenCalledOnce();
+      expect(getStorageRuntimeHealth_ACU()).toMatchObject({
+        status: 'idle', expectedMode: 'native', failureCode: 'stale_load_discarded',
+      });
     });
 
     it('SQLite 初始化异常时 fallback 到 native', async () => {
@@ -201,6 +263,19 @@ describe('table-storage-strategy', () => {
       sqliteLoadShouldThrow = new Error('WASM 加载失败');
 
       await initStorageProvider();
+      expect(getCurrentProviderMode()).toBe('native');
+    });
+
+    it('SQLite 初始化异常时销毁未提交的候选，避免其继续持有全局映射发布权', async () => {
+      mockStorageMode = 'sqlite';
+      sqliteLoadShouldThrow = new Error('WASM 加载失败');
+
+      await initStorageProvider();
+
+      const sqliteCandidate = allCreatedProviders.find(provider => provider.mode === 'sqlite');
+      expect(sqliteCandidate).toBeDefined();
+      // 恰好一次：候选既不能泄漏，也不能被重复销毁。
+      expect(sqliteCandidate!.dispose).toHaveBeenCalledTimes(1);
       expect(getCurrentProviderMode()).toBe('native');
     });
 
@@ -345,6 +420,125 @@ describe('table-storage-strategy', () => {
       // fallback 到 native
       expect(getCurrentProviderMode()).toBe('native');
     });
+
+    it('等待同一作用域的活跃写事务释放后才重建运行时', async () => {
+      const releaseWriter = deferred_ACU();
+      const writerStarted = deferred_ACU();
+      const events: string[] = [];
+      const provider = getStorageProvider();
+      provider.loadFromChat.mockClear();
+
+      const writer = runTableWriteTransaction_ACU({
+        source: 'manual_crud',
+        reason: 'concurrent-write',
+        writeSet: [{ kind: 'sheet', sheetKey: 'sheet_0' }],
+      }, async () => {
+        events.push('writer:start');
+        writerStarted.resolve();
+        await releaseWriter.promise;
+        events.push('writer:end');
+      });
+      await writerStarted.promise;
+
+      const reload = reloadStorageProvider().then(() => events.push('reload:end'));
+      await Promise.resolve();
+      expect(events).toEqual(['writer:start']);
+      expect(provider.loadFromChat).not.toHaveBeenCalled();
+
+      releaseWriter.resolve();
+      await Promise.all([writer, reload]);
+      expect(events).toEqual(['writer:start', 'writer:end', 'reload:end']);
+      expect(provider.dispose).toHaveBeenCalledOnce();
+      expect(getActiveStorageProvider()?.loadFromChat).toHaveBeenCalledOnce();
+    });
+
+    it('重建运行时期间阻塞同一作用域的新写事务', async () => {
+      const releaseReload = deferred_ACU();
+      const reloadStarted = deferred_ACU();
+      const writerStarted = deferred_ACU();
+      const events: string[] = [];
+      nativeReloadGate = releaseReload.promise;
+      nativeReloadStarted = () => reloadStarted.resolve();
+
+      const reload = reloadStorageProvider().then(() => events.push('reload:end'));
+      await reloadStarted.promise;
+
+      const writer = runTableWriteTransaction_ACU({
+        source: 'manual_crud',
+        reason: 'write-during-reload',
+        writeSet: [{ kind: 'sheet', sheetKey: 'sheet_0' }],
+      }, async () => {
+        events.push('writer:start');
+        writerStarted.resolve();
+      });
+      await Promise.resolve();
+      expect(events).toEqual([]);
+
+      releaseReload.resolve();
+      await reload;
+      await writerStarted.promise;
+      await writer;
+      expect(events).toEqual(['reload:end', 'writer:start']);
+    });
+
+    it('排他 reload 不复用锁外初始化航班，并丢弃旧候选', async () => {
+      mockStorageMode = 'sqlite';
+      const releaseOldReplay = deferred_ACU<any>();
+      const writerStarted = deferred_ACU();
+      const releaseWriter = deferred_ACU();
+      const activeProviderBeforeReload = getActiveStorageProvider()!;
+      mockLoadOrCreateJsonTableFromChatHistory
+        .mockImplementationOnce(() => releaseOldReplay.promise)
+        .mockResolvedValueOnce({ loaded: true, source: 'merged', data: { mate: { generation: 'reload' } } });
+
+      const oldInitialization = initStorageProvider();
+      expect(mockLoadOrCreateJsonTableFromChatHistory).toHaveBeenCalledOnce();
+      const staleCandidate = allCreatedProviders.find(provider => provider.mode === 'sqlite')!;
+      const writer = runTableWriteTransaction_ACU({
+        source: 'manual_crud',
+        reason: 'write-before-reload',
+        writeSet: [{ kind: 'sheet', sheetKey: 'sheet_0' }],
+      }, async () => {
+        writerStarted.resolve();
+        await releaseWriter.promise;
+      });
+      await writerStarted.promise;
+
+      const reload = reloadStorageProvider();
+      releaseOldReplay.resolve({ loaded: true, source: 'merged', data: { mate: { generation: 'old' } } });
+      await expect(oldInitialization).resolves.toMatchObject({ failureCode: 'stale_load_discarded' });
+      expect(mockLoadOrCreateJsonTableFromChatHistory).toHaveBeenCalledOnce();
+      expect(staleCandidate.dispose).toHaveBeenCalledOnce();
+      expect(activeProviderBeforeReload.dispose).not.toHaveBeenCalled();
+      expect(getActiveStorageProvider()).toBe(activeProviderBeforeReload);
+
+      releaseWriter.resolve();
+      await reload;
+
+      expect(mockLoadOrCreateJsonTableFromChatHistory).toHaveBeenCalledTimes(2);
+      const reloadedProvider = getActiveStorageProvider()!;
+      expect(reloadedProvider.loadFromData).toHaveBeenCalledWith({ mate: { generation: 'reload' } });
+      expect(getActiveStorageProvider()).toBe(reloadedProvider);
+      await writer;
+    });
+
+    it('并发 reload 复用同一排他航班，不会废弃已持锁的 hydrate', async () => {
+      const releaseReload = deferred_ACU();
+      const reloadStarted = deferred_ACU();
+      nativeReloadGate = releaseReload.promise;
+      nativeReloadStarted = () => reloadStarted.resolve();
+
+      const first = reloadStorageProvider();
+      await reloadStarted.promise;
+      const second = reloadStorageProvider();
+
+      releaseReload.resolve();
+      await expect(second).resolves.toMatchObject({ ok: true });
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        expect.objectContaining({ ok: true }),
+        expect.objectContaining({ ok: true }),
+      ]);
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════
@@ -372,6 +566,21 @@ describe('table-storage-strategy', () => {
       const newProvider = getStorageProvider();
       expect(newProvider).toBeDefined();
       expect(newProvider).not.toBe(oldProvider);
+    });
+
+    it('dispose 会废弃未完成的 SQLite 候选，避免其重新发布', async () => {
+      mockStorageMode = 'sqlite';
+      const releaseReplay = deferred_ACU<any>();
+      mockLoadOrCreateJsonTableFromChatHistory.mockImplementationOnce(() => releaseReplay.promise);
+
+      const initialization = initStorageProvider();
+      const staleCandidate = allCreatedProviders.find(provider => provider.mode === 'sqlite')!;
+      disposeStorageProvider();
+      releaseReplay.resolve({ loaded: true, source: 'merged', data: { mate: { generation: 'old-chat' } } });
+
+      await expect(initialization).resolves.toMatchObject({ failureCode: 'stale_load_discarded' });
+      expect(staleCandidate.dispose).toHaveBeenCalledOnce();
+      expect(getActiveStorageProvider()).toBeNull();
     });
 
     it('未初始化时 dispose 不抛错', () => {
@@ -405,6 +614,41 @@ describe('table-storage-strategy', () => {
       await initStorageProvider();
       await switchStorageMode('sqlite');
       expect(getCurrentProviderMode()).toBe('sqlite');
+    });
+  });
+
+  describe('didSqliteFallbackAfterReload_ACU', () => {
+    it('SQLite 预期与设置保持不变、provider 已为 native 时报告静默 fallback', async () => {
+      mockStorageMode = 'sqlite';
+      sqliteLoadResult = { loaded: false, source: 'empty', error: 'sql.js 加载失败' };
+
+      await initStorageProvider();
+
+      expect(getCurrentProviderMode()).toBe('native');
+      expect(didSqliteFallbackAfterReload_ACU('sqlite')).toBe(true);
+    });
+
+    it('reload 期间设置切到 native 时不把 native provider 误报为 fallback', async () => {
+      mockStorageMode = 'native';
+      await initStorageProvider();
+
+      expect(getCurrentProviderMode()).toBe('native');
+      expect(didSqliteFallbackAfterReload_ACU('sqlite')).toBe(false);
+    });
+
+    it('SQLite provider 成功就绪时不报告 fallback', async () => {
+      mockStorageMode = 'sqlite';
+      await initStorageProvider();
+
+      expect(getCurrentProviderMode()).toBe('sqlite');
+      expect(didSqliteFallbackAfterReload_ACU('sqlite')).toBe(false);
+    });
+
+    it('reload 前预期为 native 时不报告 fallback', async () => {
+      mockStorageMode = 'native';
+      await initStorageProvider();
+
+      expect(didSqliteFallbackAfterReload_ACU('native')).toBe(false);
     });
   });
 });

@@ -10,6 +10,7 @@ import {
   type TemplateAssistantSessionResult_ACU,
   type TemplateAssistantSessionRound_ACU,
 } from '../../../service/template-assistant/service';
+import { assertVisualizerDataOpsEditable_ACU } from '../../../service/visualizer/visualizer-data-ops';
 import { useToastStore } from '../../stores/toast-store';
 import {
   useVisualizerStore,
@@ -420,6 +421,7 @@ export function useVisualizerAssistant() {
       return false;
     }
 
+    assertVisualizerDataOpsEditable_ACU(visualizer);
     visualizer.tempData = cloneData(result.compileResult.candidateData || {});
     visualizer.sheetOrder = Array.isArray(result.compileResult.orderedSheetKeys)
       ? [...result.compileResult.orderedSheetKeys]

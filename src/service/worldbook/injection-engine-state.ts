@@ -5,7 +5,7 @@
 import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
 import { CHAT_SHEET_GUIDE_FIELD_ACU } from '../../data/storage/chat-history';
 import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, generationGate_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentChatFileIdentifier_ACU, _set_allChatMessages_ACU, _set_currentJsonTableData_ACU, _set_independentTableStates_ACU, _set_lastTotalAiMessages_ACU } from '../runtime/state-manager';
-import { getLorebookEntries_ACU, deleteLorebookEntries_ACU, getCurrentCharacterWorldbookBinding_ACU, getCurrentCharPrimaryLorebook_ACU as gwGetCurrentCharPrimaryLorebook_ACU, listLorebooks_ACU } from '../../data/gateways/worldbook-gateway';
+import { getLorebookEntries_ACU, deleteLorebookEntries_ACU, getCurrentCharacterWorldbookBinding_ACU, getCurrentCharPrimaryLorebook_ACU as gwGetCurrentCharPrimaryLorebook_ACU, listLorebooks_ACU, resolveLorebookNameFromList_ACU } from '../../data/gateways/worldbook-gateway';
 import { getChatArray_ACU, saveChatToHost_ACU } from '../../data/gateways/chat-gateway';
 import { applyTemplateScopeForCurrentChat_ACU, loadSettings_ACU, saveSettings_ACU } from '../settings/settings-service';
 import { getSortedSheetKeys_ACU } from '../template/chat-scope';
@@ -15,6 +15,7 @@ import { getImportStablePrefix_ACU } from '../../shared/constants';
 
 import { purgeSheetKeysFromMessage_ACU } from '../../data/repositories/chat-message-data-repo';
 import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
+import { resetPlotAgentWorldbookSessionSnapshot_ACU } from '../agent/agent-worldbook-takeover';
 
   async function enforceCleanupOfCharacterWorldbook_ACU() {
       // 延迟一段时间，确保其他操作完成
@@ -49,6 +50,7 @@ import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
     if (!chatFileName || typeof chatFileName !== 'string' || chatFileName.trim() === '' || chatFileName.trim() === 'null') {
         if (!Array.isArray(getChatArray_ACU()) || getChatArray_ACU().length === 0) {
             logDebug_ACU(`ACU: Received invalid chat file name "${chatFileName}" with no active chat. Clearing runtime state.`);
+            resetPlotAgentWorldbookSessionSnapshot_ACU();
             _set_currentChatFileIdentifier_ACU('');
             _set_currentJsonTableData_ACU(null);
             _set_independentTableStates_ACU({});
@@ -74,6 +76,10 @@ import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
     // [FIX] Reload all settings to ensure template is not stale for new chats.
     // MUST be called AFTER setting currentChatFileIdentifier_ACU so it loads the correct character settings.
     loadSettings_ACU();
+
+    // 当前角色卡绑定在后续读取时重新解析；这里只清除上一会话的内存快照。
+    // 不得删除或重写旧世界书中的持久 Agent state。
+    resetPlotAgentWorldbookSessionSnapshot_ACU();
 
     _set_currentJsonTableData_ACU(null);
     _set_independentTableStates_ACU({});
@@ -124,11 +130,12 @@ import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
       // 验证不通过时静默返回 null，不输出警告（避免用户看到无意义的重复警告）
       if (lorebookName) {
           try {
-              const availableBooks = await listLorebooks_ACU();
-              if (!availableBooks.includes(lorebookName)) {
+              const resolvedLorebookName = resolveLorebookNameFromList_ACU(lorebookName, await listLorebooks_ACU());
+              if (!resolvedLorebookName) {
                   logDebug_ACU(`[Worldbook] 注入目标世界书 "${lorebookName}" 不存在于可用列表中，静默跳过。`);
                   return null;
               }
+              lorebookName = resolvedLorebookName;
           } catch (e) {
               // 验证失败时静默降级，不打扰用户
               return null;

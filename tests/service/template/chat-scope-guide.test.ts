@@ -11,8 +11,10 @@ const {
   mockGetChatArray,
   mockSaveChatToHost,
   mockGetChatScopedConfigContainer,
+  mockPeekChatScopedConfigContainer,
   mockNormalizeChatScopedConfigContainer,
   mockGetChatSheetGuideContainer,
+  mockPeekChatSheetGuideContainer,
   mockGetChatFirstLayerMessage,
   mockParseTableTemplateJson,
   mockEnsureSheetOrderNumbers,
@@ -42,8 +44,10 @@ const {
   mockGetChatArray: vi.fn(() => []),
   mockSaveChatToHost: vi.fn().mockResolvedValue(undefined),
   mockGetChatScopedConfigContainer: vi.fn(() => null),
+  mockPeekChatScopedConfigContainer: vi.fn(() => null),
   mockNormalizeChatScopedConfigContainer: vi.fn((c: any) => c || { version: 1 }),
   mockGetChatSheetGuideContainer: vi.fn(() => ({})),
+  mockPeekChatSheetGuideContainer: vi.fn(() => ({})),
   mockGetChatFirstLayerMessage: vi.fn(() => null),
   mockParseTableTemplateJson: vi.fn(() => ({})),
   mockEnsureSheetOrderNumbers: vi.fn(() => false),
@@ -122,7 +126,9 @@ vi.mock('../../../src/data/storage/chat-history', () => ({
   LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU: '_acu_table_header_guide',
   MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU: 5,
   getChatScopedConfigContainer_ACU: mockGetChatScopedConfigContainer,
+  peekChatScopedConfigContainer_ACU: mockPeekChatScopedConfigContainer,
   getChatSheetGuideContainer_ACU: mockGetChatSheetGuideContainer,
+  peekChatSheetGuideContainer_ACU: mockPeekChatSheetGuideContainer,
   normalizeChatScopedConfigContainer_ACU: mockNormalizeChatScopedConfigContainer,
   setChatScopedConfigContainer_ACU: mockSetChatScopedConfigContainer,
   setChatSheetGuideContainer_ACU: mockSetChatSheetGuideContainer,
@@ -230,7 +236,9 @@ beforeEach(() => {
   mockGetChatArray.mockReturnValue([]);
   mockGetChatFirstLayerMessage.mockReturnValue(null);
   mockGetChatScopedConfigContainer.mockReturnValue(null);
+  mockPeekChatScopedConfigContainer.mockReturnValue(null);
   mockGetChatSheetGuideContainer.mockReturnValue({});
+  mockPeekChatSheetGuideContainer.mockReturnValue({});
   mockParseTableTemplateJson.mockReturnValue({});
   mockEnsureSheetOrderNumbers.mockReturnValue(false);
   mockGetCurrentChatTemplateScopeState.mockReturnValue(null);
@@ -492,10 +500,26 @@ describe('getEffectiveSeedRowsForSheet_ACU', () => {
   it('allowTemplateFallback=false 时不回退到模板', () => {
     mockCurrentJsonTableData.sheet_0 = {};
     mockGetCurrentChatTemplateScopeState.mockReturnValue(null);
-    mockGetChatScopedConfigContainer.mockReturnValue(null);
-    mockGetChatSheetGuideContainer.mockReturnValue({});
+    mockPeekChatScopedConfigContainer.mockReturnValue(null);
+    mockPeekChatSheetGuideContainer.mockReturnValue({});
     const result = getEffectiveSeedRowsForSheet_ACU('sheet_0', { allowTemplateFallback: false });
     expect(result).toEqual([]);
+  });
+
+  it('历史 seedRows picker 只使用纯读取容器，不触发迁移型 getter', () => {
+    mockCurrentJsonTableData.sheet_0 = {};
+    mockGetCurrentChatTemplateScopeState.mockReturnValue(null);
+    mockPeekChatScopedConfigContainer.mockReturnValue(null);
+    mockPeekChatSheetGuideContainer.mockReturnValue({
+      version: 2,
+      tags: { legacy: { updatedAt: 1, data: { sheet_0: { _seedRows: [['1', '历史数据']] } } } },
+    });
+
+    expect(getEffectiveSeedRowsForSheet_ACU('sheet_0', { guideData: {} })).toEqual([['1', '历史数据']]);
+    expect(mockPeekChatScopedConfigContainer).toHaveBeenCalledWith(mockGetChatArray());
+    expect(mockPeekChatSheetGuideContainer).toHaveBeenCalledWith(mockGetChatArray());
+    expect(mockGetChatScopedConfigContainer).not.toHaveBeenCalled();
+    expect(mockGetChatSheetGuideContainer).not.toHaveBeenCalled();
   });
 });
 

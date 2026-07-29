@@ -2,9 +2,11 @@
  * shared/log-buffer.ts — 日志缓冲区
  *
  * 零 DOM 依赖的内存日志存储。
- * logDebug_ACU / logWarn_ACU / logError_ACU 每次调用时将日志写入此缓冲区，
- * presentation 层通过 subscribe 实时接收新日志并渲染到 UI。
+ * Error 始终写入；Debug / Warn 仅在对应采集开关开启时写入。
+ * presentation 层通过 subscribe 实时接收已写入的新日志并渲染到 UI。
  */
+
+import { readWarnLogEnabled } from './v2-ui-state';
 
 // ═══════════════════════════════════════════════════════════════
 // 类型定义
@@ -55,6 +57,9 @@ const _knownTags: Set<string> = new Set();
 
 /** debug 级别日志是否写入缓冲区（默认关闭，减少性能开销） */
 let _debugLogEnabled = false;
+
+/** warn 级别日志是否写入缓冲区（默认关闭，用户显式开启后才采集） */
+let _warnLogEnabled = readWarnLogEnabled();
 
 // ═══════════════════════════════════════════════════════════════
 // 公共 API
@@ -153,13 +158,29 @@ export function isDebugLogEnabled(): boolean {
 }
 
 /**
+ * 设置 warn 级别日志是否启用。
+ * logWarn_ACU 复用此状态控制 console.warn，pushLog 复用此状态控制缓冲写入与订阅通知。
+ */
+export function setWarnLogEnabled(enabled: boolean): void {
+  _warnLogEnabled = enabled;
+}
+
+/**
+ * 获取 warn 级别日志是否启用
+ */
+export function isWarnLogEnabled(): boolean {
+  return _warnLogEnabled;
+}
+
+/**
  * 推送一条日志到缓冲区
  * 由 logDebug_ACU / logWarn_ACU / logError_ACU 调用
- * 当 debug 日志禁用时，debug 级别的日志会被跳过
+ * 当对应日志级别禁用时，debug / warn 日志会被跳过
  */
 export function pushLog(level: LogLevel, args: any[]): void {
-  // debug 级别日志禁用时直接跳过，避免性能开销
+  // 可选日志级别禁用时直接跳过，避免噪声与不必要的序列化开销
   if (level === 'debug' && !_debugLogEnabled) return;
+  if (level === 'warn' && !_warnLogEnabled) return;
 
   const tag = extractTag(args);
   _knownTags.add(tag);
@@ -250,4 +271,5 @@ export function _resetForTesting(): void {
   _subscribers.clear();
   _knownTags.clear();
   _debugLogEnabled = false;
+  _warnLogEnabled = false;
 }

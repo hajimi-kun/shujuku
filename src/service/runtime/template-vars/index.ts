@@ -42,7 +42,6 @@ export {
 // 中英文名称映射
 export {
     getNameMapper,
-    buildGlobalNameMapper,
     disposeGlobalNameMapper,
     NameMapper,
 } from './name-mapper';

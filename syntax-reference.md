@@ -168,13 +168,15 @@ if (rowIdx !== -1) {
 
 #### 1.5 SQLite 模式：直接 SQL 查询（推荐做复杂读取）
 
-如果当前是 **SQLite 模式**，前端可以直接通过 `AutoCardUpdaterAPI` 查询运行时数据库，不必再 `exportTableAsJson()` 后全量遍历。
+如果当前是 **SQLite 模式**且当前聊天的 SQLite runtime 已完整初始化，前端可以直接通过 `AutoCardUpdaterAPI` 查询运行时数据库，不必再 `exportTableAsJson()` 后全量遍历。
+
+`querySql`、`executeSqlQuery` 和 `queryTableRows` 是运行时门控能力：原生模式、启动初始化、聊天切换和数据库重载期间，这三个属性为 `undefined`；runtime 进入 `ready` 后自动可见。外部脚本必须先检查 `typeof API.querySql === 'function'`，不得缓存初始化期间读到的 `undefined`。
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
-| `querySql` | `(sqlOrOptions, params?, options?) => SqlQueryResult \| null` | 执行只读 SQL，别名见 `executeSqlQuery` |
-| `executeSqlQuery` | `(sqlOrOptions, params?, options?) => SqlQueryResult \| null` | 同 `querySql`，只允许 `SELECT / PRAGMA / EXPLAIN / WITH` |
-| `queryTableRows` | `(options) => SqlQueryResult \| null` | 声明式单表查询，自动拼 `SELECT` |
+| `querySql` | `(sqlOrOptions, params?, options?) => SqlQueryResult \| null` | runtime ready 后可见；执行只读 SQL，别名见 `executeSqlQuery` |
+| `executeSqlQuery` | `(sqlOrOptions, params?, options?) => SqlQueryResult \| null` | runtime ready 后可见；同 `querySql`，只允许 `SELECT / PRAGMA / EXPLAIN / WITH` |
+| `queryTableRows` | `(options) => SqlQueryResult \| null` | runtime ready 后可见；声明式单表查询，自动拼 `SELECT` |
 
 返回结构：
 
@@ -194,6 +196,10 @@ if (rowIdx !== -1) {
 
 ```js
 const API = window.AutoCardUpdaterAPI;
+if (typeof API?.querySql !== 'function') {
+  // SQLite runtime 尚未就绪；稍后重试，不要在此时执行查询。
+  return;
+}
 
 const result = API.querySql(
   'SELECT row_id, name, quantity FROM inventory WHERE name = ?',

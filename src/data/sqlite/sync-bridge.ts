@@ -9,10 +9,11 @@
  */
 
 import { SqliteEngine } from './sqlite-engine';
-import { createSheetInsertPlan, generateDDL, generateInserts, resultToContent, parseDDLTableName, parseDDLColumnNames, buildColumnNameMap } from './schema-mapper';
+import { buildRuntimeFallbackDDL_ACU, createSheetInsertPlan, generateInserts, resultToContent, parseDDLTableName, parseDDLColumnNames, buildColumnNameMap, resolveEffectiveDDL } from './schema-mapper';
 import type { TableDataObject_ACU, Sheet_ACU, Mate_ACU } from '../../shared/models/table-data';
-import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
+import { hashUserInput_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
 import { formatCanonicalRowIssues_ACU, normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
+import { resolvePhysicalTableNames_ACU } from '../../shared/sheet-identity';
 
 /** 同步桥的元数据表名（内部使用，对用户和 AI 不可见） */
 const META_TABLE_NAME = '_acu_sheet_meta';
@@ -25,11 +26,61 @@ const META_TABLE_DDL = `CREATE TABLE IF NOT EXISTS ${META_TABLE_NAME} (
   order_no INTEGER DEFAULT 0,
   source_data_json TEXT,
   update_config_json TEXT,
-  export_config_json TEXT
+  export_config_json TEXT,
+  physical_table_name TEXT
 );`;
 
+/** meta 表历史版本没有 physical_table_name 列；老库加载时补列，失败降级不阻断。 */
+const META_TABLE_MIGRATIONS_ACU: ReadonlyArray<{ column: string; ddl: string }> = [
+  { column: 'physical_table_name', ddl: `ALTER TABLE ${META_TABLE_NAME} ADD COLUMN physical_table_name TEXT;` },
+];
+
+export interface RuntimeDdlFallbackDiagnostic_ACU {
+  sheetKey: string;
+  reason: 'fallback_missing' | 'fallback_invalid';
+  failureSummary?: string;
+  originalDdlDigest: string;
+  effectiveTableName: string;
+  phase: 'initial_load' | 'runtime_ddl_retry';
+}
+
+export interface RuntimeEffectiveSchema_ACU {
+  effectiveDDL: string;
+  columnMap: ReturnType<typeof resolveEffectiveDDL>['columnMap'];
+  source: ReturnType<typeof resolveEffectiveDDL>['source'];
+  diagnostics: readonly string[];
+  originalDdlDigest: string;
+}
+
 export class SyncBridge {
+  private readonly runtimeFallbackDiagnostics = new Map<string, RuntimeDdlFallbackDiagnostic_ACU>();
+  private readonly runtimeEffectiveSchemas = new Map<string, RuntimeEffectiveSchema_ACU>();
+
   constructor(private engine: SqliteEngine) {}
+
+  getRuntimeFallbackDiagnostics_ACU(): readonly RuntimeDdlFallbackDiagnostic_ACU[] {
+    return Array.from(this.runtimeFallbackDiagnostics.values());
+  }
+
+  /** 老库补齐 meta 新列。ALTER 幂等：已存在的列会报错，捕获后忽略；缺列才补。 */
+  private _ensureMetaSchema(): void {
+    let existingColumns: Set<string>;
+    try {
+      existingColumns = new Set(this.engine.getTableInfo(META_TABLE_NAME).map(col => col.name));
+    } catch (e: any) {
+      logWarn_ACU(`[SyncBridge] 读取 meta 表结构失败，跳过迁移: ${e?.message || e}`);
+      return;
+    }
+    for (const migration of META_TABLE_MIGRATIONS_ACU) {
+      if (existingColumns.has(migration.column)) continue;
+      try {
+        this.engine.run(migration.ddl);
+      } catch (e: any) {
+        // 补列失败不阻断加载：多路识别会降级为“新算法 + DDL 别名”。
+        logWarn_ACU(`[SyncBridge] meta 迁移失败（${migration.column}），降级识别: ${e?.message || e}`);
+      }
+    }
+  }
 
   /**
    * 从 TableDataObject 加载到 SQLite
@@ -38,30 +89,36 @@ export class SyncBridge {
    *
    * @param data 完整的表格数据对象（通常来自 mergeAllIndependentTables_ACU 的结果）
    */
-  loadFromTableData(data: TableDataObject_ACU, options: { strict?: boolean } = {}): void {
+  loadFromTableData(data: TableDataObject_ACU, options: { strict?: boolean; allowRuntimeDdlFallback?: boolean } = {}): void {
     if (!data || typeof data !== 'object') return;
     if (!this.engine.isReady) {
       throw new Error('SyncBridge: SqliteEngine 未初始化');
     }
 
-    // 创建元数据表
-    const normalization = normalizeCanonicalTableRows_ACU(data);
-    if (normalization.errors.length > 0) {
-      const message = `[SyncBridge] snapshot 行标识不合法：${formatCanonicalRowIssues_ACU(normalization.errors)}`;
-      if (options.strict) throw new Error(message);
+    // strict hydrate 必须在副本上校验，失败时不得清洗或改写调用方快照。
+    const workingData = options.strict ? JSON.parse(JSON.stringify(data)) as TableDataObject_ACU : data;
+    const normalization = normalizeCanonicalTableRows_ACU(workingData);
+    const canonicalIssues = [...normalization.errors, ...normalization.removedRows];
+    if (canonicalIssues.length > 0) {
+      const message = `[SyncBridge] snapshot 行标识不合法：${formatCanonicalRowIssues_ACU(canonicalIssues)}`;
+      if (options.strict) {
+        throw new Error(message);
+      }
       logWarn_ACU(message);
     }
     this.engine.run(META_TABLE_DDL);
+    this._ensureMetaSchema();
 
     // 遍历所有 sheet
-    const sheetKeys = Object.keys(data).filter(k => k.startsWith('sheet_'));
+    const sheetKeys = Object.keys(workingData).filter(k => k.startsWith('sheet_'));
+    const physicalTableNames = resolvePhysicalTableNames_ACU(workingData);
     logDebug_ACU(`[SyncBridge] 开始加载 ${sheetKeys.length} 张表到 SQLite`);
     for (const key of sheetKeys) {
-      const sheet = data[key] as Sheet_ACU;
+      const sheet = workingData[key] as Sheet_ACU;
       if (!sheet || !Array.isArray(sheet.content)) continue;
 
       try {
-        this._loadSheet(key, sheet);
+        this._loadSheet(key, sheet, options.allowRuntimeDdlFallback === true, physicalTableNames.get(key));
       } catch (e: any) {
         const errorMessage = e?.message || String(e);
         const reason = /^第 \d+ 条语句失败:/.test(errorMessage) ? 'SQLite 写入失败' : errorMessage;
@@ -82,7 +139,10 @@ export class SyncBridge {
    * @param originalMate 原始的 mate 对象（SQLite 不存储 mate，需要外部传入）
    * @returns 完整的 TableDataObject
    */
-  exportToTableData(originalMate: Mate_ACU): TableDataObject_ACU {
+  exportToTableData(
+    originalMate: Mate_ACU,
+    options: { strict?: boolean } = {},
+  ): TableDataObject_ACU {
     if (!this.engine.isReady) {
       throw new Error('SyncBridge: SqliteEngine 未初始化');
     }
@@ -90,7 +150,7 @@ export class SyncBridge {
     const result: TableDataObject_ACU = { mate: originalMate };
 
     // 读取元数据
-    const metaMap = this._loadAllMeta();
+    const metaMap = this._loadAllMeta(options.strict === true);
 
     // 遍历所有用户表
     const tableNames = this.engine.getTableNames();
@@ -98,19 +158,28 @@ export class SyncBridge {
     for (const tableName of tableNames) {
       // 查找对应的元数据
       const meta = this._findMetaByTableName(metaMap, tableName);
-      if (!meta) continue;
+      if (!meta) {
+        if (options.strict) throw new Error(`[SyncBridge] 用户表 ${tableName} 缺少可识别的元数据。`);
+        continue;
+      }
 
       try {
         const sheet = this._exportSheet(tableName, meta);
         result[meta.sheetKey] = sheet;
       } catch (e: any) {
+        if (options.strict) {
+          throw new Error(`[SyncBridge] 导出表 ${tableName} 失败: ${e?.message || String(e)}`);
+        }
         logError_ACU(`[SyncBridge] 导出表 ${tableName} 失败:`, e?.message || e);
       }
     }
 
     const normalization = normalizeCanonicalTableRows_ACU(result);
-    if (normalization.errors.length > 0) {
-      logWarn_ACU(`[SyncBridge] 导出结果存在无法自动合并的行标识问题：${formatCanonicalRowIssues_ACU(normalization.errors)}`);
+    const canonicalIssues = [...normalization.errors, ...normalization.removedRows];
+    if (canonicalIssues.length > 0) {
+      const message = `[SyncBridge] 导出结果存在行标识问题：${formatCanonicalRowIssues_ACU(canonicalIssues)}`;
+      if (options.strict) throw new Error(message);
+      logWarn_ACU(message);
     }
     return result;
   }
@@ -131,40 +200,85 @@ export class SyncBridge {
   // ═══════════════════════════════════════════════════════════════
 
   /** 加载单张 sheet 到 SQLite */
-  private _loadSheet(sheetKey: string, sheet: Sheet_ACU): void {
-    // 生成 DDL
-    const ddl = generateDDL(sheet);
-    const tableName = parseDDLTableName(ddl);
-    if (!tableName) {
-      throw new Error(`无法从 DDL 中解析表名: ${ddl.substring(0, 100)}`);
+  private _loadSheet(sheetKey: string, sheet: Sheet_ACU, allowRuntimeDdlFallback: boolean, runtimeTableName?: string): void {
+    const resolvedDDL = resolveEffectiveDDL(sheet, sheet.uid || sheetKey, runtimeTableName);
+    if (resolvedDDL.source === 'fallback_invalid' && !allowRuntimeDdlFallback) {
+      throw new Error(resolvedDDL.diagnostics[0]);
     }
 
-    // INSERT 的目标列与 snapshot 源表头必须先完成同一套确定性映射。
-    // 不能在建表后才发现错位，否则会把部分错误数据留在 runtime。
-    const plan = createSheetInsertPlan(sheet);
+    const metaSql = `INSERT OR REPLACE INTO ${META_TABLE_NAME} (sheet_key, uid, name, order_no, source_data_json, update_config_json, export_config_json, physical_table_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?);`;
+    const executeResolvedDDL = (candidate: typeof resolvedDDL) => {
+      const tableName = parseDDLTableName(candidate.effectiveDDL);
+      if (!tableName) throw new Error(`无法从 DDL 中解析表名: ${candidate.effectiveDDL.substring(0, 100)}`);
 
-    // 先完整生成 INSERT，以便行值校验失败时不留下已创建的空表。
-    const inserts = generateInserts(sheet, tableName, plan);
-
-    // 单张表的 DDL、数据和元数据必须在同一事务提交。
-    // 任何 SQLite 执行期失败都不能留下用户表或 metadata 残骸。
-    const metaSql = `INSERT OR REPLACE INTO ${META_TABLE_NAME} (sheet_key, uid, name, order_no, source_data_json, update_config_json, export_config_json) VALUES (?, ?, ?, ?, ?, ?, ?);`;
-    this.engine.runBatch(
-      [ddl, ...inserts, metaSql],
-      [
-        undefined,
-        ...new Array<undefined>(inserts.length).fill(undefined),
+      // 映射或行数据错误必须在执行 DDL 前失败，绝不能被 runtime schema fallback 掩盖。
+      const plan = createSheetInsertPlan(sheet, candidate.columnMap);
+      const inserts = generateInserts(sheet, tableName, plan);
+      this.engine.runBatch(
+        [candidate.effectiveDDL, ...inserts, metaSql],
         [
-          sheetKey,
-          sheet.uid || sheetKey,
-          sheet.name || sheetKey,
-          sheet.orderNo ?? 0,
-          JSON.stringify(sheet.sourceData || {}),
-          JSON.stringify(sheet.updateConfig || {}),
-          JSON.stringify(sheet.exportConfig || {}),
+          undefined,
+          ...new Array<undefined>(inserts.length).fill(undefined),
+          [
+            sheetKey,
+            sheet.uid || sheetKey,
+            sheet.name || sheetKey,
+            sheet.orderNo ?? 0,
+            JSON.stringify(sheet.sourceData || {}),
+            JSON.stringify(sheet.updateConfig || {}),
+            JSON.stringify(sheet.exportConfig || {}),
+            tableName,
+          ],
         ],
-      ],
-    );
+      );
+    };
+
+    if (resolvedDDL.source !== 'explicit') {
+      this._recordRuntimeFallbackDiagnostic(sheetKey, resolvedDDL, 'initial_load');
+    }
+
+    try {
+      executeResolvedDDL(resolvedDDL);
+      this._recordRuntimeEffectiveSchema(sheetKey, resolvedDDL);
+    } catch (error: any) {
+      // runBatch 已保证失败事务回滚。仅首条 CREATE TABLE 执行失败才允许一次 runtime fallback；
+      // INSERT/约束/映射错误必须原样 fail closed，防止用全 TEXT 表偷偷吞掉数据完整性问题。
+      if (resolvedDDL.source !== 'explicit' || !allowRuntimeDdlFallback || !/^第 1 条语句失败:/.test(error?.message || '')) throw error;
+      const fallback = buildRuntimeFallbackDDL_ACU(sheet, runtimeTableName || sheet.uid || sheetKey, 'fallback_invalid', '显式 DDL 无法在 runtime SQLite 执行，已使用 fallback schema。');
+      this._recordRuntimeFallbackDiagnostic(sheetKey, fallback, 'runtime_ddl_retry', error?.message || String(error));
+      executeResolvedDDL(fallback);
+      this._recordRuntimeEffectiveSchema(sheetKey, fallback);
+    }
+  }
+
+  private _recordRuntimeEffectiveSchema(sheetKey: string, resolvedDDL: ReturnType<typeof resolveEffectiveDDL>): void {
+    this.runtimeEffectiveSchemas.set(sheetKey, {
+      effectiveDDL: resolvedDDL.effectiveDDL,
+      columnMap: resolvedDDL.columnMap,
+      source: resolvedDDL.source,
+      diagnostics: resolvedDDL.diagnostics,
+      originalDdlDigest: hashUserInput_ACU(resolvedDDL.originalDDL),
+    });
+  }
+
+  private _recordRuntimeFallbackDiagnostic(
+    sheetKey: string,
+    resolvedDDL: ReturnType<typeof resolveEffectiveDDL>,
+    phase: RuntimeDdlFallbackDiagnostic_ACU['phase'],
+    failureSummary?: string,
+  ): void {
+    if (this.runtimeFallbackDiagnostics.has(sheetKey)) return;
+    const effectiveTableName = parseDDLTableName(resolvedDDL.effectiveDDL) || 'unknown_table';
+    const diagnostic: RuntimeDdlFallbackDiagnostic_ACU = {
+      sheetKey,
+      reason: resolvedDDL.source === 'fallback_missing' ? 'fallback_missing' : 'fallback_invalid',
+      originalDdlDigest: hashUserInput_ACU(resolvedDDL.originalDDL),
+      effectiveTableName,
+      phase,
+      failureSummary: failureSummary?.slice(0, 240),
+    };
+    this.runtimeFallbackDiagnostics.set(sheetKey, diagnostic);
+    logWarn_ACU(`[SyncBridge][runtime-ddl-fallback] ${JSON.stringify(diagnostic)} ${resolvedDDL.diagnostics[0]}`);
   }
 
   /** 从 SQLite 导出单张表为 Sheet_ACU */
@@ -172,8 +286,9 @@ export class SyncBridge {
     // 查询所有数据
     const queryResult = this.engine.query(`SELECT * FROM ${tableName};`);
 
-    // 构建列名映射（英文 → 中文）
-    const ddl = meta.sourceData?.ddl || this.engine.getTableDDL(tableName) || '';
+    // 导出必须以实际创建到 runtime SQLite 的 schema 为准；meta.sourceData.ddl
+    // 可能是保留给用户修复的非法原文，不能再拿它反向解释已 fallback 的物理列。
+    const ddl = this.engine.getTableDDL(tableName) || '';
     const { sqlToChinese } = buildColumnNameMap(ddl);
 
     // 转换为 content。
@@ -182,7 +297,7 @@ export class SyncBridge {
     const columns = queryResult.columns.length > 0 ? queryResult.columns : parseDDLColumnNames(ddl);
     const content = resultToContent(columns, queryResult.values, sqlToChinese);
 
-    return {
+    const sheet: Sheet_ACU & { _acu_runtimeEffectiveSchema?: RuntimeEffectiveSchema_ACU } = {
       uid: meta.uid,
       name: meta.name,
       sourceData: meta.sourceData,
@@ -191,44 +306,96 @@ export class SyncBridge {
       exportConfig: meta.exportConfig,
       orderNo: meta.orderNo,
     };
+    const runtimeSchema = this.runtimeEffectiveSchemas.get(meta.sheetKey);
+    if (runtimeSchema) {
+      Object.defineProperty(sheet, '_acu_runtimeEffectiveSchema', {
+        value: runtimeSchema,
+        enumerable: false,
+      });
+    }
+    return sheet;
   }
 
   /** 读取所有元数据 */
-  private _loadAllMeta(): Map<string, SheetMeta> {
+  private _loadAllMeta(strict = false): Map<string, SheetMeta> {
     const map = new Map<string, SheetMeta>();
     try {
       const result = this.engine.query(`SELECT * FROM ${META_TABLE_NAME};`);
+      // 按列名取值，避免新增列后位置漂移读错字段。
+      const col = new Map(result.columns.map((name, index) => [name, index]));
+      const at = (row: SqlJsValueType[], name: string): SqlJsValueType =>
+        col.has(name) ? row[col.get(name)!] : null;
       for (const row of result.values) {
-        const sheetKey = String(row[0]);
+        const sheetKey = String(at(row, 'sheet_key'));
+        const storedPhysical = at(row, 'physical_table_name');
         map.set(sheetKey, {
           sheetKey,
-          uid: String(row[1]),
-          name: String(row[2]),
-          orderNo: Number(row[3]) || 0,
-          sourceData: safeJsonParse(row[4]),
-          updateConfig: safeJsonParse(row[5]),
-          exportConfig: safeJsonParse(row[6]),
+          uid: String(at(row, 'uid')),
+          name: String(at(row, 'name')),
+          orderNo: Number(at(row, 'order_no')) || 0,
+          sourceData: safeJsonParse(at(row, 'source_data_json')),
+          updateConfig: safeJsonParse(at(row, 'update_config_json')),
+          exportConfig: safeJsonParse(at(row, 'export_config_json')),
+          physicalTableName: storedPhysical != null && String(storedPhysical).trim()
+            ? String(storedPhysical)
+            : undefined,
         });
       }
-    } catch (_) {
+    } catch (error) {
+      if (strict) throw error;
       // 元数据表不存在时返回空 map
     }
     return map;
   }
 
-  /** 通过 SQL 表名查找对应的元数据 */
+  /**
+   * 通过 SQLite 实际表名反查元数据（“多方位识别”健全性读取）。
+   * 依次尝试三条识别路径，任一唯一命中即认，兼容不同历史命名的存量库：
+   *   1. meta 存储的 physical_table_name（历史真实建表名，最高优先）
+   *   2. 当前算法 resolvePhysicalTableNames_ACU 的结果（新库主路径）
+   *   3. 用户 DDL 内的 CREATE TABLE 名（旧命名别名；多表复用同名时不猜）
+   * 命中后把实际表名回填 meta.physicalTableName，供导出与后续识别对齐。
+   */
   private _findMetaByTableName(metaMap: Map<string, SheetMeta>, tableName: string): SheetMeta | null {
-    // 遍历元数据，找到 DDL 中表名匹配的那条
-    for (const [, meta] of metaMap) {
-      const ddl = meta.sourceData?.ddl;
-      if (ddl) {
-        const ddlTableName = parseDDLTableName(ddl);
-        if (ddlTableName === tableName) return meta;
-      }
+    // 路径 1：meta 存储的物理名。
+    for (const meta of metaMap.values()) {
+      if (meta.physicalTableName && meta.physicalTableName === tableName) return meta;
     }
-    // fallback：用 uid 匹配
-    for (const [, meta] of metaMap) {
-      if (meta.uid === tableName) return meta;
+
+    // 路径 2：当前算法重算。拼音冲突会抛错，此处降级为不命中，交由其它路径兜底。
+    try {
+      const metadataData: TableDataObject_ACU = { mate: {} as Mate_ACU };
+      for (const [sheetKey, meta] of metaMap) {
+        metadataData[sheetKey] = {
+          uid: meta.uid,
+          name: meta.name,
+          sourceData: meta.sourceData || {},
+          content: [],
+          updateConfig: meta.updateConfig || {},
+          exportConfig: meta.exportConfig || {},
+          orderNo: meta.orderNo,
+        } as Sheet_ACU;
+      }
+      const physicalTableNames = resolvePhysicalTableNames_ACU(metadataData);
+      for (const [sheetKey, meta] of metaMap) {
+        if (physicalTableNames.get(sheetKey) === tableName) {
+          meta.physicalTableName = tableName;
+          return meta;
+        }
+      }
+    } catch (e: any) {
+      logWarn_ACU(`[SyncBridge] 物理名重算命中冲突，降级 DDL 别名识别: ${e?.message || e}`);
+    }
+
+    // 路径 3：DDL 内旧表名作为别名；唯一命中才认，多表复用同名时拒绝猜测。
+    const ddlAliasMatches: SheetMeta[] = [];
+    for (const meta of metaMap.values()) {
+      const ddlName = parseDDLTableName(String(meta.sourceData?.ddl || ''));
+      if (ddlName && ddlName === tableName) ddlAliasMatches.push(meta);
+    }
+    if (ddlAliasMatches.length === 1) {
+      ddlAliasMatches[0].physicalTableName = tableName;
+      return ddlAliasMatches[0];
     }
     return null;
   }
@@ -243,6 +410,8 @@ interface SheetMeta {
   sourceData: any;
   updateConfig: any;
   exportConfig: any;
+  /** meta 表存储的历史物理表名（多路识别路径 1）；老库或未回填时为 undefined。 */
+  physicalTableName?: string;
 }
 
 /** 安全的 JSON 解析 */

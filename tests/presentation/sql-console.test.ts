@@ -56,6 +56,10 @@ vi.mock('../../src/presentation/bootstrap/api-groups/sql-api', () => ({
   })),
 }));
 
+vi.mock('../../src/service/runtime/read-query-resolver', () => ({
+  resolveCurrentRuntimeReadSql_ACU: vi.fn((sql: string) => ({ sql, tableRebindCount: 0, columnRebindCount: 0 })),
+}));
+
 import {
   isSelectQuery,
   addHistory,
@@ -103,6 +107,12 @@ describe('isSelectQuery', () => {
 
   it('空字符串返回 false', () => {
     expect(isSelectQuery('')).toBe(false);
+  });
+
+  it('WITH SELECT 返回 true，WITH 写语句与多语句返回 false', () => {
+    expect(isSelectQuery('WITH rows AS (SELECT 1) SELECT * FROM rows;')).toBe(true);
+    expect(isSelectQuery('WITH rows AS (SELECT 1) DELETE FROM t;')).toBe(false);
+    expect(isSelectQuery('SELECT 1; DELETE FROM t;')).toBe(false);
   });
 });
 

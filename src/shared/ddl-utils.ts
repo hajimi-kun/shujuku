@@ -6,6 +6,7 @@
  */
 
 import { logWarn_ACU } from './utils';
+import type { Sheet_ACU } from './models/table-data';
 
 // ═══════════════════════════════════════════════════════════════
 // DDL 解析
@@ -19,6 +20,22 @@ import { logWarn_ACU } from './utils';
 export function parseDDLTableName(ddl: string): string | null {
   const bounds = findCreateTableDefinitionBounds_ACU(String(ddl || ''));
   return bounds?.tableName || null;
+}
+
+/**
+ * Rebinds only the CREATE TABLE identifier in a parsed DDL statement.
+ * It deliberately does not use a broad replacement: literals, comments,
+ * constraints and nested expressions must remain byte-for-byte untouched.
+ */
+export function rebindCreateTableName_ACU(ddl: string, tableName: string): string {
+  const value = String(ddl || '');
+  const replacement = String(tableName || '').trim();
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(replacement)) {
+    throw new Error(`无效的 SQLite runtime 表名：${replacement || '(empty)'}`);
+  }
+  const bounds = findCreateTableDefinitionBounds_ACU(value);
+  if (!bounds) throw new Error('无法解析 CREATE TABLE 语句，不能重绑定 runtime 表名。');
+  return `${value.slice(0, bounds.tableNameStart)}${replacement}${value.slice(bounds.tableNameEnd)}`;
 }
 
 /**
@@ -168,6 +185,109 @@ export function parseDDLColumnInfos_ACU(ddl: string): DDLColumnInfo_ACU[] {
   });
 }
 
+export interface SheetColumnProjectionItem_ACU {
+  sourceIndex: number;
+  physicalName: string;
+  header: string;
+  hidden: boolean;
+}
+
+/**
+ * Resolves the persisted physical-column visibility contract without changing
+ * the sheet's schema or row layout. Consumers must keep sourceIndex when they
+ * project rows; a visible array index is not a physical column index.
+ */
+export function getSheetColumnProjection_ACU(sheet: Sheet_ACU): {
+  columns: SheetColumnProjectionItem_ACU[];
+  visibleColumns: SheetColumnProjectionItem_ACU[];
+  hiddenPhysicalColumns: string[];
+} {
+  const headers = Array.isArray(sheet?.content?.[0])
+    ? sheet.content[0].map(value => String(value ?? ''))
+    : [];
+  const ddlColumns = parseDDLColumnInfos_ACU(String(sheet?.sourceData?.ddl || ''));
+  const rawHidden = sheet?.sourceData?.hiddenPhysicalColumns;
+  if (rawHidden !== undefined && !Array.isArray(rawHidden)) {
+    throw new Error('hiddenPhysicalColumns 必须是 physical column 字符串数组。');
+  }
+  const hidden = (rawHidden || []).map(value => String(value ?? '').trim()).filter(Boolean);
+  const hiddenCanonical = hidden.map(value => value.toLowerCase());
+  if (new Set(hiddenCanonical).size !== hiddenCanonical.length) {
+    throw new Error('hiddenPhysicalColumns 包含大小写不敏感的重复 physical column。');
+  }
+  if (hiddenCanonical.includes('row_id')) throw new Error('row_id 不允许隐藏。');
+  // DDL 与 content[0] 列数不一致时无法按下标推出物理列名，只能退化为按表头名判定隐藏。
+  // 这不是错误：模板范围投影会在「模板列少于运行时列」时构造这种形态。
+  const canMapByIndex = ddlColumns.length === headers.length;
+  if (hidden.length > 0 && !canMapByIndex) {
+    logWarn_ACU('[SheetProjection] DDL 与 content[0] 列数不一致，隐藏列按表头名匹配。');
+  }
+  const physicalNames = canMapByIndex
+    ? ddlColumns.map(column => column.sqlName)
+    : headers;
+  // 无法按下标对齐时，隐藏名可能来自 DDL 物理名也可能来自表头名，两者都算已知，
+  // 否则模板范围投影传入的物理列名会被误判为「不存在的 physical column」。
+  const physicalCanonical = new Set([
+    ...physicalNames.map(value => value.toLowerCase()),
+    ...(canMapByIndex ? [] : ddlColumns.map(column => column.sqlName.toLowerCase())),
+  ]);
+  const unknown = hidden.filter(value => !physicalCanonical.has(value.toLowerCase()));
+  if (unknown.length > 0) {
+    throw new Error(`hiddenPhysicalColumns 指向不存在的 physical column「${unknown.join('、')}」。`);
+  }
+  const hiddenSet = new Set(hiddenCanonical);
+  const columns = headers.map((header, sourceIndex): SheetColumnProjectionItem_ACU => {
+    const physicalName = physicalNames[sourceIndex] || header;
+    // 无法按下标对齐时，同一列既可能以 DDL 物理名也可能以表头名被列入隐藏集合。
+    const ddlName = canMapByIndex ? '' : (ddlColumns[sourceIndex]?.sqlName || '');
+    const hidden = hiddenSet.has(physicalName.toLowerCase())
+      || (!!ddlName && hiddenSet.has(ddlName.toLowerCase()))
+      || (!!header && hiddenSet.has(String(header).toLowerCase()));
+    return { sourceIndex, physicalName, header, hidden };
+  });
+  return {
+    columns,
+    visibleColumns: columns.filter(column => !column.hidden),
+    hiddenPhysicalColumns: hidden,
+  };
+}
+
+/** Builds a prompt-only DDL view. It never mutates or replaces persisted DDL. */
+export function projectSheetDDLForVisibleColumns_ACU(sheet: Sheet_ACU, ddlOverride?: string): string {
+  const ddl = String(ddlOverride || sheet?.sourceData?.ddl || '');
+  const projection = getSheetColumnProjection_ACU(sheet);
+  if (projection.hiddenPhysicalColumns.length === 0) return ddl;
+  const bounds = findCreateTableDefinitionBounds_ACU(ddl);
+  const infos = parseDDLColumnInfos_ACU(ddl);
+  if (!bounds || infos.length !== projection.columns.length) {
+    throw new Error('无法为隐藏列构建安全的可见 DDL 投影。');
+  }
+  const visibleIndexes = new Set(projection.visibleColumns.map(column => column.sourceIndex));
+  const visible = infos.filter(info => visibleIndexes.has(info.index));
+  if (visible.length === 0 || infos[0]?.sqlName.toLowerCase() !== 'row_id') {
+    throw new Error('可见 DDL 投影必须保留 row_id。');
+  }
+  // 必须把列注释带回投影结果：注释是中文表头与 SQL 列名的唯一映射依据。
+  // 丢掉它会让 resolveInsertColumnMappings 无法把中文表头匹配到任何 DDL 列，
+  // 进而以「表头没有对应的 DDL 列」拒绝写入；prompt 里的 AI 也会失去列语义。
+  const body = visible
+    .map((info, index) => {
+      const comma = index < visible.length - 1 ? ',' : '';
+      const comment = info.comment ? ` -- ${info.comment}` : '';
+      return `  ${info.normalizedDefinition}${comma}${comment}`;
+    })
+    .join('\n');
+  return `${ddl.slice(0, bounds.openingIndex + 1)}\n${body}\n${ddl.slice(bounds.closingIndex)}`;
+}
+
+export function projectSheetRowToVisibleColumns_ACU(sheet: Sheet_ACU, row: readonly unknown[]): unknown[] {
+  return getSheetColumnProjection_ACU(sheet).visibleColumns.map(column => row[column.sourceIndex]);
+}
+
+export function projectSheetHeadersToVisibleColumns_ACU(sheet: Sheet_ACU): string[] {
+  return getSheetColumnProjection_ACU(sheet).visibleColumns.map(column => column.header);
+}
+
 /**
  * Parses only literal defaults that can be replayed without evaluating SQL.
  * SQLite expressions, parenthesized values and CURRENT_* are intentionally
@@ -274,7 +394,13 @@ function getCreateTableDefinitionBody_ACU(ddl: string): string | null {
   return bounds ? value.slice(bounds.openingIndex + 1, bounds.closingIndex) : null;
 }
 
-function findCreateTableDefinitionBounds_ACU(value: string): { tableName: string; openingIndex: number; closingIndex: number } | null {
+function findCreateTableDefinitionBounds_ACU(value: string): {
+  tableName: string;
+  tableNameStart: number;
+  tableNameEnd: number;
+  openingIndex: number;
+  closingIndex: number;
+} | null {
   let index = skipSqlTrivia_ACU(value, 0);
   index = consumeSqlKeyword_ACU(value, index, 'CREATE');
   if (index < 0) return null;
@@ -326,7 +452,9 @@ function findCreateTableDefinitionBounds_ACU(value: string): { tableName: string
       continue;
     }
     if (char === '(') depth += 1;
-    if (char === ')' && --depth === 0) return { tableName: value.slice(tableNameStart, tableNameEnd), openingIndex, closingIndex: index };
+    if (char === ')' && --depth === 0) {
+      return { tableName: value.slice(tableNameStart, tableNameEnd), tableNameStart, tableNameEnd, openingIndex, closingIndex: index };
+    }
   }
   return null;
 }
@@ -493,7 +621,8 @@ export function validateDDLTextAgainstHeaders_ACU(
 
   const columnInfos = parseDDLColumnInfos_ACU(trimmed);
   const firstColumn = columnInfos[0];
-  if (!firstColumn || firstColumn.sqlName.toLowerCase() !== 'row_id' || !/row_id\s+INTEGER\s+PRIMARY\s+KEY/i.test(trimmed)) {
+  if (!firstColumn || firstColumn.sqlName.toLowerCase() !== 'row_id'
+    || firstColumn.declaredType !== 'INTEGER' || !firstColumn.isPrimaryKey) {
     return { valid: false, message: '✗ 缺少 row_id INTEGER PRIMARY KEY 列（必须作为第一列）' };
   }
 
@@ -559,6 +688,69 @@ export function getDDLColumnNameByIndex(ddl: string, index: number): string | nu
   const columns = parseDDLColumnNames(ddl);
   if (index < 0 || index >= columns.length) return null;
   return columns[index];
+}
+
+/**
+ * Removes one business-column definition from a CREATE TABLE statement without
+ * regenerating the surrounding schema. Ambiguous or dependent definitions fail
+ * closed: callers must leave the editor draft untouched on error.
+ */
+export function removeDDLColumnAtIndex_ACU(ddl: string, sourceIndex: number): string {
+  const value = String(ddl || '');
+  const targetIndex = Math.trunc(Number(sourceIndex));
+  const bounds = findCreateTableDefinitionBounds_ACU(value);
+  if (!bounds) throw new Error('无法解析 CREATE TABLE 语句，不能安全删除列。');
+  const columns = parseDDLColumnInfos_ACU(value);
+  if (!Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex >= columns.length) {
+    throw new Error('目标列不在可解析的 DDL 列定义中。');
+  }
+  const target = columns[targetIndex];
+  if (!target || target.sqlName.toLowerCase() === 'row_id') throw new Error('row_id 不允许删除。');
+
+  const body = value.slice(bounds.openingIndex + 1, bounds.closingIndex);
+  const hasTableConstraint = splitColumnDefinitions(body).some(definition =>
+    /^(?:PRIMARY\s+KEY|FOREIGN\s+KEY|UNIQUE|CHECK|CONSTRAINT)\b/i.test(stripSqlLineComments_ACU(definition).trim()),
+  );
+  if (hasTableConstraint) throw new Error('DDL 含表级约束，不能安全自动删除列。');
+  const lines = body.split('\n');
+  const columnLines = lines.map((line, index) => {
+    const withoutLineComment = stripSqlLineComments_ACU(line).trim();
+    const name = withoutLineComment.match(/^([^\s,()]+)/)?.[1];
+    return name ? { index, name } : null;
+  }).filter((item): item is { index: number; name: string } => item !== null);
+  if (columnLines.length !== columns.length) {
+    throw new Error('DDL 含多行列定义或表级约束，不能安全自动删除列。');
+  }
+  const targetName = canonicalSqlIdentifier_ACU(target.sqlName);
+  const targetLinePosition = columnLines.findIndex(item => canonicalSqlIdentifier_ACU(item.name) === targetName);
+  if (targetLinePosition < 0) throw new Error(`无法定位 DDL 列定义「${target.sqlName}」。`);
+  const targetLine = lines[columnLines[targetLinePosition].index];
+  if (/\b(?:PRIMARY\s+KEY|UNIQUE|REFERENCES|CHECK|CONSTRAINT)\b/i.test(stripSqlLineComments_ACU(targetLine))) {
+    throw new Error(`列「${target.sqlName}」带有约束，不能安全自动删除。`);
+  }
+
+  // This transformer deliberately accepts only one-column-per-line DDL. That
+  // lets it remove exactly one original line, preserving every other byte of
+  // authored column definitions (including block comments and defaults).
+  if (targetLinePosition === columnLines.length - 1 && targetLinePosition > 0) {
+    const previousLineIndex = columnLines[targetLinePosition - 1].index;
+    lines[previousLineIndex] = lines[previousLineIndex].replace(/,(\s*(?:--.*)?)$/, '$1');
+  }
+  lines.splice(columnLines[targetLinePosition].index, 1);
+  const next = `${value.slice(0, bounds.openingIndex + 1)}${lines.join('\n')}${value.slice(bounds.closingIndex)}`;
+  const validation = validateDDLTextAgainstHeaders_ACU(next, columns
+    .filter((_, index) => index !== targetIndex)
+    .map(column => column.sqlName.toLowerCase() === 'row_id' ? 'row_id' : (column.comment || column.sqlName)));
+  if (!validation.valid) throw new Error(`删除列后的 DDL 非法：${validation.message}`);
+  return next;
+}
+
+function canonicalSqlIdentifier_ACU(value: string): string {
+  const raw = String(value || '').trim();
+  if (raw.startsWith('"') && raw.endsWith('"')) return raw.slice(1, -1).replace(/""/g, '"').toLowerCase();
+  if (raw.startsWith('`') && raw.endsWith('`')) return raw.slice(1, -1).replace(/``/g, '`').toLowerCase();
+  if (raw.startsWith('[') && raw.endsWith(']')) return raw.slice(1, -1).replace(/]]/g, ']').toLowerCase();
+  return raw.toLowerCase();
 }
 
 /**

@@ -10,6 +10,7 @@ vi.mock('../../../src/shared/json-helpers', () => ({
 }));
 
 import {
+  readIsolatedDataContainer_ACU,
   readIsolatedTagData_ACU,
   readLegacyIndependentData_ACU,
   readLegacyStandardData_ACU,
@@ -32,6 +33,24 @@ import {
 } from '../../../src/data/repositories/chat-message-data-repo';
 
 // ═══ 读取类 ═══
+
+describe('readIsolatedDataContainer_ACU', () => {
+  it('同时返回全部隔离槽并保留默认空槽键', () => {
+    const container = {
+      '': { independentData: {} },
+      alpha: { independentData: { sheet_0: { name: '表' } } },
+    };
+    expect(readIsolatedDataContainer_ACU({ TavernDB_ACU_IsolatedData: container })).toBe(container);
+  });
+
+  it('支持 JSON 字符串容器，非法结构返回 null', () => {
+    expect(readIsolatedDataContainer_ACU({
+      TavernDB_ACU_IsolatedData: JSON.stringify({ alpha: { independentData: {} } }),
+    })).toEqual({ alpha: { independentData: {} } });
+    expect(readIsolatedDataContainer_ACU({ TavernDB_ACU_IsolatedData: 'invalid' })).toBeNull();
+    expect(readIsolatedDataContainer_ACU({ TavernDB_ACU_IsolatedData: [] })).toBeNull();
+  });
+});
 
 describe('readIsolatedTagData_ACU', () => {
   it('msg 为 null 返回 null', () => {

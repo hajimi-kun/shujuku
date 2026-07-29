@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import validV2FrameFixture from '../../fixtures/migrations/spv7.9/v2-valid-full-checkpoint.json';
+import invalidV2FrameFixture from '../../fixtures/migrations/spv7.9/v2-invalid-duplicate-row-id.json';
+import orphanV2FrameFixture from '../../fixtures/migrations/spv7.9/v2-orphan-data-replace.json';
 
 const { mockLogWarn } = vi.hoisted(() => ({
   mockLogWarn: vi.fn(),
@@ -9,16 +12,19 @@ vi.mock('../../../src/shared/utils', async () => {
   return { ...actual, logWarn_ACU: mockLogWarn };
 });
 
-import { applyTableOperationV2_ACU, applyTablePatchV2_ACU, collectScheduleSummaryFromFramesV2_ACU, loadTableStateFromFramesV2_ACU } from '../../../src/service/table/storage-frame-v2-replay';
+import { applyTableOperationV2_ACU, applyTablePatchV2_ACU, collectScheduleSummaryFromFramesV2_ACU, loadTableStateFromFramesV2_ACU, loadTableStateFromFramesV2Detailed_ACU } from '../../../src/service/table/storage-frame-v2-replay';
 import { buildSheetSchemaMigrationOperation_ACU } from '../../../src/service/table/table-schema-migration';
+import { applySqlEditsToTableDataSnapshot_ACU } from '../../../src/service/table/sql-table-service';
 import { _set_independentTableStates_ACU, independentTableStates_ACU } from '../../../src/service/runtime/state-manager';
+import { _set_SillyTavern_API_ACU, SillyTavern_API_ACU } from '../../../src/shared/host-api';
+import { persistTableMutationLogV2_ACU } from '../../../src/service/table/storage-frame-v2-persist';
 
 function makeCheckpointData() {
   return {
     mate: { type: 'acu', version: 1 },
     sheet_0: {
       uid: 'inventory',
-      name: '背包',
+      name: 'inventory',
       content: [
         ['row_id', 'name'],
         ['1', '铁剑'],
@@ -250,12 +256,464 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     ]);
   });
 
+  it('已物化的 SQL INSERT 回放与实时快照一致，删除中间 ID 后仍保留 max + 1 身份', async () => {
+    const baseSnapshot = makeCheckpointData();
+    baseSnapshot.sheet_0.content = [
+      ['row_id', 'name'],
+      ['1', '铁剑'],
+      ['3', '盾牌'],
+    ];
+    const liveResult = await applySqlEditsToTableDataSnapshot_ACU(
+      "INSERT INTO inventory (name) VALUES ('药水');",
+      baseSnapshot,
+      'auto_standard',
+      { targetSheetKeys: ['sheet_0'], requireSheetScopedOperations: true, allowSingleTargetFallback: true },
+    );
+
+    expect(liveResult.success).toBe(true);
+    expect(liveResult.workingData?.sheet_0.content).toEqual([
+      ['row_id', 'name'],
+      ['1', '铁剑'],
+      ['3', '盾牌'],
+      ['4', '药水'],
+    ]);
+    expect(liveResult.operations).toEqual([{
+      kind: 'sql_sheet_batch',
+      sheetKey: 'sheet_0',
+      statements: ["INSERT INTO inventory (row_id, name) VALUES (4, '药水')"],
+      tableName: 'inventory',
+      reason: 'system',
+    }]);
+
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: {
+              kind: 'full', createdAt: 1, reason: 'init', data: baseSnapshot,
+              event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] },
+            },
+            logEntries: [{
+              seq: 1, entryId: 'materialized-row-id-replay', createdAt: 2,
+              source: 'auto_fill', targetMessageIndex: 0, aiFloor: 1,
+              filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [],
+              operations: liveResult.operations,
+            }],
+          },
+        },
+      },
+    }];
+
+    await expect(loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false }))
+      .resolves.toEqual(liveResult.workingData);
+  });
+
+  it('固定槽位 INSERT OR REPLACE 实时执行后原样持久化并由 V2 replay 覆盖相同 row_id', async () => {
+    const baseSnapshot = makeCheckpointData();
+    baseSnapshot.sheet_0.sourceData = {
+      ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY CHECK(row_id BETWEEN 1 AND 2), name TEXT NOT NULL);',
+      insertNode: "后续填表使用 INSERT OR REPLACE INTO inventory (row_id, name) VALUES (1, '...')。",
+    };
+    baseSnapshot.sheet_0.content = [
+      ['row_id', 'name'],
+      ['1', '旧槽位一'],
+      ['2', '旧槽位二'],
+    ];
+    const liveResult = await applySqlEditsToTableDataSnapshot_ACU(
+      "INSERT OR REPLACE INTO inventory (row_id, name) VALUES (1, '新槽位一');",
+      baseSnapshot,
+      'auto_standard',
+      { targetSheetKeys: ['sheet_0'], requireSheetScopedOperations: true, allowSingleTargetFallback: true },
+    );
+
+    expect(liveResult.success).toBe(true);
+    expect(liveResult.operations).toEqual([{
+      kind: 'sql_sheet_batch',
+      sheetKey: 'sheet_0',
+      statements: ["INSERT OR REPLACE INTO inventory (row_id, name) VALUES (1, '新槽位一')"],
+      tableName: 'inventory',
+      reason: 'system',
+    }]);
+
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: {
+              kind: 'full', createdAt: 1, reason: 'init', data: baseSnapshot,
+              event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] },
+            },
+            logEntries: [{
+              seq: 1, entryId: 'fixed-slot-replace-replay', createdAt: 2,
+              source: 'auto_fill', targetMessageIndex: 0, aiFloor: 1,
+              filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [],
+              operations: liveResult.operations,
+            }],
+          },
+        },
+      },
+    }];
+
+    await expect(loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false }))
+      .resolves.toEqual(liveResult.workingData);
+  });
+
+  it('固定槽位 INSERT OR REPLACE 经真实 V2 persist 写入后仍与实时快照一致', async () => {
+    const baseSnapshot = makeCheckpointData();
+    baseSnapshot.sheet_0.sourceData = {
+      ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY CHECK(row_id BETWEEN 1 AND 2), name TEXT NOT NULL);',
+      insertNode: '禁止 INSERT OR REPLACE；该字段不参与固定槽位契约。',
+    };
+    baseSnapshot.sheet_0.content = [
+      ['row_id', 'name'],
+      ['1', '旧槽位一'],
+      ['2', '旧槽位二'],
+    ];
+    const liveResult = await applySqlEditsToTableDataSnapshot_ACU(
+      "INSERT OR REPLACE INTO inventory (row_id, name) VALUES (1, '新槽位一');",
+      baseSnapshot,
+      'auto_standard',
+      { targetSheetKeys: ['sheet_0'], requireSheetScopedOperations: true, allowSingleTargetFallback: true },
+    );
+    expect(liveResult.success).toBe(true);
+    expect(liveResult.workingData).toBeDefined();
+    expect(liveResult.operations).toEqual([{
+      kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 'inventory', reason: 'system',
+      statements: ["INSERT OR REPLACE INTO inventory (row_id, name) VALUES (1, '新槽位一')"],
+    }]);
+
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: {
+              kind: 'full', createdAt: 1, reason: 'init', data: baseSnapshot,
+              event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] },
+            },
+            logEntries: [],
+          },
+        },
+      },
+    }];
+    const previousHostApi = SillyTavern_API_ACU;
+    try {
+      _set_SillyTavern_API_ACU({ chat, saveChat: async () => undefined } as any);
+      const persisted = await persistTableMutationLogV2_ACU({
+        targetMessageIndex: 0,
+        source: 'auto_fill',
+        afterData: liveResult.workingData!,
+        filledSheetKeys: ['sheet_0'],
+        candidateChangedSheetKeys: ['sheet_0'],
+        operations: liveResult.operations,
+        transactionContext: {
+          baseRevision: 'test-fixed-slot-replace',
+          writeSet: [{ kind: 'sheet', sheetKey: 'sheet_0' }],
+          assertFresh: () => undefined,
+          runCommit: async (task: () => Promise<any>) => task(),
+        },
+      });
+
+      expect(persisted.saved).toBe(true);
+      expect(chat[0].TavernDB_ACU_IsolatedData[''].storageFrame.logEntries[0].operations).toEqual(liveResult.operations);
+      await expect(loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false }))
+        .resolves.toEqual(liveResult.workingData);
+    } finally {
+      _set_SillyTavern_API_ACU(previousHostApi);
+    }
+  });
+
+  it('legacy 显式 row_id SQL operation 保持历史指定身份', async () => {
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: {
+              kind: 'full', createdAt: 1, reason: 'init', data: makeCheckpointData(),
+              event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] },
+            },
+            logEntries: [{
+              seq: 1, entryId: 'legacy-explicit-row-id', createdAt: 2,
+              source: 'manual_crud', targetMessageIndex: 0, aiFloor: 1,
+              filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [],
+              operations: [{
+                kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 'inventory', reason: 'system',
+                statements: ["INSERT INTO inventory (row_id, name) VALUES (10, '旧日志行')"],
+              }],
+            }],
+          },
+        },
+      },
+    }];
+
+    await expect(loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false })).resolves.toMatchObject({
+      sheet_0: expect.objectContaining({ content: [['row_id', 'name'], ['1', '铁剑'], ['10', '旧日志行']] }),
+    });
+  });
+
+  it('宽松映射历史 DDL 表名、sheetKey 与 sql_sheet_batch tableName 到当前 runtime 表名', async () => {
+    const data = {
+      mate: { type: 'acu', version: 1 },
+      sheet_global: {
+        uid: 'global_state_sheet',
+        name: '全局数据表',
+        content: [['row_id', 'story_state', 'note'], ['1', '初始状态', ''] ],
+        sourceData: {
+          ddl: 'CREATE TABLE "global_state" (row_id INTEGER PRIMARY KEY, story_state TEXT, note TEXT);',
+        },
+        updateConfig: {},
+        exportConfig: {},
+        orderNo: 0,
+      },
+    } as any;
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: {
+              kind: 'full', createdAt: 1, reason: 'init', data,
+              event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] },
+            },
+            logEntries: [{
+              seq: 1, entryId: 'legacy-global-state', createdAt: 2, source: 'manual_crud', targetMessageIndex: 0, aiFloor: 1,
+              filledSheetKeys: [], changedSheetKeys: ['sheet_global'], groupKeys: [],
+              operations: [{
+                kind: 'sql_sheet_batch', sheetKey: 'sheet_global', tableName: 'obsolete_metadata', reason: 'system',
+                statements: [
+                  "WITH source AS (SELECT ? AS row_id, ? AS story_state) UPDATE [global_state] SET story_state = (SELECT story_state FROM source), note = 'global_state must remain text' /* global_state comment */ WHERE row_id = (SELECT row_id FROM source) AND EXISTS (WITH RECURSIVE global_state(row_id) AS (SELECT 1) SELECT 1 FROM global_state)",
+                  'INSERT INTO sheet_global (row_id, story_state, note) VALUES (?, ?, ?)',
+                ],
+                params: [[1, '更新后'], [2, '新增状态', 'sheet key alias']],
+              }],
+            }],
+          },
+        },
+      },
+    }];
+
+    const result = await loadTableStateFromFramesV2_ACU(chat, '');
+
+    expect(result?.sheet_global.content).toEqual([
+      ['row_id', 'story_state', 'note'],
+      ['1', '更新后', 'global_state must remain text'],
+      ['2', '新增状态', 'sheet key alias'],
+    ]);
+  });
+
+  it('宽松映射去前缀 sheetKey、uid 与 sql_sheet_batch metadata 表名', async () => {
+    const data = {
+      mate: { type: 'acu', version: 1 },
+      sheet_global: {
+        uid: 'global_state_uid',
+        name: '全局数据表',
+        content: [['row_id', 'note'], ['1', '初始状态']],
+        sourceData: { ddl: 'CREATE TABLE global_state (row_id INTEGER PRIMARY KEY, note TEXT);' },
+        updateConfig: {},
+        exportConfig: {},
+        orderNo: 0,
+      },
+    } as any;
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: {
+              kind: 'full', createdAt: 1, reason: 'init', data,
+              event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] },
+            },
+            logEntries: [{
+              seq: 1, entryId: 'legacy-sheet-identities', createdAt: 2, source: 'manual_crud', targetMessageIndex: 0, aiFloor: 1,
+              filledSheetKeys: [], changedSheetKeys: ['sheet_global'], groupKeys: [],
+              operations: [{
+                kind: 'sql_sheet_batch', sheetKey: 'sheet_global', tableName: 'obsolete_metadata', reason: 'system',
+                statements: [
+                  "UPDATE global SET note = 'short-key' WHERE row_id = 1",
+                  "UPDATE global_state_uid SET note = 'uid' WHERE row_id = 1",
+                  "UPDATE obsolete_metadata SET note = 'operation-table-name' WHERE row_id = 1",
+                ],
+              }],
+            }],
+          },
+        },
+      },
+    }];
+
+    const result = await loadTableStateFromFramesV2_ACU(chat, '');
+
+    expect(result?.sheet_global.content).toEqual([
+      ['row_id', 'note'],
+      ['1', 'operation-table-name'],
+    ]);
+  });
+
+  it('冲突的 replay alias 保持原 SQL，并保留 SQLite operation 上下文', async () => {
+    const data = {
+      mate: { type: 'acu', version: 1 },
+      sheet_alpha: {
+        uid: 'alpha_uid', name: '甲表', content: [['row_id', 'note'], ['1', 'a']],
+        sourceData: { ddl: 'CREATE TABLE global_state (row_id INTEGER PRIMARY KEY, note TEXT);' },
+        updateConfig: {}, exportConfig: {}, orderNo: 0,
+      },
+      sheet_beta: {
+        uid: 'beta_uid', name: '乙表', content: [['row_id', 'note'], ['1', 'b']],
+        sourceData: { ddl: 'CREATE TABLE global_state (row_id INTEGER PRIMARY KEY, note TEXT);' },
+        updateConfig: {}, exportConfig: {}, orderNo: 1,
+      },
+    } as any;
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: {
+              kind: 'full', createdAt: 1, reason: 'init', data,
+              event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] },
+            },
+            logEntries: [{
+              seq: 1, entryId: 'conflicting-legacy-name', createdAt: 2, source: 'manual_crud', targetMessageIndex: 0, aiFloor: 1,
+              filledSheetKeys: [], changedSheetKeys: ['sheet_alpha'], groupKeys: [],
+              operations: [{
+                kind: 'sql_batch',
+                statements: ["UPDATE global_state SET note = 'must not choose a sheet' WHERE row_id = 1"],
+              }],
+            }],
+          },
+        },
+      },
+    }];
+
+    await expect(loadTableStateFromFramesV2_ACU(chat, '')).rejects.toThrow(
+      /messageIndex=0, seq=1, operationIndex=0, kind=sql_batch:.*no such table: global_state/i,
+    );
+  });
+
+  it('宽松映射不改写 CTE、字符串或未知表，仍保留真实 SQLite 错误', async () => {
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: makeCheckpointData() },
+            logEntries: [{
+              seq: 1, entryId: 'unknown-table', createdAt: 2, source: 'manual_crud', targetMessageIndex: 0, aiFloor: 1,
+              filledSheetKeys: [], changedSheetKeys: ['sheet_0'], groupKeys: [],
+              operations: [{
+                kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 'obsolete_table', reason: 'system',
+                statements: [
+                  "WITH inventory AS (SELECT 1 AS row_id) INSERT INTO nonexistent_table (row_id) SELECT row_id FROM inventory -- inventory remains a CTE",
+                ],
+              }],
+            }],
+          },
+        },
+      },
+    }];
+
+    await expect(loadTableStateFromFramesV2_ACU(chat, '')).rejects.toThrow(/no such table: nonexistent_table/i);
+  });
+
+
+  it('直接执行历史 WITH SQL、参数与混合 SQL operation，不消费 sheet 元数据', async () => {
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: {
+              kind: 'full', createdAt: 1, reason: 'init', data: makeCheckpointData(),
+              event: { filledSheetKeys: [], changedSheetKeys: [], groupKeys: [] },
+            },
+            logEntries: [{
+              seq: 1, entryId: 'legacy-with-dml', createdAt: 2, source: 'manual_crud', targetMessageIndex: 0, aiFloor: 1,
+              filledSheetKeys: [], changedSheetKeys: ['sheet_0'], groupKeys: [],
+              operations: [
+                {
+                  kind: 'sql_batch',
+                  statements: ["WITH selected AS (SELECT ? AS row_id) UPDATE inventory SET name = '钢剑' /* FROM inventory */ WHERE row_id IN (SELECT row_id FROM selected)"],
+                  params: [[1]],
+                },
+                {
+                  kind: 'sql_sheet_batch', sheetKey: 'obsolete_sheet', tableName: 'obsolete_table', reason: 'manual_crud',
+                  statements: ['WITH source AS (SELECT ? AS row_id, ? AS name) INSERT INTO inventory (row_id, name) SELECT row_id, name FROM source'],
+                  params: [[2, '药水']],
+                },
+                {
+                  kind: 'sql_batch',
+                  statements: ['WITH RECURSIVE doomed(row_id) AS (SELECT ? UNION ALL SELECT row_id + 1 FROM doomed WHERE row_id < ?) DELETE FROM inventory WHERE row_id IN (SELECT row_id FROM doomed)'],
+                  params: [[2, 2]],
+                },
+              ],
+            }],
+          },
+        },
+      },
+    }];
+
+    const result = await loadTableStateFromFramesV2_ACU(chat, '');
+
+    expect(result?.sheet_0.content).toEqual([
+      ['row_id', 'name'],
+      ['1', '钢剑'],
+    ]);
+  });
+
+  it('历史 SQL 的真实 SQLite 执行错误仍会中断回放并包含 operation 上下文', async () => {
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: makeCheckpointData() },
+            logEntries: [{
+              seq: 1, entryId: 'invalid-sql', createdAt: 2, source: 'manual_crud', targetMessageIndex: 0, aiFloor: 1,
+              filledSheetKeys: [], changedSheetKeys: ['sheet_0'], groupKeys: [],
+              operations: [{
+                kind: 'sql_sheet_batch', sheetKey: 'obsolete_sheet', tableName: 'obsolete_table', reason: 'manual_crud',
+                statements: ['WITH missing AS (SELECT 1) INSERT INTO nonexistent_table (row_id) SELECT * FROM missing'],
+              }],
+            }],
+          },
+        },
+      },
+    }];
+
+    await expect(loadTableStateFromFramesV2_ACU(chat, '')).rejects.toThrow(
+      /messageIndex=0, seq=1, operationIndex=0, kind=sql_sheet_batch:.*no such table/i,
+    );
+  });
+
+
   it('同楼层单表 checkpoint 引入新 DDL/CHECK 后再回放 sql_batch', async () => {
     const oldData = {
       mate: { type: 'acu', version: 1 },
       sheet_MapElements: {
         uid: 'sheet_MapElements',
-        name: '地图元素表',
+        name: 'mapelements',
         content: [['row_id', '元素名称', '元素类型'], ['1', '旧点', '地标']],
         sourceData: {
           ddl: `CREATE TABLE map_elements (
@@ -327,7 +785,7 @@ describe('loadTableStateFromFramesV2_ACU', () => {
                 groupKeys: [],
                 operations: [{
                   kind: 'sql_batch',
-                  statements: ["INSERT INTO map_elements (row_id, element_name, element_type) VALUES (2, '废弃集装箱', '地形')"],
+                  statements: ["INSERT INTO mapelements (row_id, element_name, element_type) VALUES (2, '废弃集装箱', '地形')"],
                 }],
               }],
             },
@@ -594,7 +1052,7 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     });
   });
 
-  it('DSL 删除中间行后插入使用最小未占用 row_id，且保留 0 和 false', async () => {
+  it('DSL 删除中间行后插入使用最大 row_id + 1，且保留 0 和 false', async () => {
     const checkpointData = makeCheckpointData();
     checkpointData.sheet_0.content = [
       ['row_id', 'name', 'enabled'],
@@ -621,8 +1079,126 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     }];
 
     await expect(loadTableStateFromFramesV2_ACU(chat, '')).resolves.toMatchObject({
-      sheet_0: expect.objectContaining({ content: [['row_id', 'name', 'enabled'], ['1', '铁剑', true], ['3', '盾牌', true], ['2', 0, false]] }),
+      sheet_0: expect.objectContaining({ content: [['row_id', 'name', 'enabled'], ['1', '铁剑', true], ['3', '盾牌', true], ['4', 0, false]] }),
     });
+  });
+
+  it('可回放合成 spv7.9 valid V2 full checkpoint fixture', async () => {
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: structuredClone(validV2FrameFixture) } },
+    }];
+
+    await expect(loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false })).resolves.toMatchObject({
+      sheet_0: expect.objectContaining({ content: [['row_id', '名称'], ['1', '铁剑']] }),
+    });
+  });
+
+  it('合成 spv7.9 重复 row_id full checkpoint 在内存副本中无损修复且不修改 frame', async () => {
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: structuredClone(invalidV2FrameFixture) } },
+    }];
+    const before = structuredClone(chat);
+
+    await expect(loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false })).resolves.toMatchObject({
+      sheet_0: expect.objectContaining({
+        content: [['row_id', '名称'], ['1', '铁剑'], ['2', '冒名副本']],
+      }),
+    });
+    expect(chat).toEqual(before);
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('已在内存副本中保留全部行并重映射 1 行'));
+  });
+
+  it('合成 spv7.9 orphan data_replace fixture 无锚点时拒绝 replay', async () => {
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: structuredClone(orphanV2FrameFixture) } },
+    }];
+
+    await expect(loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false })).resolves.toBeNull();
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('无锚点 V2 replay artifacts'));
+  });
+
+  it('显式开启时使用当前聊天模板 header-only 基线回放无锚点 sql_sheet_batch', async () => {
+    const template = makeCheckpointData();
+    template.sheet_0.content.push(['99', '模板示例行']);
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_ScopedConfig: {
+        version: 1,
+        template: {
+          '': { mode: 'chat_override', isolationKey: '', templateStr: JSON.stringify(template) },
+        },
+      },
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            logEntries: [{
+              seq: 1,
+              entryId: 'orphan-sql-sheet-batch',
+              createdAt: 1,
+              source: 'manual_crud',
+              targetMessageIndex: 0,
+              aiFloor: 1,
+              filledSheetKeys: [],
+              changedSheetKeys: ['sheet_0'],
+              groupKeys: [],
+              operations: [{
+                kind: 'sql_sheet_batch',
+                sheetKey: 'sheet_0',
+                tableName: 'inventory',
+                statements: ['INSERT INTO inventory (row_id, name) VALUES (?, ?)'],
+                params: [[1, '孤立日志数据']],
+                reason: 'system',
+              }],
+            }],
+          },
+        },
+      },
+    }];
+
+    await expect(loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false })).resolves.toBeNull();
+
+    const detailed = await loadTableStateFromFramesV2Detailed_ACU(chat, '', {
+      updateRuntimeState: false,
+      allowTemporaryTemplateBaseline: true,
+    });
+
+    expect(detailed?.baseKind).toBe('temporary_template_baseline');
+    expect(detailed?.data.sheet_0.content).toEqual([
+      ['row_id', 'name'],
+      ['1', '孤立日志数据'],
+    ]);
+    expect(detailed?.data.sheet_0.content).not.toContainEqual(['99', '模板示例行']);
+  });
+
+  it('临时模板基线不绕过 orphan data_replace 显式确认', async () => {
+    const template = makeCheckpointData();
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_ScopedConfig: {
+        version: 1,
+        template: { '': { mode: 'chat_override', isolationKey: '', templateStr: JSON.stringify(template) } },
+      },
+      TavernDB_ACU_IsolatedData: {
+        '': { _acu_storage_version: 2, storageFrame: structuredClone(orphanV2FrameFixture) },
+      },
+    }];
+
+    await expect(loadTableStateFromFramesV2Detailed_ACU(chat, '', {
+      updateRuntimeState: false,
+      allowTemporaryTemplateBaseline: true,
+    })).resolves.toBeNull();
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('data_replace'));
+
+    await expect(loadTableStateFromFramesV2Detailed_ACU(chat, '', {
+      updateRuntimeState: false,
+      allowTemporaryTemplateBaseline: true,
+      throwOnRecoveryRequired: true,
+    })).rejects.toThrow('请先在数据管理中执行 V2 恢复诊断并确认恢复');
   });
 
   it('无 full checkpoint 时拒绝从 data_replace/log-only 恢复不完整数据', async () => {
@@ -656,6 +1232,96 @@ describe('loadTableStateFromFramesV2_ACU', () => {
 
     expect(result).toBeNull();
     expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('无锚点 V2 replay artifacts'));
+  });
+
+  it('旧 full checkpoint 含重复 canonical row_id 时保留全部行并按既有最大 ID 加一', async () => {
+    const checkpointData = makeCheckpointData();
+    checkpointData.sheet_0.content.push([' 1 ', '冒名副本']);
+    checkpointData.sheet_0.content.push(['7', '既有高位身份']);
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: checkpointData },
+            logEntries: [],
+          },
+        },
+      },
+    }];
+    const before = structuredClone(chat);
+
+    const result = await loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false });
+
+    expect(result?.sheet_0.content).toEqual([
+      ['row_id', 'name'],
+      ['1', '铁剑'],
+      ['8', '冒名副本'],
+      ['7', '既有高位身份'],
+    ]);
+    expect(chat).toEqual(before);
+  });
+
+  it('旧重复 row_id 修复后，历史 row_delete 仍只作用于首个原身份', async () => {
+    const checkpointData = makeCheckpointData();
+    checkpointData.sheet_0.content.push([' 1 ', '冒名副本']);
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: checkpointData },
+            logEntries: [{
+              seq: 1,
+              entryId: 'legacy-delete-first-row-id',
+              createdAt: 2,
+              source: 'system',
+              targetMessageIndex: 0,
+              aiFloor: 1,
+              filledSheetKeys: [],
+              changedSheetKeys: ['sheet_0'],
+              groupKeys: [],
+              operations: [{ kind: 'row_delete', sheetKey: 'sheet_0', rowId: '1' }],
+            }],
+          },
+        },
+      },
+    }];
+
+    const result = await loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false });
+
+    expect(result?.sheet_0.content).toEqual([
+      ['row_id', 'name'],
+      ['2', '冒名副本'],
+    ]);
+  });
+
+  it('坏 full checkpoint 含空 row_id 时 fail closed 且不清洗持久化 frame', async () => {
+    const checkpointData = makeCheckpointData();
+    checkpointData.sheet_0.content.push(['', '无身份行']);
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: checkpointData },
+            logEntries: [],
+          },
+        },
+      },
+    }];
+    const before = structuredClone(chat);
+
+    await expect(loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false }))
+      .rejects.toThrow('full checkpoint 行标识不合法');
+
+    expect(chat).toEqual(before);
   });
 
   it('bounded replay 范围早于首个 V2 frame 时返回空基底但不误报无锚点历史', async () => {
@@ -871,7 +1537,7 @@ describe('loadTableStateFromFramesV2_ACU', () => {
       mate: { type: 'acu', version: 1 },
       sheet_inventory: {
         uid: 'inventory',
-        name: '背包',
+        name: 'inventory',
         content: [['row_id', 'name'], ['1', '铁剑']],
         sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT);' },
         updateConfig: {},
@@ -880,7 +1546,7 @@ describe('loadTableStateFromFramesV2_ACU', () => {
       },
       sheet_equipment: {
         uid: 'equipment',
-        name: '装备',
+        name: 'equipment',
         content: [['row_id', 'name'], ['1', '布甲']],
         sourceData: { ddl: 'CREATE TABLE equipment (row_id INTEGER PRIMARY KEY, name TEXT);' },
         updateConfig: {},
@@ -1702,6 +2368,236 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     await expect(loadTableStateFromFramesV2_ACU(chat, '')).rejects.toThrow('introduction shard messageIndex 不匹配');
     expect(() => collectScheduleSummaryFromFramesV2_ACU(chat, '')).toThrow('introduction shard messageIndex 不匹配');
   });
+  it('rebase 分片在 afterSeq 之后整表替换既有表结构（E3：前置日志先应用）', async () => {
+    const rootData = makeCheckpointData();
+    // 边界楼层已有 AI 填表日志（seq=1 追加一行），随后 rebase 在 afterSeq=1 之后整表替换为新结构。
+    const rebasedSheet = {
+      uid: 'inventory', name: 'inventory',
+      content: [['row_id', 'name', 'quality'], ['1', '铁剑', ''], ['2', '木剑', '']],
+      sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT, quality TEXT NOT NULL);' },
+      updateConfig: {}, exportConfig: {}, orderNo: 0,
+    } as any;
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: rootData },
+            perSheetCheckpoints: {
+              sheet_0: { kind: 'sheet_full', createdAt: 3, reason: 'schema_change', sheetKey: 'sheet_0', data: rebasedSheet, timeline: { kind: 'sheet_rebase', activateAtMessageIndex: 0, afterSeq: 1 } },
+            },
+            logEntries: [
+              { seq: 1, entryId: 'ai-fill', createdAt: 2, source: 'system', targetMessageIndex: 0, aiFloor: 1, filledSheetKeys: [], changedSheetKeys: [], groupKeys: [], operations: [{ kind: 'data_replace', data: { ...rootData, sheet_0: { ...rootData.sheet_0, content: [['row_id', 'name'], ['1', '铁剑'], ['2', '木剑']] } }, reason: 'system' }] },
+            ],
+          },
+        },
+      },
+    }];
+
+    const result = await loadTableStateFromFramesV2_ACU(chat, '');
+
+    // rebase 在 seq=1 日志之后生效：新结构（含 quality 列）+ 两行数据都在。
+    expect(result?.sheet_0.content).toEqual([['row_id', 'name', 'quality'], ['1', '铁剑', ''], ['2', '木剑', '']]);
+  });
+
+  it('sheet_reveal 分片在 afterSeq 之后整表恢复被隐藏的表（恢复离开时数据）', async () => {
+    const rootData = makeCheckpointData();
+    // 根 checkpoint 中不含 sheet_revived（已隐藏）；reveal 分片将其带数据整表恢复。
+    const revivedSheet = {
+      uid: 'revived', name: '重要NPC表',
+      content: [['row_id', 'value'], ['1', '离开时的数据']],
+      sourceData: { ddl: 'CREATE TABLE revived (row_id INTEGER PRIMARY KEY, value TEXT);' },
+      updateConfig: {}, exportConfig: {}, orderNo: 5,
+    } as any;
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: rootData },
+            perSheetCheckpoints: {
+              sheet_revived: { kind: 'sheet_full', createdAt: 3, reason: 'schema_change', sheetKey: 'sheet_revived', data: revivedSheet, timeline: { kind: 'sheet_reveal', activateAtMessageIndex: 0, afterSeq: 0 } },
+            },
+            logEntries: [],
+          },
+        },
+      },
+    }];
+
+    const result = await loadTableStateFromFramesV2_ACU(chat, '');
+
+    expect(result?.sheet_revived?.content).toEqual([['row_id', 'value'], ['1', '离开时的数据']]);
+  });
+
+  it('sheet_hide 分片在 afterSeq 之后从 replay state 移除该表可见性（数据不参与 active state）', async () => {
+    const rootData = makeCheckpointData();
+    // 根 checkpoint 含 sheet_0；hide 分片在 afterSeq=0 之后将其从 active state 移除。
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: rootData },
+            perSheetCheckpoints: {
+              sheet_0: { kind: 'sheet_full', createdAt: 3, reason: 'schema_change', sheetKey: 'sheet_0', data: rootData.sheet_0, timeline: { kind: 'sheet_hide', activateAtMessageIndex: 0, afterSeq: 0 } },
+            },
+            logEntries: [],
+          },
+        },
+      },
+    }];
+
+    const result = await loadTableStateFromFramesV2_ACU(chat, '');
+
+    expect(result && Object.prototype.hasOwnProperty.call(result, 'sheet_0')).toBe(false);
+  });
+
+  it('hide 的 afterSeq 晚于同 frame 日志时，先执行针对该表的 operation 再隐藏（切回原模板不再崩溃）', async () => {
+    // 复现真实场景：多表模板下 sheet_extra 已存在于 active state（已被一键补齐填过），
+    // 同 frame 仍有 seq=1 的 sql_sheet_batch 写该表；随后切回默认模板写入 hide。
+    // perSheetCheckpoints 是按 sheetKey 唯一的 map，hide 会覆盖先前的 introduction，
+    // 所以存档里只剩 hide 一条。hide 必须晚于 seq=1 生效，否则表被提前删 → no such table。
+    const rootData = makeCheckpointData();
+    rootData.sheet_extra = {
+      uid: 'extra',
+      name: '系统规则表',
+      content: [['row_id', 'rule_name']],
+      sourceData: { ddl: 'CREATE TABLE extra_rules (row_id INTEGER PRIMARY KEY, rule_name TEXT);' },
+      updateConfig: {}, exportConfig: {}, orderNo: 9,
+    };
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: rootData },
+            perSheetCheckpoints: {
+              // 修复后的值：afterSeq = lastLogSeq + 1 = 2，使 hide 晚于 seq=1 生效。
+              sheet_extra: {
+                kind: 'sheet_full', createdAt: 4, reason: 'schema_change', sheetKey: 'sheet_extra',
+                data: rootData.sheet_extra,
+                timeline: { kind: 'sheet_hide', activateAtMessageIndex: 0, afterSeq: 2 },
+              },
+            },
+            logEntries: [{
+              seq: 1,
+              entryId: 'fill-extra',
+              createdAt: 3,
+              source: 'manual_crud',
+              targetMessageIndex: 0,
+              aiFloor: 1,
+              filledSheetKeys: ['sheet_extra'],
+              changedSheetKeys: ['sheet_extra'],
+              groupKeys: [],
+              operations: [{
+                kind: 'sql_sheet_batch',
+                sheetKey: 'sheet_extra',
+                tableName: 'extra_rules',
+                reason: 'system',
+                statements: ['INSERT INTO extra_rules (row_id, rule_name) VALUES (?, ?)'],
+                params: [[1, '六维属性']],
+              }],
+            }],
+          },
+        },
+      },
+    }] as any[];
+
+    // 不报错（afterSeq=0 的旧行为会抛 no such table），且最终该表被隐藏。
+    const result = await loadTableStateFromFramesV2_ACU(chat, '');
+    expect(result).not.toBeNull();
+    expect(result && Object.prototype.hasOwnProperty.call(result, 'sheet_extra')).toBe(false);
+    // 原有表不受影响。
+    expect(result?.sheet_0?.content).toEqual([['row_id', 'name'], ['1', '铁剑']]);
+  });
+
+  it('hide 的 afterSeq 早于同 frame 日志时复现旧 bug（回归护栏）', async () => {
+    // 锁住因果：afterSeq=0 会让 hide 抢在 seq=1 之前删表，导致 operation 撞上 no such table。
+    const rootData = makeCheckpointData();
+    rootData.sheet_extra = {
+      uid: 'extra',
+      name: '系统规则表',
+      content: [['row_id', 'rule_name']],
+      sourceData: { ddl: 'CREATE TABLE extra_rules (row_id INTEGER PRIMARY KEY, rule_name TEXT);' },
+      updateConfig: {}, exportConfig: {}, orderNo: 9,
+    };
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: rootData },
+            perSheetCheckpoints: {
+              sheet_extra: {
+                kind: 'sheet_full', createdAt: 4, reason: 'schema_change', sheetKey: 'sheet_extra',
+                data: rootData.sheet_extra,
+                timeline: { kind: 'sheet_hide', activateAtMessageIndex: 0, afterSeq: 0 },
+              },
+            },
+            logEntries: [{
+              seq: 1,
+              entryId: 'fill-extra',
+              createdAt: 3,
+              source: 'manual_crud',
+              targetMessageIndex: 0,
+              aiFloor: 1,
+              filledSheetKeys: ['sheet_extra'],
+              changedSheetKeys: ['sheet_extra'],
+              groupKeys: [],
+              operations: [{
+                kind: 'sql_sheet_batch',
+                sheetKey: 'sheet_extra',
+                tableName: 'extra_rules',
+                reason: 'system',
+                statements: ['INSERT INTO extra_rules (row_id, rule_name) VALUES (?, ?)'],
+                params: [[1, '六维属性']],
+              }],
+            }],
+          },
+        },
+      },
+    }] as any[];
+
+    await expect(loadTableStateFromFramesV2_ACU(chat, '')).rejects.toThrow(/no such table/);
+  });
+
+
+
+
+
+  it('rebase 分片与旧 sheet_schema_migrate 无关，非法 timeline kind fail-closed', async () => {
+    const rootData = makeCheckpointData();
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: rootData },
+            perSheetCheckpoints: {
+              sheet_0: { kind: 'sheet_full', createdAt: 2, reason: 'schema_change', sheetKey: 'sheet_0', data: rootData.sheet_0, timeline: { kind: 'sheet_bogus', activateAtMessageIndex: 0, afterSeq: 0 } },
+            },
+            logEntries: [],
+          },
+        },
+      },
+    }];
+
+    await expect(loadTableStateFromFramesV2_ACU(chat, '')).rejects.toThrow('非法 timeline');
+  });
+
+
 
   it('首个 schema operation 即使没有前置 SQL 也必须执行真实 SQLite hydrate', async () => {
     const before = makeCheckpointData().sheet_0;
@@ -1759,6 +2655,70 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     await expect(applyTableOperationV2_ACU(state, invalidOperation as any, loadedRuntime as any)).rejects.toThrow('contractVersion');
     expect(state).toEqual(original);
     expect(loadedRuntime.loaded).toBe(true);
+  });
+
+  it('非法 data_replace 失败后不修改输入 state', async () => {
+    const state = makeCheckpointData();
+    const original = structuredClone(state);
+    const invalidData = makeCheckpointData();
+    invalidData.sheet_0.content.push(['', '无身份行']);
+
+    await expect(applyTableOperationV2_ACU(state, {
+      kind: 'data_replace',
+      data: invalidData,
+      reason: 'system',
+    } as any)).rejects.toThrow('data_replace 行标识不合法');
+
+    expect(state).toEqual(original);
+  });
+
+  it('非法 sheet_replace 失败后不修改输入 state', async () => {
+    const state = makeCheckpointData();
+    const original = structuredClone(state);
+    const invalidSheet = {
+      ...structuredClone(state.sheet_0),
+      content: [['row_id', 'name'], ['', '无身份行']],
+    };
+
+    await expect(applyTableOperationV2_ACU(state, {
+      kind: 'sheet_replace',
+      sheetKey: 'sheet_0',
+      sheet: invalidSheet,
+      reason: 'system',
+    } as any)).rejects.toThrow('sheet_replace 行标识不合法');
+
+    expect(state).toEqual(original);
+  });
+
+  it('已加载 runtime 的候选 hydrate 失败时保留旧 runtime 与输入 state', async () => {
+    const state = makeCheckpointData();
+    const original = structuredClone(state);
+    const oldDispose = vi.fn();
+    const exported = structuredClone(state);
+    const loadedRuntime = {
+      loaded: true,
+      engine: { dispose: oldDispose },
+      syncBridge: {
+        exportToTableData: () => structuredClone(exported),
+      },
+    };
+    const invalidSheet = {
+      ...structuredClone(state.sheet_0),
+      sourceData: { ddl: 'CREATE TABLE broken ( INVALID SYNTAX;' },
+    };
+
+    await expect(applyTableOperationV2_ACU(state, {
+      kind: 'sheet_replace',
+      sheetKey: 'sheet_0',
+      sheet: invalidSheet,
+      reason: 'system',
+    } as any, loadedRuntime as any)).rejects.toThrow();
+
+    expect(state).toEqual(original);
+    expect(loadedRuntime.loaded).toBe(true);
+    expect(oldDispose).not.toHaveBeenCalled();
+    expect(loadedRuntime.engine).toEqual({ dispose: oldDispose });
+    expect(loadedRuntime.syncBridge.exportToTableData()).toEqual(exported);
   });
 
   it('legacy meta_update 携带 sourceData.ddl 时明确拒绝，并且不推进 entry tracking 或提交 state', async () => {

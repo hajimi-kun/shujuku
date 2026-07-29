@@ -9,7 +9,7 @@
  * 的操作（删除、导出、设为全局默认、切换 chat 预设）；页面同时使用 useTableTemplatePresets
  * 维持下拉框的当前选中状态与 message。
  */
-import { computed, ref } from 'vue';
+import { computed, getCurrentScope, onScopeDispose, ref } from 'vue';
 import {
   applyTemplatePresetToCurrent_ACU,
   deleteTemplatePreset_ACU,
@@ -52,7 +52,23 @@ function downloadJson(jsonData: Record<string, any>, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
+function getTemplateApplyError_ACU(result: any, fallback: string): string {
+  if (!result) return fallback;
+  if (typeof result === 'object' && result.saved === false) {
+    return typeof result.error === 'string' && result.error ? result.error : fallback;
+  }
+  return '';
+}
+
+function getTemplateApplyWarning_ACU(result: any): string {
+  return result && typeof result === 'object' && typeof result.postCommitWarning === 'string'
+    ? result.postCommitWarning
+    : '';
+}
+
 export function useTablePresetManagement() {
+  const templateOperationController = new AbortController();
+  if (getCurrentScope()) onScopeDispose(() => templateOperationController.abort());
   const dialogStore = useDialogStore();
   const toast = useToastStore();
   const drawerView = ref<TablePresetDrawerView>('closed');
@@ -116,8 +132,15 @@ export function useTablePresetManagement() {
         updateGlobal: false,
         save: true,
         persistChatScope: true,
+        signal: templateOperationController.signal,
       });
-      if (!result) throw new Error('切换到目标预设失败。');
+      const applyError = getTemplateApplyError_ACU(result, '切换到目标预设失败。');
+      if (applyError) throw new Error(applyError);
+      const warning = getTemplateApplyWarning_ACU(result);
+      if (warning) {
+        toast.warning(warning, { muteable: false, durationMs: 6000 });
+        return;
+      }
       const opened = await openVisualizerSurface_ACU({ source: 'v2-shell' });
       if (!opened) throw new Error('可视化编辑器加载失败。');
       toast.success(`已切换到「${normalized}」并打开可视化编辑器。`);
@@ -154,7 +177,6 @@ export function useTablePresetManagement() {
       const normalized = normalizeTemplatePresetSelectionValue_ACU(name);
       const wasGlobalDefault = defaultPresetName.value === normalized;
       const wasActive = normalizeTemplatePresetSelectionValue_ACU(resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true })) === normalized;
-      if (!deleteTemplatePreset_ACU(name)) throw new Error('删除失败或预设不存在。');
       if (wasGlobalDefault) {
         const globalResult = await applyTemplatePresetToCurrent_ACU('', {
           source: 'v2_table_drawer_delete_default_fallback',
@@ -162,7 +184,8 @@ export function useTablePresetManagement() {
           save: true,
           persistChatScope: false,
         });
-        if (!globalResult) throw new Error('预设已删除，但全局默认回退失败。');
+        const globalError = getTemplateApplyError_ACU(globalResult, '全局默认回退失败，未删除预设。');
+        if (globalError) throw new Error(globalError);
       }
       if (wasActive) {
         const chatResult = await applyTemplatePresetToCurrent_ACU('', {
@@ -170,9 +193,17 @@ export function useTablePresetManagement() {
           updateGlobal: false,
           save: true,
           persistChatScope: true,
+          signal: templateOperationController.signal,
         });
-        if (!chatResult) throw new Error('预设已删除，但当前聊天回退失败。');
+        const chatError = getTemplateApplyError_ACU(chatResult, '当前聊天回退失败，未删除预设。');
+        if (chatError) throw new Error(chatError);
+        const warning = getTemplateApplyWarning_ACU(chatResult);
+        if (warning) {
+          toast.warning(warning, { muteable: false, durationMs: 6000 });
+          return;
+        }
       }
+      if (!deleteTemplatePreset_ACU(name)) throw new Error('删除失败或预设不存在。');
       toast.success(`已删除全局模板预设「${name}」。`);
     });
   }

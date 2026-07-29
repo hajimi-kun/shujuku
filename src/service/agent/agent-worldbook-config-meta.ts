@@ -256,6 +256,9 @@ function normalizeSnapshotEntry_ACU(value: unknown): AgentWorldbookControlSnapsh
   const commentHash = typeof source.commentHash === 'string' && source.commentHash.trim() ? source.commentHash.trim() : undefined;
   return {
     uid: source.uid,
+    ...(source.takeoverStatus === 'pending' || source.takeoverStatus === 'applied'
+      ? { takeoverStatus: source.takeoverStatus }
+      : {}),
     previousEnabled: source.previousEnabled !== false,
     previousKeys: normalizeSnapshotKeys_ACU(source.previousKeys),
     previousType,

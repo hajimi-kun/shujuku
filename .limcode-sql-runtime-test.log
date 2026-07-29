@@ -1,0 +1,988 @@
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90me:/xiangmu/shujuku[39m
+
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22msplitSqlStatements[2m > [22m按分号拆分多条语句[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22msplitSqlStatements[2m > [22m跳过字符串内的分号（单引号）[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22msplitSqlStatements[2m > [22m跳过字符串内的分号（双引号）[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22msplitSqlStatements[2m > [22m处理转义的单引号（SQL 风格 ''）[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22msplitSqlStatements[2m > [22m最后一条语句没有分号结尾[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22msplitSqlStatements[2m > [22m空字符串返回空数组[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22msplitSqlStatements[2m > [22m纯空白返回空数组[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22msplitSqlStatements[2m > [22m单条语句无分号[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22msplitSqlStatements[2m > [22m连续分号产生空语句被过滤[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22msplitSqlStatements[2m > [22m多行 SQL 语句[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22msplitSqlStatements[2m > [22m字符串中包含转义双引号[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mextractTableNamesFromStatements[2m > [22m提取 INSERT INTO 的表名[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mextractTableNamesFromStatements[2m > [22m提取 INSERT OR REPLACE INTO 的表名[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mextractTableNamesFromStatements[2m > [22m提取 UPDATE 的表名[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mextractTableNamesFromStatements[2m > [22m提取 UPDATE OR IGNORE 的表名[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mextractTableNamesFromStatements[2m > [22m提取 DELETE FROM 的表名[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mextractTableNamesFromStatements[2m > [22m提取 ALTER TABLE 的表名[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mextractTableNamesFromStatements[2m > [22m多条语句提取多个表名（去重）[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mextractTableNamesFromStatements[2m > [22mSELECT 语句不提取表名[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mextractTableNamesFromStatements[2m > [22mCREATE TABLE 语句不提取表名[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mextractTableNamesFromStatements[2m > [22m空数组返回空数组[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mextractTableNamesFromStatements[2m > [22m空字符串语句不提取[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mextractTableNamesFromStatements[2m > [22m大小写不敏感[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mapplySqlEditsToTableDataSnapshot_ACU[2m > [22m基于显式快照应用 SQL，返回 workingData 且不污染输入快照与全局状态[32m 80[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mapplySqlEditsToTableDataSnapshot_ACU[2m > [22mSQL 失败时返回错误且不污染输入快照与全局状态[32m 7[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mapplySqlEditsToTableDataSnapshot_ACU[2m > [22m严格单表日志模式下返回 sql_sheet_batch 而不是旧 sql_batch[32m 7[2mms[22m[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mapplySqlEditsToTableDataSnapshot_ACU[2m > [22m严格单表日志模式下拒绝无法归属到单表的 SQL[32m 7[2mms[22m[39m
+[31m   → expected '不支持安全重绑定的 SQL 语句类型：CREATE。' to contain 'SQL 语句无法归属到单表日志'[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mrebindSqlMutationTableIdentifiers_ACU[2m > [22m将唯一 DDL alias 的目标标识符改写为 runtime 物理名[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mrebindSqlMutationTableIdentifiers_ACU[2m > [22m拒绝多个 sheet 共用的 DDL alias[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mrebindSqlMutationTableIdentifiers_ACU[2m > [22m不把 uid 或显示名当作 runtime SQL alias[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mbuildSqlSheetBatchOperations_ACU[2m > [22m按 SQL 表名归类为单表 sql_sheet_batch，并按相邻同表合并[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mbuildSqlSheetBatchOperations_ACU[2m > [22m单目标 fallback 只在显式允许时把未知 SQL 归入目标 sheet[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m未初始化时的行为[2m > [22mapplyEdits 未初始化时抛出错误[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m未初始化时的行为[2m > [22mexecuteQuery 未初始化时抛出错误[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m未初始化时的行为[2m > [22mexecuteMutation 未初始化时抛出错误[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22m无数据且无可解析模板时返回 empty[32m 1[2mms[22m[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22m首个用户消息后、首个真实 AI 回复前将模板 seedRows 写入运行时 SQLite，支持首次 SQL 读取[32m 10[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22m仅有基底状态数据时也写入运行时 SQLite，但不保留内部标记[32m 4[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22m有数据时成功加载[32m 4[2mms[22m[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22m从显式 canonical 快照 hydrate 时不再次回放聊天，且 SQL 基底与快照一致[32m 4[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22m从错序旧 chronicle snapshot hydrate 后保持 SQLite ready 与字段语义[32m 5[2mms[22m[39m
+[31m   → no such table: chronicle[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22mstrict hydrate 遇到非空未映射旧字段时清理 runtime 并保持 not ready[32m 2[2mms[22m[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22mruntime load 遇到非法显式 DDL 时使用 fallback，且不修改调用方原始 DDL[32m 5[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22mloadFromData 重置 runtime 时先使旧 mapper 失效，再按新 schema 重建[32m 4[2mms[22m[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22m加载后可以执行查询[32m 4[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22m加载失败时返回错误信息[32m 0[2mms[22m[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mapplyEdits[2m > [22m执行单条 INSERT 语句[32m 7[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mapplyEdits[2m > [22m执行多条语句[32m 5[2mms[22m[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mapplyEdits[2m > [22m同一组 SQL 修改多张表时，后续表失败会回滚前面表的写入[32m 12[2mms[22m[39m
+[31m   → no such table: weapon_log[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mapplyEdits[2m > [22m空字符串返回成功（无操作）[32m 3[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mapplyEdits[2m > [22m纯空白返回成功（无操作）[32m 3[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mapplyEdits[2m > [22m去除 HTML 注释标记[32m 5[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mapplyEdits[2m > [22mSQL 语法错误时抛出异常[32m 3[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mapplyEdits[2m > [22m返回受影响的 modifiedKeys[32m 6[2mms[22m[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 applyEdits 自动回灌 seedRows[2m > [22mDELETE 全表后 UPDATE 自动回灌 seedRows 并命中[32m 5[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 applyEdits 自动回灌 seedRows[2m > [22m非空表不触发 reseed[32m 6[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 applyEdits 自动回灌 seedRows[2m > [22m无 seedRows 的表不触发 reseed[32m 7[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 applyEdits 自动回灌 seedRows[2m > [22mreseed INSERT 与用户 SQL 在同一事务，失败一起回滚[32m 6[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteQuery[2m > [22m执行 SELECT 查询[32m 3[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteQuery[2m > [22m带参数的查询[32m 3[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteQuery[2m > [22m无结果的查询[32m 3[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteQuery[2m > [22m已存在空表 + 有 seedRows 时 executeQuery 不触发 reseed[32m 5[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m新开卡场景下 executeQuery 不触发建表[2m > [22m新开卡后 executeQuery 查询不存在的表应抛出错误，而非静默建表[32m 1[2mms[22m[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m新开卡场景下 executeQuery 不触发建表[2m > [22m新开卡后 applyEdits 才触发建表[32m 6[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m新开卡场景下 executeQuery 不触发建表[2m > [22m新开卡首次写入遇到非法 DDL 时使用 runtime fallback，且不改写模板原文[32m 4[2mms[22m[39m
+[31m   → 无法唯一解析 SQL 目标表标识符：inventory。[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时 seedRows 写入 SQLite[2m > [22m有 seedRows 的表建表后数据被写入 SQLite[32m 5[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时 seedRows 写入 SQLite[2m > [22mseedRows 缺失 row_id 时会稳定化后写入 SQLite[32m 5[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时 seedRows 写入 SQLite[2m > [22m没有 seedRows 的表建表后仍为空表[32m 5[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时 seedRows 写入 SQLite[2m > [22m已存在的表不会被重复写入 seedRows[32m 5[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时只使用当前聊天模板预设[2m > [22mchat_override 模式下只建聊天级模板中的表，不建全局模板的表[32m 5[2mms[22m[39m
+[31m   → no such table: chat_table[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时只使用当前聊天模板预设[2m > [22mchat_override 建表时不能被旧 currentJsonTableData 的 CHECK 覆盖[32m 6[2mms[22m[39m
+[31m   → expected [ 'no such table: chat_table' ] to deeply equal [][39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时只使用当前聊天模板预设[2m > [22minherit_global 模式下 fallback 到全局模板[32m 5[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时只使用当前聊天模板预设[2m > [22mpreset_link 模式下使用链接的全局预设[32m 5[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteMutation[2m > [22m执行 INSERT 并返回 changes[32m 5[2mms[22m[39m
+[31m   → expected +0 to be 1 // Object.is equality[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteMutation[2m > [22m执行 UPDATE 并返回 changes[32m 5[2mms[22m[39m
+[31m   → expected +0 to be 1 // Object.is equality[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteMutation[2m > [22m执行 DELETE 并返回 changes[32m 5[2mms[22m[39m
+[31m   → expected +0 to be 1 // Object.is equality[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteMutation[2m > [22mSQL 错误时返回 errors 而不抛出[32m 5[2mms[22m[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 executeMutation 自动回灌 seedRows[2m > [22mDELETE 全表后 executeMutation UPDATE 自动回灌 seedRows 并命中[32m 6[2mms[22m[39m
+[31m   → expected +0 to be 1 // Object.is equality[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 executeMutation 自动回灌 seedRows[2m > [22m非空表不触发 reseed[32m 4[2mms[22m[39m
+[31m   → expected +0 to be 1 // Object.is equality[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 executeMutation 自动回灌 seedRows[2m > [22m无 seedRows 的表不触发 reseed[32m 6[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 executeMutation 自动回灌 seedRows[2m > [22mreseed 成功但用户 SQL 失败时同步 JSON 视图避免状态分裂[32m 6[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mgetCurrentData[2m > [22m未初始化时返回 currentJsonTableData_ACU[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mgetCurrentData[2m > [22m初始化后返回导出的数据[32m 3[2mms[22m[39m
+ [31m×[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mclearRuntimeData[2m > [22m释放已初始化引擎并清空 JSON 视图[32m 6[2mms[22m[39m
+[31m   → no such table: inventory[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22msaveToChat[2m > [22m拒绝 provider 直接保存，要求走公共提交模型[32m 2[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mdispose[2m > [22m销毁后无法执行查询[32m 3[2mms[22m[39m
+ [32m✓[39m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mdispose[2m > [22m多次 dispose 不抛出[32m 2[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mresolveUpdateMode_ACU[2m > [22mauto_unified 直接返回[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mresolveUpdateMode_ACU[2m > [22mmanual_unified 直接返回[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mresolveUpdateMode_ACU[2m > [22mfull 直接返回[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mresolveUpdateMode_ACU[2m > [22mauto_summary_silent 直接返回[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mresolveUpdateMode_ACU[2m > [22mmanual_summary 返回 manual_summary[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mresolveUpdateMode_ACU[2m > [22mmanual_independent 返回 manual_independent[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mresolveUpdateMode_ACU[2m > [22mmanual 前缀默认返回 manual_standard[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mresolveUpdateMode_ACU[2m > [22mauto 模式带 summary 返回 auto_summary[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mresolveUpdateMode_ACU[2m > [22mauto 模式默认返回 auto_standard[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mresolveUpdateMode_ACU[2m > [22m空字符串返回 auto_standard[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mresolveUpdateMode_ACU[2m > [22m未知模式返回 auto_standard[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mloadBatchBaseData_ACU[2m > [22m从新版存储格式加载数据[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mloadBatchBaseData_ACU[2m > [22m从旧版存储格式加载数据[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mloadBatchBaseData_ACU[2m > [22m空聊天记录返回全部未找到[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mloadBatchBaseData_ACU[2m > [22m跳过 user 消息[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mloadBatchBaseData_ACU[2m > [22m找到所有表后提前退出（从后往前搜索，取最近的）[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mloadBatchBaseData_ACU[2m > [22m隔离标签匹配[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mloadBatchBaseData_ACU[2m > [22m叠加历史 delta 后会稳定化 mergedBatchData 的 row_id[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mbuildBatchMergeBase_ACU[2m > [22m无 guide 时使用模板[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mbuildBatchMergeBase_ACU[2m > [22m有 guide 时使用 guide[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mbuildBatchMergeBase_ACU[2m > [22mSQLite 有界基底缺少可回放 V2 数据时不退回最新 runtime snapshot[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mbuildBatchMergeBase_ACU[2m > [22m非 SQLite 有界基底且未进入 V2 replay 时保留 runtime snapshot fallback[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mbuildBatchMergeBase_ACU[2m > [22m非 SQLite 有界基底已进入 V2 replay 但无可用数据时不退回未来 runtime snapshot[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessUpdatesBatch_ACU[2m > [22m空索引列表返回 success: true[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessUpdatesBatch_ACU[2m > [22m迁移失败时不执行任何批次更新[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessUpdatesBatch_ACU[2m > [22m执行更新回调成功时返回 success: true[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessUpdatesBatch_ACU[2m > [22m更新失败时返回 success: false 和 error[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessUpdatesBatch_ACU[2m > [22mAI 回复过短时跳过（auto 模式）[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessUpdatesBatch_ACU[2m > [22m构建合并基底失败时返回 error[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessUpdatesBatch_ACU[2m > [22m执行更新时传入基于批次历史数据的 batchBaseSnapshot 深拷贝[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22m正常流程：AI 返回有效响应，解析成功，保存成功[32m 2[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22m将目标表转换为 sheet 级 writeSet，并把 transactionContext 传给持久化[32m 2[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22mAI 返回后在同 scope 锁内恢复 batchBaseSnapshot，避免保存被其他组污染[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22mprepareAIInput 返回 null 时返回错误[33m 10008[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22mAI 响应无 tableEdit 标签时重试并最终失败[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22mAI 回复过短时重试并最终失败[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22m用户中止时返回 aborted[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22mAbortError 时返回 aborted[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22m保存失败时返回错误[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22m无实质数据改动但 targetSheetKeys 非空时记录填表尝试但不推进 changed tracking[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22m目标表参与本轮但仅部分表有实质修改时，只按实质修改表推进 tracking[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22mimport 模式不保存到聊天记录[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22m无 onProgress 回调时不报错[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22m解析失败时重试并最终失败[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22m首次初始化时保存所有表，但只追踪实质修改表[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22m自动更新成功后建立 AI 楼层边界 checkpoint[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU[2m > [22m自动更新成功后 boundary checkpoint 失败时不回滚主更新[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m正在更新中时返回错误[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22mAPI 未就绪时返回错误[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22mAPI 未配置时返回错误[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m数据库未加载时返回错误[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m聊天记录为空时返回错误[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m无 AI 回复时返回错误[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m未选择表格时返回错误[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m正常流程：processBatch 成功，返回 success[32m 2[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m可回放手动重填启动前不预清理重填范围内选中表历史数据[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m可回放手动重填不在启动期刷新 SQLite 运行时快照[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m重填起点早于最早 init checkpoint 时先用模板建立临时基底但不预清理或刷新[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m临时 initial baseline 建立失败时回滚并拒绝清理或刷新[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m普通手动更新的进度回调异常保持 rejection 契约且不触发 refill 回滚[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m临时 initial baseline 建立直接 reject 时统一回滚且返回硬失败[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m临时 baseline 落盘后 preparing 进度回调抛错时统一回滚[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m可回放手动重填忽略旧的整段增量清理 mock，直接按 bucket 执行[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m可回放手动重填不触发启动期运行时快照刷新[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m可回放手动重填不预清理范围内或范围外历史基底，保护 V2 replay 初始数据[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m可回放手动重填不预清理 chat[0] sheet guide，避免 V2 replay 回退链路断裂[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m已有 V2 增量但无 full checkpoint 时首次返回确认信号且不写入[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m无 full checkpoint 且确认前回滚失败时返回硬错误而不是确认对象[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m无可回放 full checkpoint 且 confirmBoundaryReset=true 时仅预清理，并在成功后提交完整快照[32m 1[2mms[22m[39m
+ [31m×[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m跨 checkpoint 重填的最终快照提交失败时恢复整个重填会话快照[32m 13[2mms[22m[39m
+[31m   → expected { success: false, …(1) } to deeply equal ObjectContaining{…}[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m跨 checkpoint 重填在用户停止后恢复整个重填会话快照[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m跨 checkpoint 重填在分组后同步聊天失败时恢复整个重填会话快照[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m存在其他 isolationKey 的 V2 checkpoint 时手动重填中止，避免把隔离键不匹配误判为空表[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22mprocessBatch 失败时返回错误[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m自动合并触发成功时返回 autoMergeTriggered[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22mfinally 块中清理 manualExtraHint 和 isAutoUpdating[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m可回放手动重填跳过写入前 retained buffer boundary checkpoint，避免 bucket 提交前被维护性 checkpoint 中断[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m手动更新整体成功后建立 retained buffer boundary checkpoint[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m用户在最后一批成功后终止时不建立完成态 boundary checkpoint[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22mboundary checkpoint 建立失败时保留成功结果并返回 checkpointWarning[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22mboundary checkpoint 建立抛异常时保留成功结果、返回 checkpointWarning 并记录异常详情[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m手动更新失败时不建立完成态 boundary checkpoint[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m不同 groupId 的手动表格按 maxConcurrentGroups 分块并输出可观测进度[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m手动分组 chunk 建立边界 checkpoint 前先同步聊天再判断是否需要滚动[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m手动分组 chunk 内在第一个响应完成前并发发起同批 group 请求[32m 2[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m相同 groupId 的手动表格聚合到同一 group，而不是另起调度链[32m 1[2mms[22m[39m
+ [31m×[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU — SQL 错误反馈重试[2m > [22mSQL 模式下 parseAndApplyTableEdits 抛错时，错误信息注入到 tableDataText[32m 79[2mms[22m[39m
+[31m   → 解析或应用AI更新时出错: expected false to be true // Object.is equality[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU — SQL 错误反馈重试[2m > [22m非 SQL 模式下错误不注入 SQL_ERROR_FEEDBACK[32m 1[2mms[22m[39m
+ [31m×[39m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU — SQL 错误反馈重试[2m > [22mSQL 模式下多次重试时错误信息被替换（不累积）[32m 17[2mms[22m[39m
+[31m   → expected '原始数据\n\n<!-- SQL_ERROR_FEEDBACK -->\n…' to contain 'no such table'[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU — 表级 API 预设覆盖[2m > [22m表有覆盖预设时，requestOptions 携带 tableApiPreset[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU — 表级 API 预设覆盖[2m > [22m表无覆盖预设时，requestOptions 不携带 tableApiPreset[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU — 表级 API 预设覆盖[2m > [22m表名为空时忽略覆盖[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU — 表级 API 预设覆盖[2m > [22m表名有空格时进行标准化匹配[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU — 表级 API 预设覆盖[2m > [22m同组多表配置不同 API preset 时拆组并分别调用对应 preset[32m 7[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mcollectGroupFillResponse_ACU[2m > [22m显式 baseSnapshot 传给 prepareAIInput_ACU，且 collect 阶段不触发 parse/save[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mcollectGroupFillResponse_ACU[2m > [22mAI 响应缺少完整 tableEdit 标签时按重试次数失败[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mcollectGroupFillResponse_ACU[2m > [22mSQL 模式下携带上轮错误反馈时，将 SQL_ERROR_FEEDBACK 注入到 prompt[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mcollectGroupFillResponse_ACU[2m > [22mprepareAIInput 返回 null 时直接失败[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22m按稳定顺序基于 baseSnapshot 合并响应，仅显式保存一次并触发一次 flush[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22m首次填表时 unified 路径保存全量表，但只追踪实质修改表[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22munified 中存在 no-op group 时仍整体成功但只追踪实质修改表[32m 0[2mms[22m[39m
+ [31m×[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22mSQL 模式下基于显式 baseSnapshot 顺序统一提交，不污染全局 currentJsonTableData[32m 10[2mms[22m[39m
+[31m   → expected false to be true // Object.is equality[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22mSQL 模式下混合 SQL/非 SQL 响应直接失败，不退化为快照写入[32m 1[2mms[22m[39m
+ [31m×[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22mSQL 模式统一提交失败时返回 SQL 错误且不保存[32m 6[2mms[22m[39m
+[31m   → expected '统一提交失败：SQL 执行失败。无法唯一解析 SQL 目标表标识符：bia…' to contain 'group a SQL 执行失败'[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22mSQL 模式下模板基础数据与 AI INSERT 主键冲突时返回真实 SQL 错误且不保存[32m 6[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22mparser 返回越权 modifiedKeys 时直接失败且不保存[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22m使用真实 native DSL parser 时，统一提交基于显式 baseSnapshot 而不是全局污染数据[32m 3[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22mcollect 真实产物可直接进入 unified apply，不需要手工补 job[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22mtargetSheetKeys 重叠时直接失败，不解析不保存不触发 flush[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22mSQL 模式下部分表无反馈时，仍用模板结构与基础数据初始化缺失表[32m 10[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22mSQL 模式下模板无基础数据时，缺失表仍以表头空表落盘[32m 10[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22mSQL 模式下已有运行数据的表不重复灌入模板基础数据，也不扩大 targetSheetKeys[32m 9[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22mSQL 模式下缺失表 seedRows 的 row_id 会在首次初始化时稳定化后再落盘[32m 10[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m空分组直接成功且不调用 AI[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m迁移失败时拒绝整组处理且不触发 AI 或持久化[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m同一 bucket 的多组只统一提交一次[32m 0[2mms[22m[39m
+ [31m×[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m可回放重填只向当前 bucket 的真实 AI 消息和目标表传递 replacement 范围[32m 2[2mms[22m[39m
+[31m   → expected { success: false, …(3) } to deeply equal ObjectContaining{…}[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m已提交一个 bucket 后用户终止时不启动后续 bucket[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22mgrouped 手动路径会向 onProgress 转发 AI 调用进度[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m连续 bucket 使用运行时快照作为下一次 prompt 基底，不从聊天历史回放[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m手动重填多 bucket 使用固定 mergeBaseMaxMessageIndex，不把前一 bucket 新写增量带入后续基底[32m 2[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22mSQL 模式下不再早退，而是完成 grouped 统一提交[32m 8[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22mSQLite 分组混合 SQL/非 SQL 时只重试非 SQL 组，成功 SQL 组不重试[32m 8[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m当前 bucket 失败后停止调度，后续 bucket 不调用 AI 或写盘[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m统一提交失败后会把错误反馈注入下一轮 prompt 并重试成功[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m统一提交持续失败到耗尽重试时整 bucket 失败且不落盘[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m空 tableEdit 视为合法无更新且不重试同 bucket 的其他组[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m首次初始化时 grouped 主路径全量保存但只追踪实质修改表[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m非空 tableEdit 未形成实质性操作时仍视为成功但不登记参与表[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22mmanual native 路径走 grouped helper 而不是 legacy processBatch[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22mmanual native 路径在 grouped helper 失败时返回失败且不落盘[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22mmanual SQL 路径走 grouped unified helper 而不是 legacy processBatch[32m 6[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualCatchUp_ACU[2m > [22m按已提交前沿切成 A 与 A+B 两个 wave，并写入精确 replacement 和 committed progress[32m 2[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualCatchUp_ACU[2m > [22m全部已追平时返回 no_work，且不调用 AI、保存或刷新[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualCatchUp_ACU[2m > [22mskipUpdateFloors 排除全部可用楼层时返回 no_work，且不调用 AI、保存或刷新[32m 0[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualCatchUp_ACU[2m > [22mrun-scoped catch-up 忽略其他任务的全局停止标志且不清零该标志[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualCatchUp_ACU[2m > [22m最终刷新降级时保留已提交数据并返回 sync_pending[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualCatchUp_ACU[2m > [22m首个 wave 提交后终止时不启动下一 wave[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualCatchUp_ACU[2m > [22m首个 wave 提交后第二个 wave 保存失败时保留已提交计数并最终刷新[32m 1[2mms[22m[39m
+ [32m✓[39m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualCatchUp_ACU[2m > [22m主执行失败且终态严格保存也失败时返回组合错误并释放运行锁[32m 1[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 41 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mapplySqlEditsToTableDataSnapshot_ACU[2m > [22m严格单表日志模式下拒绝无法归属到单表的 SQL
+[31m[1mAssertionError[22m: expected '不支持安全重绑定的 SQL 语句类型：CREATE。' to contain 'SQL 语句无法归属到单表日志'[39m
+
+Expected: [32m"SQL 语句无法归属到单表日志"[39m
+Received: [31m"不支持安全重绑定的 SQL 语句类型：CREATE。"[39m
+
+[36m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m355:26[22m[39m
+    [90m353| [39m
+    [90m354| [39m    [34mexpect[39m(result[33m.[39msuccess)[33m.[39m[34mtoBe[39m([35mfalse[39m)[33m;[39m
+    [90m355| [39m    [34mexpect[39m(result[33m.[39merror)[33m.[39m[34mtoContain[39m([32m'SQL 语句无法归属到单表日志'[39m)[33m;[39m
+    [90m   | [39m                         [31m^[39m
+    [90m356| [39m  })[33m;[39m
+    [90m357| [39m})[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22m首个用户消息后、首个真实 AI 回复前将模板 seedRows 写入运行时 SQLite，支持首次 SQL 读取
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m530:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22m仅有基底状态数据时也写入运行时 SQLite，但不保留内部标记
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m543:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22m从显式 canonical 快照 hydrate 时不再次回放聊天，且 SQL 基底与快照一致
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m564:22[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22m从错序旧 chronicle snapshot hydrate 后保持 SQLite ready 与字段语义
+[31m[1mError[22m: no such table: chronicle[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m588:22[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22mruntime load 遇到非法显式 DDL 时使用 fallback，且不修改调用方原始 DDL
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m617:22[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mloadFromChat[2m > [22m加载后可以执行查询
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m635:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mapplyEdits[2m > [22m执行单条 INSERT 语句
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m662:29[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mapplyEdits[2m > [22m同一组 SQL 修改多张表时，后续表失败会回滚前面表的写入
+[31m[1mError[22m: no such table: weapon_log[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m691:22[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 applyEdits 自动回灌 seedRows[2m > [22mDELETE 全表后 UPDATE 自动回灌 seedRows 并命中
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m741:34[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 applyEdits 自动回灌 seedRows[2m > [22m非空表不触发 reseed
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m770:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 applyEdits 自动回灌 seedRows[2m > [22m无 seedRows 的表不触发 reseed
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m783:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 applyEdits 自动回灌 seedRows[2m > [22mreseed INSERT 与用户 SQL 在同一事务，失败一起回滚
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m800:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteQuery[2m > [22m执行 SELECT 查询
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m815:30[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteQuery[2m > [22m带参数的查询
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m822:30[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteQuery[2m > [22m无结果的查询
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m827:30[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[16/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteQuery[2m > [22m已存在空表 + 有 seedRows 时 executeQuery 不触发 reseed
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m836:34[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[17/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m新开卡场景下 executeQuery 不触发建表[2m > [22m新开卡后 applyEdits 才触发建表
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m893:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[18/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m新开卡场景下 executeQuery 不触发建表[2m > [22m新开卡首次写入遇到非法 DDL 时使用 runtime fallback，且不改写模板原文
+[31m[1mError[22m: 无法唯一解析 SQL 目标表标识符：inventory。[39m
+[36m [2m❯[22m src/service/table/sql-table-service.ts:[2m236:30[22m[39m
+    [90m234| [39m    [35mconst[39m target [33m=[39m [34mgetSqlMutationTargetToken_ACU[39m(tokens)[33m;[39m
+    [90m235| [39m    [35mconst[39m physicalName [33m=[39m targets[33m.[39m[35mget[39m(target[33m.[39mvalue[33m.[39m[34mtoLowerCase[39m())[33m;[39m
+    [90m236| [39m    if (!physicalName) throw new Error(`无法唯一解析 SQL 目标表标识符：${target.val…
+    [90m   | [39m                             [31m^[39m
+    [90m237| [39m    return `${statement.slice(0, target.start)}${formatSqlMutationIden…
+    [90m238| [39m  })[33m;[39m
+[90m [2m❯[22m rebindSqlMutationTableIdentifiers_ACU src/service/table/sql-table-service.ts:[2m232:21[22m[39m
+[90m [2m❯[22m SqlTableService.applyEditsBatch src/service/table/sql-table-service.ts:[2m581:28[22m[39m
+[90m [2m❯[22m SqlTableService.applyEdits src/service/table/sql-table-service.ts:[2m562:17[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m916:30[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[19/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时 seedRows 写入 SQLite[2m > [22m有 seedRows 的表建表后数据被写入 SQLite
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m965:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[20/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时 seedRows 写入 SQLite[2m > [22mseedRows 缺失 row_id 时会稳定化后写入 SQLite
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m999:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[21/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时 seedRows 写入 SQLite[2m > [22m没有 seedRows 的表建表后仍为空表
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1031:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[22/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时 seedRows 写入 SQLite[2m > [22m已存在的表不会被重复写入 seedRows
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1065:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[23/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时只使用当前聊天模板预设[2m > [22mchat_override 模式下只建聊天级模板中的表，不建全局模板的表
+[31m[1mError[22m: no such table: chat_table[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1131:33[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[24/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时只使用当前聊天模板预设[2m > [22mchat_override 建表时不能被旧 currentJsonTableData 的 CHECK 覆盖
+[31m[1mAssertionError[22m: expected [ 'no such table: chat_table' ] to deeply equal [][39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- [][39m
+[31m+ [[39m
+[31m+   "no such table: chat_table",[39m
+[31m+ ][39m
+
+[36m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1181:29[22m[39m
+    [90m1179| [39m      const result = service.executeMutation("INSERT INTO chat_table V…
+    [90m1180| [39m
+    [90m1181| [39m      [34mexpect[39m(result[33m.[39merrors)[33m.[39m[34mtoEqual[39m([])[33m;[39m
+    [90m   | [39m                            [31m^[39m
+    [90m1182| [39m      expect(service.executeQuery('SELECT status FROM chat_table').val…
+    [90m1183| [39m    })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[25/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时只使用当前聊天模板预设[2m > [22minherit_global 模式下 fallback 到全局模板
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1211:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[26/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m建表时只使用当前聊天模板预设[2m > [22mpreset_link 模式下使用链接的全局预设
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1245:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[27/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteMutation[2m > [22m执行 INSERT 并返回 changes
+[31m[1mAssertionError[22m: expected +0 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1262:30[22m[39m
+    [90m1260| [39m    [34mit[39m([32m'执行 INSERT 并返回 changes'[39m[33m,[39m () [33m=>[39m {
+    [90m1261| [39m      const result = service.executeMutation("INSERT INTO inventory VA…
+    [90m1262| [39m      [34mexpect[39m(result[33m.[39mchanges)[33m.[39m[34mtoBe[39m([34m1[39m)[33m;[39m
+    [90m   | [39m                             [31m^[39m
+    [90m1263| [39m      [34mexpect[39m(result[33m.[39merrors)[33m.[39m[34mtoEqual[39m([])[33m;[39m
+    [90m1264| [39m    })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[28/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteMutation[2m > [22m执行 UPDATE 并返回 changes
+[31m[1mAssertionError[22m: expected +0 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1268:30[22m[39m
+    [90m1266| [39m    [34mit[39m([32m'执行 UPDATE 并返回 changes'[39m[33m,[39m () [33m=>[39m {
+    [90m1267| [39m      const result = service.executeMutation('UPDATE inventory SET qua…
+    [90m1268| [39m      [34mexpect[39m(result[33m.[39mchanges)[33m.[39m[34mtoBe[39m([34m1[39m)[33m;[39m
+    [90m   | [39m                             [31m^[39m
+    [90m1269| [39m      [34mexpect[39m(result[33m.[39merrors)[33m.[39m[34mtoEqual[39m([])[33m;[39m
+    [90m1270| [39m    })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[29/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mexecuteMutation[2m > [22m执行 DELETE 并返回 changes
+[31m[1mAssertionError[22m: expected +0 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1274:30[22m[39m
+    [90m1272| [39m    [34mit[39m([32m'执行 DELETE 并返回 changes'[39m[33m,[39m () [33m=>[39m {
+    [90m1273| [39m      const result = service.executeMutation('DELETE FROM inventory WH…
+    [90m1274| [39m      [34mexpect[39m(result[33m.[39mchanges)[33m.[39m[34mtoBe[39m([34m1[39m)[33m;[39m
+    [90m   | [39m                             [31m^[39m
+    [90m1275| [39m      [34mexpect[39m(result[33m.[39merrors)[33m.[39m[34mtoEqual[39m([])[33m;[39m
+    [90m1276| [39m    })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[30/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 executeMutation 自动回灌 seedRows[2m > [22mDELETE 全表后 executeMutation UPDATE 自动回灌 seedRows 并命中
+[31m[1mAssertionError[22m: expected +0 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1302:30[22m[39m
+    [90m1300| [39m
+    [90m1301| [39m      const result = service.executeMutation("UPDATE inventory SET qua…
+    [90m1302| [39m      [34mexpect[39m(result[33m.[39mchanges)[33m.[39m[34mtoBe[39m([34m1[39m)[33m;[39m
+    [90m   | [39m                             [31m^[39m
+    [90m1303| [39m      [34mexpect[39m(result[33m.[39merrors)[33m.[39m[34mtoEqual[39m([])[33m;[39m
+    [90m1304| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[31/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 executeMutation 自动回灌 seedRows[2m > [22m非空表不触发 reseed
+[31m[1mAssertionError[22m: expected +0 to be 1 // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- 1[39m
+[31m+ 0[39m
+
+[36m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1316:30[22m[39m
+    [90m1314| [39m
+    [90m1315| [39m      const result = service.executeMutation("UPDATE inventory SET qua…
+    [90m1316| [39m      [34mexpect[39m(result[33m.[39mchanges)[33m.[39m[34mtoBe[39m([34m1[39m)[33m;[39m
+    [90m   | [39m                             [31m^[39m
+    [90m1317| [39m
+    [90m1318| [39m      const queryResult = service.executeQuery('SELECT * FROM inventor…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[32/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 executeMutation 自动回灌 seedRows[2m > [22m无 seedRows 的表不触发 reseed
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1330:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[33/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22m删除全表后 executeMutation 自动回灌 seedRows[2m > [22mreseed 成功但用户 SQL 失败时同步 JSON 视图避免状态分裂
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1346:35[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[34/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/sql-table-service.test.ts[2m > [22mSqlTableService[2m > [22mclearRuntimeData[2m > [22m释放已初始化引擎并清空 JSON 视图
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m SqlTableService.executeQuery src/service/table/sql-table-service.ts:[2m627:32[22m[39m
+[90m [2m❯[22m tests/service/table/sql-table-service.test.ts:[2m1392:22[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[35/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/update-orchestrator.test.ts[2m > [22morchestrateManualUpdate_ACU[2m > [22m跨 checkpoint 重填的最终快照提交失败时恢复整个重填会话快照
+[31m[1mAssertionError[22m: expected { success: false, …(1) } to deeply equal ObjectContaining{…}[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- ObjectContaining {[39m
+[32m-   "error": StringContaining "strict save failed",[39m
+[31m+ {[39m
+[31m+   "error": "统一提交在 3 次尝试后仍失败: [TableUpdateCommit] applyUnifiedGroupFillResponses:snapshot: sheetKey=sheet_0, rowIndex=2 的 row_id 重复：2。",[39m
+[2m    "success": false,[22m
+[2m  }[22m
+
+[36m [2m❯[22m tests/service/table/update-orchestrator.test.ts:[2m1844:20[22m[39m
+    [90m1842| [39m    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.f…
+    [90m1843| [39m
+    [90m1844| [39m    expect(result).toEqual(expect.objectContaining({ success: false, e…
+    [90m   | [39m                   [31m^[39m
+    [90m1845| [39m    expect(captureManualRefillSessionSnapshot_ACU).toHaveBeenCalledWit…
+    [90m1846| [39m    expect(restoreManualRefillSessionSnapshotAtomic_ACU).toHaveBeenCal…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[36/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU — SQL 错误反馈重试[2m > [22mSQL 模式下 parseAndApplyTableEdits 抛错时，错误信息注入到 tableDataText
+[31m[1mAssertionError[22m: 解析或应用AI更新时出错: expected false to be true // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- true[39m
+[31m+ false[39m
+
+[36m [2m❯[22m tests/service/table/update-orchestrator.test.ts:[2m2394:42[22m[39m
+    [90m2392| [39m    const result = await resultPromise;
+    [90m2393| [39m
+    [90m2394| [39m    expect(result.success, result.error).toBe(true);
+    [90m   | [39m                                         [31m^[39m
+    [90m2395| [39m    expect(callCount).toBe(2);
+    [90m2396| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[37/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/update-orchestrator.test.ts[2m > [22mexecuteCardUpdateCore_ACU — SQL 错误反馈重试[2m > [22mSQL 模式下多次重试时错误信息被替换（不累积）
+[31m[1mAssertionError[22m: expected '原始数据\n\n<!-- SQL_ERROR_FEEDBACK -->\n…' to contain 'no such table'[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- no such table[39m
+[31m+ 原始数据[39m
+[31m+[39m
+[31m+ <!-- SQL_ERROR_FEEDBACK -->[39m
+[31m+ [SQL执行错误，请修正后重新输出][39m
+[31m+ 错误信息: 无法唯一解析 SQL 目标表标识符：missing。[39m
+
+[36m [2m❯[22m tests/service/table/update-orchestrator.test.ts:[2m2472:39[22m[39m
+    [90m2470| [39m
+    [90m2471| [39m    // 第二次调用时应包含第一次的错误信息
+    [90m2472| [39m    expect(capturedTableDataTexts[1]).toContain('no such table');
+    [90m   | [39m                                      [31m^[39m
+    [90m2473| [39m    // 第三次调用时应包含第二次的错误信息（替换了第一次的）
+    [90m2474| [39m    expect(capturedTableDataTexts[2]).toContain('missing_col');
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[38/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22mSQL 模式下基于显式 baseSnapshot 顺序统一提交，不污染全局 currentJsonTableData
+[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- true[39m
+[31m+ false[39m
+
+[36m [2m❯[22m tests/service/table/update-orchestrator.test.ts:[2m2915:28[22m[39m
+    [90m2913| [39m    const result = await applyUnifiedGroupFillResponses_ACU(responses …
+    [90m2914| [39m
+    [90m2915| [39m    expect(result.success).toBe(true);
+    [90m   | [39m                           [31m^[39m
+    [90m2916| [39m    expect(result.modifiedKeys).toEqual(['sheet_0', 'sheet_1']);
+    [90m2917| [39m    expect(mockParseAndApplyTableEditsToData).not.toHaveBeenCalled();
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[39/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/update-orchestrator.test.ts[2m > [22mapplyUnifiedGroupFillResponses_ACU[2m > [22mSQL 模式统一提交失败时返回 SQL 错误且不保存
+[31m[1mAssertionError[22m: expected '统一提交失败：SQL 执行失败。无法唯一解析 SQL 目标表标识符：bia…' to contain 'group a SQL 执行失败'[39m
+
+Expected: [32m"group a SQL 执行失败"[39m
+Received: [31m"统一提交失败：SQL 执行失败。无法唯一解析 SQL 目标表标识符：biaoa。"[39m
+
+[36m [2m❯[22m tests/service/table/update-orchestrator.test.ts:[2m2974:26[22m[39m
+    [90m2972| [39m
+    [90m2973| [39m    expect(result.success).toBe(false);
+    [90m2974| [39m    expect(result.error).toContain('group a SQL 执行失败');
+    [90m   | [39m                         [31m^[39m
+    [90m2975| [39m    expect(result.error).toContain('missing_col');
+    [90m2976| [39m    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[40/41]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/service/table/update-orchestrator.test.ts[2m > [22mprocessGroupedRuntimeChunk_ACU[2m > [22m可回放重填只向当前 bucket 的真实 AI 消息和目标表传递 replacement 范围
+[31m[1mAssertionError[22m: expected { success: false, …(3) } to deeply equal ObjectContaining{…}[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- ObjectContaining {[39m
+[32m-   "committedBucketCount": 2,[39m
+[32m-   "success": true,[39m
+[31m+ {[39m
+[31m+   "committedBucketCount": 1,[39m
+[31m+   "error": "统一提交在 1 次尝试后仍失败: [TableUpdateCommit] applyUnifiedGroupFillResponses:snapshot: sheetKey=sheet_0, rowIndex=3 的 row_id 重复：2。",[39m
+[31m+   "failedGroups": [[39m
+[31m+     "group_a",[39m
+[31m+   ],[39m
+[31m+   "success": false,[39m
+[2m  }[22m
+
+[36m [2m❯[22m tests/service/table/update-orchestrator.test.ts:[2m3365:20[22m[39m
+    [90m3363| [39m    ], 'manual_independent', { replaceExistingIncremental: true });
+    [90m3364| [39m
+    [90m3365| [39m    expect(result).toEqual(expect.objectContaining({ success: true, co…
+    [90m   | [39m                   [31m^[39m
+    [90m3366| [39m    expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(2);
+    [90m3367| [39m    expect(mockPersistTablesToChatMessage.mock.calls[0][0].replaceExis…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[41/41]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m2 failed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m41 failed[39m[22m[2m | [22m[1m[32m186 passed[39m[22m[90m (227)[39m
+[2m   Start at [22m 18:02:35
+[2m   Duration [22m 11.67s[2m (transform 889ms, setup 0ms, collect 1.47s, tests 10.63s, environment 0ms, prepare 219ms)[22m
+

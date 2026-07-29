@@ -341,34 +341,50 @@
           </AcuFormRow>
           <AcuFormRow
             label="滚动增量"
-            hint="默认关闭。开启后按 base + delta 写入外置索引，降低连续归档上传体积；读取侧仍兼容旧格式。"
+            hint="当前因 V2 不可变发布生命周期要求而暂停。即使历史配置已开启，归档仍会安全地写入 V2 单文件快照。"
           >
             <AcuToggle
               :model-value="vector.form.summaryIndexRollingDeltaEnabled"
-              label="启用滚动增量写入"
-              @update:model-value="
-                vector.setBooleanField('summaryIndexRollingDeltaEnabled', $event)
-              "
+              label="滚动增量写入暂不可用"
+              :disabled="true"
             />
           </AcuFormRow>
           <AcuFormRow
             label="折叠阈值 K"
-            hint="累计变更达到 K 个不同纪要行时，将 delta 折叠进新的 base，避免增量长期膨胀。"
+            hint="仅保留历史配置兼容；滚动增量恢复 V2 安全发布语义前不生效。"
           >
             <AcuInput
-              :model-value="vector.form.summaryIndexRollingDeltaFoldThreshold"
+              :model-value="vector.form.summaryIndexRollingDeltaFoldThreshold || 15"
               type="number"
               :min="1"
               :step="1"
-              @change="
-                vector.setNumberField(
-                  'summaryIndexRollingDeltaFoldThreshold',
-                  $event,
-                )
-              "
+              disabled
             />
           </AcuFormRow>
         </div>
+        <AcuFormRow
+          label="V2 写入闸门"
+          hint="默认关闭。关闭只会阻止新的 V2 快照写入；已发布 V2 快照仍可读取，绝不会回退覆盖旧路径。"
+        >
+          <AcuToggle
+            :model-value="vector.form.summaryIndexV2WriteEnabled"
+            label="允许 V2 快照写入"
+            @update:model-value="vector.setBooleanField('summaryIndexV2WriteEnabled', $event)"
+          />
+        </AcuFormRow>
+        <AcuFormRow
+          label="V2 写入 scope allowlist"
+          hint="每行一个 canonical scope fingerprint。留空表示不额外限制已显式开启的 writer；错误 scope 不会写入。"
+        >
+          <textarea
+            :value="vector.form.summaryIndexV2WriteScopeAllowlistText"
+            class="acu-v2-vector-index-page__scope-allowlist"
+            rows="4"
+            spellcheck="false"
+            placeholder="每行一个 scope fingerprint"
+            @change="vector.setV2WriteScopeAllowlist(($event.target as HTMLTextAreaElement).value)"
+          ></textarea>
+        </AcuFormRow>
       </AcuPanel>
     </AcuPanelGrid>
 
@@ -631,6 +647,20 @@ useUiCloseGuard(confirmPromptClose);
   background: var(--acu-bg-2, transparent);
   color: var(--acu-text-1);
   font-size: var(--acu-font-size-body, 12px);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.acu-v2-vector-index-page__scope-allowlist {
+  width: 100%;
+  min-height: 72px;
+  padding: 6px 8px;
+  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);
+  border-radius: 4px;
+  background: var(--acu-bg-2, transparent);
+  color: var(--acu-text-1);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--acu-font-size-small, 11px);
   line-height: 1.5;
   resize: vertical;
 }

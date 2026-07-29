@@ -31,6 +31,7 @@ const {
   mockIsLegacyMatchForIsolation,
   mockResolveTableStorageStrategy,
   mockPersistTableMutationLogV2,
+  mockMigrateLegacyStorage,
   mockEnsureStableRowIdsForSheetContent,
 } = vi.hoisted(() => {
   const mockCurrentJsonTableDataRef = {
@@ -86,6 +87,7 @@ const {
     mockIsLegacyMatchForIsolation: vi.fn(() => false),
     mockResolveTableStorageStrategy: vi.fn(() => ({ mode: 'empty' })),
     mockPersistTableMutationLogV2: vi.fn(async () => ({ saved: true, messageIndex: 0 })),
+    mockMigrateLegacyStorage: vi.fn(),
   };
 });
 
@@ -130,6 +132,7 @@ vi.mock('../../../src/service/worldbook/pipeline', () => ({
 
 vi.mock('../../../src/service/runtime/helpers-remaining', () => ({
   mergeAllIndependentTables_ACU: mockMergeAllIndependentTables,
+  mergeAllIndependentTablesLegacyV1_ACU: mockMergeAllIndependentTables,
 }));
 
 vi.mock('../../../src/data/repositories/chat-message-data-repo', () => ({
@@ -150,11 +153,16 @@ vi.mock('../../../src/service/table/storage-frame-v2-persist', () => ({
   persistTableMutationLogV2_ACU: mockPersistTableMutationLogV2,
 }));
 
+vi.mock('../../../src/service/table/storage-v2-migration', () => ({
+  migrateLegacyStorageToV2OnLoad_ACU: mockMigrateLegacyStorage,
+}));
+
 import {
   saveIndependentTableToChatHistory_ACU,
   persistTablesToChatMessage_ACU,
   checkIfFirstTimeInit_ACU,
   loadOrCreateJsonTableFromChatHistory_ACU,
+  ensureLegacyStorageMigratedBeforeWrite_ACU,
 } from '../../../src/service/table/table-service';
 
 beforeEach(() => {
@@ -172,6 +180,7 @@ beforeEach(() => {
   mockSaveChatToHost.mockResolvedValue(undefined);
   mockResolveTableStorageStrategy.mockReturnValue({ mode: 'empty' });
   mockPersistTableMutationLogV2.mockResolvedValue({ saved: true, messageIndex: 0 });
+  mockMigrateLegacyStorage.mockReset();
 });
 
 function makeTestTransactionContext_ACU(): any {
@@ -250,6 +259,62 @@ describe('direct persistence guards', () => {
       operations: [],
       transactionContext,
     }));
+  });
+});
+
+describe('ensureLegacyStorageMigratedBeforeWrite_ACU', () => {
+  it('迁移成功后使用修复候选数据替换 runtime 状态', async () => {
+    const legacyData = {
+      sheet_0: { name: '背包物品表', content: [['row_id', '物品名'], [' 1 ', '原始旧数据']] },
+    };
+    const repairedData = {
+      sheet_0: { name: '背包物品表', content: [['row_id', '物品名'], ['1', '修复候选数据']] },
+    };
+    const chat = [{ is_user: false, mes: 'AI 回复' }];
+    mockGetChatArray.mockReturnValue(chat);
+    mockMergeAllIndependentTables.mockResolvedValue(legacyData);
+    mockResolveTableStorageStrategy
+      .mockReturnValueOnce({ mode: 'legacy-v1', reason: 'legacy-data' })
+      .mockReturnValueOnce({ mode: 'v2' });
+    mockMigrateLegacyStorage.mockResolvedValue({ migrated: true, data: repairedData });
+
+    const result = await ensureLegacyStorageMigratedBeforeWrite_ACU('test');
+
+    expect(result).toEqual({ success: true, migrated: true, data: repairedData });
+    expect(mockSetCurrentJsonTableData).toHaveBeenCalledWith(repairedData);
+  });
+
+  it('mixed storage strategy 的 warning 会写入 migration gate 日志', async () => {
+    const legacyData = {
+      sheet_0: { name: '背包物品表', content: [['row_id', '物品名'], ['1', '旧数据']] },
+    };
+    const repairedData = structuredClone(legacyData);
+    mockGetChatArray.mockReturnValue([{ is_user: false, mes: 'AI 回复' }]);
+    mockMergeAllIndependentTables.mockResolvedValue(legacyData);
+    mockResolveTableStorageStrategy
+      .mockReturnValueOnce({ mode: 'legacy-v1', reason: 'legacy-data', warning: 'mixed legacy-v1 and v2 data detected; legacy-v1 wins' })
+      .mockReturnValueOnce({ mode: 'v2' });
+    mockMigrateLegacyStorage.mockResolvedValue({ migrated: true, data: repairedData });
+
+    await expect(ensureLegacyStorageMigratedBeforeWrite_ACU('mixed-test')).resolves.toEqual({ success: true, migrated: true, data: repairedData });
+
+    expect(logWarn_ACU).toHaveBeenCalledWith(expect.stringContaining('warning=mixed legacy-v1 and v2 data detected; legacy-v1 wins'));
+  });
+
+  it('迁移伪成功但缺少候选数据时拒绝继续并保留 runtime 状态', async () => {
+    const runtimeBefore = mockCurrentJsonTableDataRef.value;
+    mockGetChatArray.mockReturnValue([{ is_user: false, mes: 'AI 回复' }]);
+    mockMergeAllIndependentTables.mockResolvedValue({
+      sheet_0: { name: '背包物品表', content: [['row_id', '物品名'], ['1', '旧数据']] },
+    });
+    mockResolveTableStorageStrategy.mockReturnValue({ mode: 'legacy-v1', reason: 'legacy-data' });
+    mockMigrateLegacyStorage.mockResolvedValue({ migrated: true });
+
+    const result = await ensureLegacyStorageMigratedBeforeWrite_ACU('test');
+
+    expect(result).toEqual({ success: false, error: '旧存储迁移到 V2 失败: 迁移成功结果缺少修复后的表格数据。' });
+    expect(mockSetCurrentJsonTableData).not.toHaveBeenCalled();
+    expect(mockCurrentJsonTableDataRef.value).toBe(runtimeBefore);
   });
 });
 

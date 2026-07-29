@@ -12,7 +12,7 @@ import { ref, shallowRef } from 'vue';
 import { getLorebookEntriesByNames_ACU } from '../../service/worldbook/pipeline';
 import { getCurrentWorldbookConfig_ACU } from '../../service/settings/settings-readers';
 import { saveSettings_ACU } from '../../service/settings/settings-service';
-import { getPlotAgentWorldbookSnapshot_ACU } from '../../service/agent/agent-worldbook-takeover';
+import { refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU } from '../../service/agent/agent-worldbook-takeover';
 import {
   buildWorldbookSkillMetaMapForEntries_ACU,
   stripWorldbookSkillMetaBlock_ACU,
@@ -61,8 +61,9 @@ export function useFormFillWorldbookEntries() {
 
     try {
       const enabledEntries = ensureEnabledEntries();
+      const snapshot = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
       const entriesMap = await getLorebookEntriesByNames_ACU(unique) as Record<string, any[]>;
-      const snapshotEntryIndexByBook = buildWorldbookSnapshotEntryIndexByBook_ACU(getPlotAgentWorldbookSnapshot_ACU());
+      const snapshotEntryIndexByBook = buildWorldbookSnapshotEntryIndexByBook_ACU(snapshot);
       let settingsChanged = false;
       const result: FormFillWorldbookEntryGroup[] = [];
 

@@ -43,11 +43,11 @@ describe('useVisualizerData', () => {
     expect(store.sheetOrder).toHaveLength(1);
     const sheetKey = store.sheetOrder[0];
     const sheet = store.tempData[sheetKey];
-    expect(sheetKey).toMatch(/^sheet_/);
+    expect(sheetKey).toBe('sheet_xin_biao');
     expect(sheet.content[0]).toEqual(['row_id', '列1', '列2']);
     expect(sheet.sourceData.ddl).toContain('row_id INTEGER PRIMARY KEY');
-    expect(sheet.sourceData.ddl).toContain('col_1 TEXT, -- 列1');
-    expect(sheet.sourceData.ddl).toContain('col_2 TEXT -- 列2');
+    expect(sheet.sourceData.ddl).toContain('lie_1 TEXT, -- 列1');
+    expect(sheet.sourceData.ddl).toContain('lie_2 TEXT -- 列2');
     expect(validateDDLTextAgainstHeaders_ACU(sheet.sourceData.ddl, sheet.content[0])).toEqual(
       expect.objectContaining({ valid: true }),
     );
@@ -62,5 +62,18 @@ describe('useVisualizerData', () => {
 
     expect(store.sheetOrder).toEqual([]);
     expect(store.tempData).toBeNull();
+  });
+
+  it('新增 canonical 重名表时不覆盖既有草稿', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerData } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerData');
+    const store = useVisualizerStore();
+
+    useVisualizerData().addSheet('背包');
+    const firstKey = store.sheetOrder[0];
+    useVisualizerData().addSheet(' 背包 ');
+
+    expect(store.sheetOrder).toEqual([firstKey]);
+    expect(store.tempData[firstKey].uid).toBe(firstKey);
   });
 });

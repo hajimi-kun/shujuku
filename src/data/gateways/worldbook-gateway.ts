@@ -29,6 +29,42 @@ export function isWorldbookEntryUpdateApiAvailable_ACU(): boolean {
 
 // ═══ 条目 CRUD ═══
 
+const LOREBOOK_NAME_IGNORABLE_CHARS_ACU = /[\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g;
+
+/**
+ * 仅用于世界书名称比对，不可替代宿主保存的原始名称。
+ * 兼容复制粘贴常见的全角字符、组合字符、不可见控制字符与异常空白。
+ */
+export function normalizeLorebookNameForMatch_ACU(value: unknown): string {
+    return String(value ?? '')
+        .normalize('NFKC')
+        .replace(LOREBOOK_NAME_IGNORABLE_CHARS_ACU, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function getLorebookListItemName_ACU(item: unknown): string {
+    if (item && typeof item === 'object') return String((item as any).name ?? '').trim();
+    return String(item ?? '').trim();
+}
+
+/**
+ * 将配置/绑定中的名称解析为宿主列表里的真实名称。
+ * 多个名称归一化后冲突时拒绝猜测，避免读写到错误世界书。
+ */
+export function resolveLorebookNameFromList_ACU(requestedName: unknown, bookList: unknown): string | null {
+    const requested = String(requestedName ?? '').trim();
+    if (!requested || !Array.isArray(bookList)) return null;
+    const availableNames = bookList.map(getLorebookListItemName_ACU).filter(Boolean);
+    const exactMatch = availableNames.find(name => name === requested);
+    if (exactMatch) return exactMatch;
+
+    const matchKey = normalizeLorebookNameForMatch_ACU(requested);
+    if (!matchKey) return null;
+    const normalizedMatches = availableNames.filter(name => normalizeLorebookNameForMatch_ACU(name) === matchKey);
+    return normalizedMatches.length === 1 ? normalizedMatches[0] : null;
+}
+
 /**
  * 获取指定世界书的所有条目
  * @param bookName 世界书名称
@@ -39,7 +75,44 @@ export async function getLorebookEntries_ACU(bookName: string): Promise<any[]> {
         logWarn_ACU('[WorldbookGateway] getLorebookEntries 不可用，返回空数组');
         return [];
     }
-    return await TavernHelper_API_ACU.getLorebookEntries(bookName);
+    try {
+        return await TavernHelper_API_ACU.getLorebookEntries(bookName);
+    } catch (error) {
+        if (!isLorebookNotFoundError_ACU(error)) throw error;
+        let resolvedName: string | null = null;
+        try {
+            resolvedName = resolveLorebookNameFromList_ACU(bookName, await listLorebooks_ACU());
+        } catch {
+            // 名称恢复是补救路径；列表读取失败时必须保留原始宿主错误。
+        }
+        if (!resolvedName || resolvedName === bookName) throw error;
+        logWarn_ACU('[WorldbookGateway] 世界书名称存在 Unicode 或不可见字符差异，使用宿主真实名称重试读取。', {
+            phase: 'resolve_lorebook_name',
+            requestedName: bookName,
+            resolvedName,
+        });
+        try {
+            return await TavernHelper_API_ACU.getLorebookEntries(resolvedName);
+        } catch (retryError) {
+            // 保留第一次宿主 not-found 错误的分类与堆栈，同时附带恢复失败证据。
+            // 直接抛 retryError 会让调用方误以为首次故障就是网络/权限问题。
+            try {
+                Object.defineProperties(error as object, {
+                    lorebookResolvedName: { value: resolvedName, configurable: true },
+                    lorebookRetryError: { value: retryError, configurable: true },
+                });
+            } catch {
+                // 极少数不可扩展错误对象无法附加诊断；输出脱敏结构化日志并保留原始错误。
+                logWarn_ACU('[WorldbookGateway] 世界书真实名称重试失败，原始错误对象不可扩展。', {
+                    phase: 'retry_resolved_lorebook_name',
+                    requestedName: bookName,
+                    resolvedName,
+                    error: { category: 'read_failed' },
+                });
+            }
+            throw error;
+        }
+    }
 }
 
 export function isLorebookNotFoundError_ACU(error: unknown): boolean {

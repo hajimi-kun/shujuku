@@ -1,6 +1,6 @@
 import { getChatArray_ACU } from '../chat/chat-service';
 import { getCurrentIsolationKey_ACU } from '../runtime/state-manager';
-import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
+import { readIsolatedDataContainer_ACU, readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import type { IsolationTagData_ACU } from '../../data/models/chat-message-data';
 import type {
     ChatSummaryVectorIndexChunk_ACU,
@@ -122,7 +122,7 @@ export function assignSummaryVectorIndexStateToTagData_ACU(
     tagData.summaryVectorIndexState = nextState;
 }
 
-function readLayerState_ACU(tagData: IsolationTagData_ACU | null): ChatSummaryVectorIndexState_ACU | null {
+export function readSummaryVectorIndexStateFromTagData_ACU(tagData: IsolationTagData_ACU | null): ChatSummaryVectorIndexState_ACU | null {
     if (!tagData) return null;
     const state = cloneSummaryVectorIndexState_ACU(tagData.summaryVectorIndexState);
     const manifest = tagData.summaryVectorIndexManifest;
@@ -152,6 +152,29 @@ function readLayerState_ACU(tagData: IsolationTagData_ACU | null): ChatSummaryVe
     return state;
 }
 
+/**
+ * 枚举聊天中全部 tag slot 的向量索引层。
+ *
+ * 这里返回的是聊天槽位 isolationKey（默认槽可能是空字符串），而 manifest 内
+ * isolationKey 是外置存储 canonical scope（默认值为 default）。两者不得混用。
+ */
+export function getAllSummaryVectorIndexSnapshotLayers_ACU(): SummaryVectorIndexSnapshotLayer_ACU[] {
+    const chat = getChatArray_ACU();
+    if (!Array.isArray(chat) || chat.length === 0) return [];
+    const layers: SummaryVectorIndexSnapshotLayer_ACU[] = [];
+    chat.forEach((message: any, messageIndex: number): void => {
+        if (!message || message.is_user) return;
+        const isolatedData = readIsolatedDataContainer_ACU(message);
+        if (!isolatedData) return;
+        Object.entries(isolatedData).forEach(([isolationKey, tagData]) => {
+            const state = readSummaryVectorIndexStateFromTagData_ACU(tagData);
+            if (!state) return;
+            layers.push({ messageIndex, isolationKey, summaryVectorIndexState: state, tagData });
+        });
+    });
+    return layers;
+}
+
 export function getAggregatedSummaryVectorIndexSnapshot_ACU(): SummaryVectorIndexAggregatedSnapshot_ACU | null {
     const chat = getChatArray_ACU();
     if (!Array.isArray(chat) || chat.length === 0) return null;
@@ -165,7 +188,7 @@ export function getAggregatedSummaryVectorIndexSnapshot_ACU(): SummaryVectorInde
     chat.forEach((message: any, messageIndex: number): void => {
         if (!message || message.is_user) return;
         const tagData = readIsolatedTagData_ACU(message, isolationKey);
-        const state = readLayerState_ACU(tagData);
+        const state = readSummaryVectorIndexStateFromTagData_ACU(tagData);
         if (!state) return;
         layers.push({ messageIndex, isolationKey, summaryVectorIndexState: state, tagData });
         latestState = state;
@@ -202,7 +225,7 @@ export function getLatestSummaryVectorIndexSnapshotState_ACU(): SummaryVectorInd
         const message = chat[messageIndex];
         if (!message || message.is_user) continue;
         const tagData = readIsolatedTagData_ACU(message, isolationKey);
-        const state = readLayerState_ACU(tagData);
+        const state = readSummaryVectorIndexStateFromTagData_ACU(tagData);
         if (!state) continue;
         const activeRowKeys = new Set(state.manifest?.snapshot?.activeRowKeys || []);
         const rows = activeRowKeys.size > 0

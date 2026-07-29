@@ -1495,3 +1495,29 @@ V2 的目标是为新数据提供更可靠的存储模型；旧数据继续由�
 checkpoint 语义清晰：V2 checkpoint 永远是全量数据库快照。
 升级路径安全：legacy-v1 到 V2 只能通过显式迁移工具完成。
 ```
+
+## 补充：模板切换的 sheet_rebase 数据边界 checkpoint（2026-07）
+
+模板切换（chat scope）产生的结构变更不再通过 `sheet_schema_migrate` 迁移契约表达，而是统一写入数据边界（最新 AI 楼层）的 per-sheet full checkpoint。
+
+```text
+timeline kind 对照：
+  sheet_introduction —— 引入全新表；写入守卫要求表【不】存在于 active replay state。
+  sheet_rebase       —— 既有表结构 rebase；写入守卫要求表【已】存在于 active replay state。
+两者回放调度语义一致：afterSeq 之后对 state[sheetKey] 整表替换（checkpoint.data 即目标全量）。
+```
+
+要点：
+
+```text
+1. checkpoint.data 由 chat-template-reconciler 在 JS 层直接算好（结构 + 迁移后数据行）：
+   - 匹配列原值直通；新增列按填充规则取值（可解析 literal DEFAULT → 该值；
+     NOT NULL 无 DEFAULT → 空串 ''；nullable → null）；隐藏保留列原值保留。
+2. 历史楼层零补写：不向任何旧 frame 追加操作或 patch。
+3. 唯一门禁 = 真实 SQLite strict hydrate（hydrateTableDataStrict_ACU），
+   不再要求 DDL 静态可证明的 fills/conversions 双重契约。
+4. 读路径永久兼容：历史聊天中已落盘的 sheet_schema_migrate 日志继续可回放。
+5. 写路径收敛：仅 chat 模板协调器停止产出 sheet_schema_migrate/meta_update；
+   visualizer 保存与模板助手两条迁移契约路径不受影响（仍走 operations 通道）。
+```
+

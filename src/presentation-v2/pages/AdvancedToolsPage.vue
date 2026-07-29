@@ -136,6 +136,9 @@
           <AcuBadge :variant="logFlow.debugLogEnabled.value ? 'accent' : 'neutral'">
             {{ logFlow.debugLabel.value }}
           </AcuBadge>
+          <AcuBadge :variant="logFlow.warnLogEnabled.value ? 'warning' : 'neutral'">
+            {{ logFlow.warnLabel.value }}
+          </AcuBadge>
         </template>
 
         <div class="acu-v2-advanced-tools-page__filter-grid">
@@ -185,6 +188,11 @@
                 :model-value="logFlow.autoScroll.value"
                 label="自动滚动"
                 @update:model-value="logFlow.autoScroll.value = $event"
+              />
+              <AcuToggle
+                :model-value="logFlow.warnLogEnabled.value"
+                label="Warn"
+                @update:model-value="logFlow.setWarnCollection"
               />
               <AcuToggle
                 :model-value="logFlow.debugLogEnabled.value"

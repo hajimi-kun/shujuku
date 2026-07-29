@@ -22,6 +22,7 @@ import { migrateLegacyStorageToV2OnLoad_ACU } from '../table/storage-v2-migratio
 import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
 import { normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
 import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../shared/stable-row-id-allocator';
+import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
 
 /**
  * Legacy entry point retained for callers that need in-place normalization.
@@ -344,7 +345,9 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
       });
 
       if (strategy.mode === 'v2') {
-          let mergedData = await loadTableStateFromFramesV2_ACU(chat, currentIsolationKey) as Record<string, any> | null;
+          let mergedData = await loadTableStateFromFramesV2_ACU(chat, currentIsolationKey, {
+              allowTemporaryTemplateBaseline: true,
+          }) as Record<string, any> | null;
           const sheetGuideData = getChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey);
           if (mergedData && hasUsableSheetGuide_ACU(sheetGuideData)) {
               mergedData = mergeSheetGuideStructureIntoData_ACU(mergedData, sheetGuideData);
@@ -372,6 +375,9 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
           if (!migrationResult.migrated) {
               throw new Error(`旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}`);
           }
+          if (!migrationResult.data) {
+              throw new Error('旧存储迁移到 V2 失败: 迁移成功结果缺少修复后的表格数据。');
+          }
           const postStrategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
               enabled: settings_ACU.dataIsolationEnabled,
               code: settings_ACU.dataIsolationCode,
@@ -379,7 +385,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
           if (postStrategy.mode !== 'v2') {
               throw new Error(`旧存储迁移后二次校验失败：当前模式=${postStrategy.mode}${postStrategy.mode === 'legacy-v1' ? `，reason=${postStrategy.reason}` : ''}`);
           }
-          return migrateContentNullToRowId(mergedLegacyData);
+          return migrateContentNullToRowId(migrationResult.data);
       }
 
       return migrateContentNullToRowId(await mergeAllIndependentTablesLegacyV1_ACU());
@@ -432,7 +438,8 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
 
         // All other tables, including '全局数据表', are added to the readable text
         readableText += `# ${table.name}\n\n`;
-        const headers = table.content[0] ? table.content[0].slice(1) : [];
+        const visibleColumns = getSheetColumnProjection_ACU(table).visibleColumns.filter(column => column.sourceIndex > 0);
+        const headers = visibleColumns.map(column => column.header);
         if (headers.length > 0) {
             readableText += `| ${headers.join(' | ')} |\n`;
             readableText += `|${headers.map(() => '---').join('|')}|\n`;
@@ -441,7 +448,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
         const rows = table.content.slice(1);
         if (rows.length > 0) {
             rows.forEach((row: any[]) => {
-                const rowData = row.slice(1);
+                const rowData = visibleColumns.map(column => row[column.sourceIndex]);
                 readableText += `| ${rowData.join(' | ')} |\n`;
             });
         }

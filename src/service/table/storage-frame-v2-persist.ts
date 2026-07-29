@@ -1,19 +1,21 @@
 import { getChatArray_ACU, saveChatToHost_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
 import { cloneIsolatedData_ACU, collectSqlTargetTableNamesFromStorageFrameV2_ACU, purgeManualRefillIncrementalSheetKeysFromStorageFrameV2_ACU, purgeSheetKeysFromMessage_ACU, readIsolatedTagData_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
-import { getChatScopedConfigContainer_ACU, getChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
+import { getActiveChatStorageIdentity_ACU, peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
 import type { Sheet_ACU, TableDataObject_ACU } from '../../shared/models/table-data';
+import type { StorageMode } from '../../shared/table-storage-provider';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { getCurrentIsolationKey_ACU, settings_ACU } from '../runtime/state-manager';
 import { normalizeGuideData_ACU, setChatSheetGuideDataForIsolationKey_ACU } from '../template/chat-scope';
 import { ensureGlobalInjectionConfigDefaults_ACU } from '../worldbook/injection-engine';
-import type { ManualRefillProgressV2_ACU, TableMutationEventV2_ACU, TableMutationLogEntryV2_ACU, TableMutationSourceV2_ACU, TableStorageFrameV2_ACU, TableCheckpointV2_ACU, TableMutationWriteSetV2_ACU, TableMutationOperationV2_ACU, TableSheetCheckpointV2_ACU } from './storage-frame-v2-types';
-import { hasLegacyTopLevelTableData_ACU, isLegacyV1TagData_ACU, isV2TagData_ACU } from './storage-strategy-resolver';
-import { applyTableOperationV2_ACU, collectScheduleSummaryFromFramesV2_ACU, loadTableStateFromFramesV2_ACU } from './storage-frame-v2-replay';
+import type { ManualRefillProgressV2_ACU, TableMutationEventV2_ACU, TableMutationLogEntryV2_ACU, TableMutationSourceV2_ACU, TableStorageFrameV2_ACU, TableCheckpointV2_ACU, TableMutationWriteSetV2_ACU, TableMutationOperationV2_ACU, TableSheetCheckpointV2_ACU, TableV2RecoveryBackup_ACU } from './storage-frame-v2-types';
+import { hasLegacyTopLevelTableData_ACU, hasV2TableHistoryEvidence_ACU, isLegacyV1TagData_ACU, isV2TagData_ACU } from './storage-strategy-resolver';
+import { applyTableOperationV2_ACU, collectScheduleSummaryFromFramesV2_ACU, hasUnanchoredReplayArtifactsForChatV2_ACU, loadTableStateFromFramesV2_ACU, loadTableStateFromFramesV2Detailed_ACU } from './storage-frame-v2-replay';
 import { runTableWriteTransaction_ACU, type TableWriteTransactionContext_ACU } from './table-write-transaction';
 import { formatCanonicalRowIssues_ACU, normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
 import { createSheetInsertPlan, generateDDL, validateDDLTextAgainstHeaders_ACU } from '../../data/sqlite/schema-mapper';
 import { hydrateTableDataStrict_ACU } from './sqlite-template-validation';
 import { buildCanonicalFullCheckpoint_ACU, buildCanonicalSheetCheckpoint_ACU } from './canonical-checkpoint-builder';
+import { getTableDataFingerprint_ACU } from './table-data-upgrade-audit';
 
 export interface TableCheckpointGenerationConfig_ACU {
   maxEntriesAfterCheckpoint: number;
@@ -45,6 +47,10 @@ export interface ReplaceExistingIncrementalOptions_ACU {
 export interface PersistTableMutationV2Options_ACU {
   targetMessageIndex?: number;
   source: TableMutationSourceV2_ACU;
+  /**
+   * 调用方声明的事务后数据。持久化层不再做 replay-vs-afterData 相等性阻断；
+   * 数据正确性由来源链路保证，本层只校验输入合法性、操作可应用性与原子保存。
+   */
   afterData: TableDataObject_ACU;
   operations?: TableMutationOperationV2_ACU[];
   filledSheetKeys?: string[];
@@ -68,6 +74,30 @@ export interface PersistTableMutationV2Options_ACU {
   /** 对破坏性复合写入要求宿主真实保存；默认保持历史宽松保存语义。 */
   strictSave?: boolean;
   transactionContext?: Pick<TableWriteTransactionContext_ACU, 'runCommit' | 'baseRevision' | 'writeSet' | 'assertFresh'>;
+}
+
+export interface PersistTableMutationLogBatchTargetV2_ACU {
+  targetMessageIndex: number;
+  operations: TableMutationOperationV2_ACU[];
+  changedSheetKeys: string[];
+}
+
+/**
+ * 多消息层 V2 增量提交。所有 target 都在内存 clone 中构造，
+ * 确认后一次性写回消息对象并调用严格宿主保存。
+ * afterData 正确性由来源链路保证，本层不做 candidate replay 与 afterData 的相等性阻断。
+ */
+export interface PersistTableMutationLogBatchV2Options_ACU {
+  source: TableMutationSourceV2_ACU;
+  afterData: TableDataObject_ACU;
+  targets: PersistTableMutationLogBatchTargetV2_ACU[];
+  isolationKey?: string;
+  requestId?: string;
+  batchId?: string;
+  revisionWriteSet?: TableMutationWriteSetV2_ACU;
+  transactionContext?: Pick<TableWriteTransactionContext_ACU, 'runCommit' | 'baseRevision' | 'writeSet' | 'assertFresh'>;
+  /** 调用方已处于 transactionContext.runCommit 临界区内时使用。 */
+  assumeCommitLock?: boolean;
 }
 
 export interface PersistTableSheetCheckpointV2Options_ACU {
@@ -101,17 +131,49 @@ export interface CommitCurrentFloorTemplateChangesOptions_ACU {
   reason?: string;
   createdAt?: number;
   baseRevision?: string | null;
+  expectedChatIdentity?: string;
+  expectedFirstMessage?: unknown;
+  signal?: AbortSignal;
+  /** native 只校验 canonical JSON；sqlite 额外执行 DDL 与 strict hydrate 门禁。 */
+  storageMode?: StorageMode;
 }
 
 export interface CommitCurrentFloorTemplateChangesResult_ACU {
   saved: boolean;
-  mode?: 'template_only' | 'v2_commit';
+  mode?: 'template_only' | 'scope_only' | 'v2_commit';
   messageIndex?: number;
   checkpoints?: TableSheetCheckpointV2_ACU[];
   removedNullRowCount?: number;
   deletedSheetKeys?: string[];
   purgedMessageCount?: number;
   error?: string;
+}
+
+export interface CommitCurrentFloorTemplateScopeOnlyOptions_ACU {
+  isolationKey?: string;
+  baselineData: TableDataObject_ACU;
+  candidateData: TableDataObject_ACU;
+  guideData: Record<string, any>;
+  templateSource: any;
+  presetName?: string;
+  source?: string;
+  reason?: string;
+  createdAt?: number;
+  expectedChatIdentity?: string;
+  expectedFirstMessage?: unknown;
+  signal?: AbortSignal;
+}
+
+function assertTemplateCommitChatContext_ACU(expectedChat: unknown[], options: { expectedChatIdentity?: string; expectedFirstMessage?: unknown; signal?: AbortSignal }): void {
+  if (options.signal?.aborted) throw new Error('模板提交已取消。');
+  const activeChat = getChatArray_ACU();
+  if (!Array.isArray(activeChat) || activeChat.length === 0) throw new Error('目标聊天已切换，已取消模板提交。');
+  if (options.expectedFirstMessage && (expectedChat[0] !== options.expectedFirstMessage || activeChat[0] !== options.expectedFirstMessage)) {
+    throw new Error('目标聊天已切换，已取消模板提交。');
+  }
+  if (options.expectedChatIdentity && getActiveChatStorageIdentity_ACU(activeChat) !== options.expectedChatIdentity) {
+    throw new Error('目标聊天已切换，已取消模板提交。');
+  }
 }
 
 type TemplatePersistOperation_ACU = Extract<TableMutationOperationV2_ACU, {
@@ -121,6 +183,21 @@ type TemplatePersistOperation_ACU = Extract<TableMutationOperationV2_ACU, {
 export type TemplateSheetChange_ACU =
   | {
     kind: 'introduction';
+    sheetKey: string;
+    sheetData: Sheet_ACU;
+  }
+  | {
+    kind: 'rebase';
+    sheetKey: string;
+    sheetData: Sheet_ACU;
+  }
+  | {
+    kind: 'reveal';
+    sheetKey: string;
+    sheetData: Sheet_ACU;
+  }
+  | {
+    kind: 'hide';
     sheetKey: string;
     sheetData: Sheet_ACU;
   }
@@ -319,7 +396,13 @@ function countAiFloor_ACU(chat: any[], messageIndex: number): number {
   return count;
 }
 
-function hasAnyV2Checkpoint_ACU(chat: any[], isolationKey: string, maxMessageIndex = chat.length - 1): boolean {
+/**
+ * 判断目标楼层及之前是否存在可作为回放锚点的 full checkpoint。
+ *
+ * 缺少锚点时本次写入会被 persist 层视为初始 full checkpoint，
+ * 调用方必须只提交 afterData 快照、不得附带 operations。
+ */
+export function hasAnyV2Checkpoint_ACU(chat: any[], isolationKey: string, maxMessageIndex = chat.length - 1): boolean {
   return chat.slice(0, Math.max(0, maxMessageIndex + 1)).some(message => {
     const tagData = message?.TavernDB_ACU_IsolatedData?.[isolationKey];
     return isV2TagData_ACU(tagData) && tagData.storageFrame.checkpoint?.kind === 'full';
@@ -331,6 +414,34 @@ function hasAnyV2Frame_ACU(chat: any[], isolationKey: string, maxMessageIndex = 
     const tagData = message?.TavernDB_ACU_IsolatedData?.[isolationKey];
     return isV2TagData_ACU(tagData);
   });
+}
+
+function getLatestV2FrameMessageIndex_ACU(chat: any[], isolationKey: string): number {
+  for (let index = chat.length - 1; index >= 0; index -= 1) {
+    const tagData = chat[index]?.TavernDB_ACU_IsolatedData?.[isolationKey];
+    if (isV2TagData_ACU(tagData)) return index;
+  }
+  return -1;
+}
+
+function projectReplayComparableData_ACU(data: TableDataObject_ACU): TableDataObject_ACU {
+  const projected = deepClone_ACU(data);
+  for (const [key, value] of Object.entries(projected)) {
+    if (!key.startsWith('sheet_') || !isObjectRecord_ACU(value)) continue;
+    delete (value as Record<string, any>).seedRows;
+  }
+  return projected;
+}
+
+async function verifyTemporaryBaselineUpgrade_ACU(
+  replayData: TableDataObject_ACU,
+  operations: TableMutationOperationV2_ACU[],
+  afterData: TableDataObject_ACU,
+): Promise<boolean> {
+  const expected = deepClone_ACU(replayData);
+  for (const operation of operations) await applyTableOperationV2_ACU(expected, operation);
+  return getTableDataFingerprint_ACU(projectReplayComparableData_ACU(expected))
+    === getTableDataFingerprint_ACU(projectReplayComparableData_ACU(afterData));
 }
 
 export function getLatestTableStorageHeadRevisionV2_ACU(chat: any[] | null | undefined, isolationKey: string): string | null {
@@ -423,66 +534,6 @@ function normalizeOperations_ACU(
     }];
   }
   return [];
-}
-
-function getOperationReplayScope_ACU(operations: TableMutationOperationV2_ACU[]): { wholeState: boolean; sheetKeys: string[] } {
-  const sheetKeys = new Set<string>();
-  for (const operation of operations) {
-    if (operation.kind === 'data_replace' || operation.kind === 'sql_batch' || operation.kind === 'table_edit_dsl') {
-      return { wholeState: true, sheetKeys: [] };
-    }
-    if ('sheetKey' in operation && typeof operation.sheetKey === 'string' && operation.sheetKey.startsWith('sheet_')) {
-      sheetKeys.add(operation.sheetKey);
-      continue;
-    }
-    throw new Error(`V2 operation log 无法确定 operation 影响范围：kind=${(operation as any).kind}。`);
-  }
-  return { wholeState: false, sheetKeys: [...sheetKeys] };
-}
-
-async function getOperationReplayPostconditionError_ACU(
-  chat: any[],
-  isolationKey: string,
-  targetMessageIndex: number,
-  operations: TableMutationOperationV2_ACU[],
-  afterData: TableDataObject_ACU,
-  candidateChangedSheetKeys: string[],
-): Promise<string | null> {
-  if (operations.length === 0) return null;
-  try {
-    const replayBase = await loadTableStateFromFramesV2_ACU(chat, isolationKey, {
-      maxMessageIndex: targetMessageIndex,
-      updateRuntimeState: false,
-    });
-    if (!replayBase) {
-      return 'V2 operation log 回放缺少现有 full checkpoint base，拒绝写入。';
-    }
-    const replayScope = getOperationReplayScope_ACU(operations);
-    const replayCandidate = deepClone_ACU(replayBase);
-    for (const operation of operations) await applyTableOperationV2_ACU(replayCandidate, operation);
-
-    if (replayScope.wholeState) {
-      if (canonicalJson_ACU(replayCandidate) !== canonicalJson_ACU(afterData)) {
-        return 'V2 operation log 回放结果与 afterData 快照不一致。';
-      }
-      return null;
-    }
-
-    const affectedSheetKeys = [...new Set([...candidateChangedSheetKeys, ...replayScope.sheetKeys])];
-    if (affectedSheetKeys.length === 0) {
-      return 'V2 operation log 缺少可验证的受影响 Sheet，拒绝写入。';
-    }
-    for (const sheetKey of affectedSheetKeys) {
-      const replayedSheet = replayCandidate[sheetKey] as Sheet_ACU | undefined;
-      const expectedSheet = afterData[sheetKey] as Sheet_ACU | undefined;
-      if (!replayedSheet || !expectedSheet || canonicalJson_ACU(templateSheetPersistentProjection_ACU(replayedSheet)) !== canonicalJson_ACU(templateSheetPersistentProjection_ACU(expectedSheet))) {
-        return `V2 operation log 回放结果与 afterData Sheet 不一致：${sheetKey}。`;
-      }
-    }
-    return null;
-  } catch (error: any) {
-    return `V2 operation log 回放失败：${error?.message || String(error)}`;
-  }
 }
 
 function getOrInitV2Frame_ACU(isolatedData: Record<string, any>, isolationKey: string): TableStorageFrameV2_ACU {
@@ -624,8 +675,7 @@ function recordContainsSheet_ACU(value: unknown, sheetKey: string): boolean {
 }
 
 function hasV2HistoryMarker_ACU(tagData: unknown): boolean {
-  return isObjectRecord_ACU(tagData)
-    && (tagData._acu_storage_version === 2 || tagData.storageFrame?.version === 2);
+  return hasV2TableHistoryEvidence_ACU(tagData);
 }
 
 const CHECKPOINT_REASONS_FOR_INTRODUCTION_HISTORY_ACU = new Set([
@@ -696,7 +746,7 @@ function manualRefillProgressIsValidForIntroductionHistory_ACU(value: unknown): 
 function timelineIsValidForIntroductionHistory_ACU(value: unknown): boolean {
   return value === undefined || (
     isObjectRecord_ACU(value)
-    && value.kind === 'sheet_introduction'
+    && (value.kind === 'sheet_introduction' || value.kind === 'sheet_rebase')
     && Number.isInteger(value.activateAtMessageIndex) && value.activateAtMessageIndex >= 0
     && Number.isInteger(value.afterSeq) && value.afterSeq >= 0
   );
@@ -916,6 +966,40 @@ function historyContainsOrCannotDisproveSheet_ACU(
   }
   return false;
 }
+/**
+ * 定位 reveal 数据来源（语义1：恢复"离开时最新状态"）。
+ *
+ * 关键数据安全约束：不取任何单一 checkpoint 的静态快照（可能是中间态/过期态），
+ * 而是从 target.index 向前逐楼层做 bounded replay，找到该 sheet 仍可见的"最高楼层"，
+ * 其 replay 结果即为该表最后一次可见时的完整状态。找不到任何可见状态则返回 null（fail closed）。
+ */
+async function locateRevealSourceSheetData_ACU(
+  chat: any[],
+  isolationKey: string,
+  maxMessageIndex: number,
+  sheetKey: string,
+): Promise<Sheet_ACU | null> {
+  for (let boundary = maxMessageIndex; boundary >= 0; boundary -= 1) {
+    const tagData = chat[boundary]?.TavernDB_ACU_IsolatedData?.[isolationKey];
+    if (!hasV2HistoryMarker_ACU(tagData)) continue;
+    let replayed: TableDataObject_ACU | null = null;
+    try {
+      replayed = await loadTableStateFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: boundary, updateRuntimeState: false });
+    } catch {
+      // 该边界 replay 失败不代表更早边界不可用；继续向前寻找可信可见状态。
+      continue;
+    }
+    if (replayed && Object.prototype.hasOwnProperty.call(replayed, sheetKey)) {
+      const candidate = (replayed as Record<string, unknown>)[sheetKey];
+      if (isObjectRecord_ACU(candidate)) {
+        return deepClone_ACU(candidate) as Sheet_ACU;
+      }
+    }
+  }
+  return null;
+}
+
+
 
 function validateSheetCheckpointInput_ACU(
   options: PersistTableSheetCheckpointV2Options_ACU,
@@ -971,12 +1055,49 @@ async function persistTableMutationLogV2Core_ACU(
   const filledSheetKeys = normalizeKeys_ACU(options.filledSheetKeys, afterData);
   const candidateChangedSheetKeys = normalizeKeys_ACU(options.candidateChangedSheetKeys, afterData);
   const hasExistingCheckpoint = hasAnyV2Checkpoint_ACU(chat, isolationKey, target.index);
+  // 「本次是否首次初始化」必须看整个聊天，而不是只看目标楼层之前。
+  // 对更早楼层填表（追平/重填）时，锚点可能位于更晚的楼层；
+  // 只看之前会误判为首次初始化，从而又写一个 init full checkpoint，
+  // 于是聊天里出现两个初始基线，回放只认最后一个，前面楼层的数据全部失效。
+  const hasCheckpointAnywhere = hasAnyV2Checkpoint_ACU(chat, isolationKey);
   const hasExistingV2Frame = hasAnyV2Frame_ACU(chat, isolationKey, target.index);
   const operations = normalizeOperations_ACU(options.operations, afterData, options.source, hasExistingCheckpoint);
   const effectiveChangedSheetKeys = candidateChangedSheetKeys;
   const hasMetadataOnlyFillEvent = filledSheetKeys.length > 0 || (Array.isArray(options.groupKeys) && options.groupKeys.length > 0);
   const hasManualRefillProgress = !!options.manualRefillProgress;
   const isManualRefillProgressOnly = operations.length === 0 && !hasMetadataOnlyFillEvent && hasManualRefillProgress;
+  const latestV2FrameMessageIndex = getLatestV2FrameMessageIndex_ACU(chat, isolationKey);
+  const hasUnanchoredArtifacts = !hasCheckpointAnywhere
+    && hasUnanchoredReplayArtifactsForChatV2_ACU(chat, isolationKey);
+  let temporaryBaselineUpgrade: { sourceMessageIndex: number; storageFrame: TableStorageFrameV2_ACU } | null = null;
+  if (hasUnanchoredArtifacts && !isManualRefillProgressOnly) {
+    if (target.index < latestV2FrameMessageIndex) {
+      return {
+        saved: false,
+        error: `V2 临时基线升级必须写在最后一个无锚点 artifact 之后：target=${target.index}, latestArtifact=${latestV2FrameMessageIndex}。`,
+      };
+    }
+    const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, {
+      maxMessageIndex: target.index,
+      updateRuntimeState: false,
+      allowTemporaryTemplateBaseline: true,
+    });
+    if (!replay || replay.baseKind !== 'temporary_template_baseline') {
+      return { saved: false, error: 'V2 无锚点 artifacts 无法从当前聊天模板建立安全临时基线，已拒绝自动升级。' };
+    }
+    if (!await verifyTemporaryBaselineUpgrade_ACU(replay.data, operations, afterData)) {
+      return { saved: false, error: 'V2 临时基线回放与本次 afterData 不一致，已拒绝建立 full checkpoint。' };
+    }
+    const sourceTagData = latestV2FrameMessageIndex >= 0
+      ? readIsolatedTagData_ACU(chat[latestV2FrameMessageIndex], isolationKey)
+      : null;
+    if (isV2TagData_ACU(sourceTagData)) {
+      temporaryBaselineUpgrade = {
+        sourceMessageIndex: latestV2FrameMessageIndex,
+        storageFrame: deepClone_ACU(sourceTagData.storageFrame),
+      };
+    }
+  }
   if (!manualRefillProgressIsValidForIntroductionHistory_ACU(options.manualRefillProgress)) {
     return { saved: false, error: 'V2 manualRefillProgress 格式无效，已拒绝写入。' };
   }
@@ -986,26 +1107,30 @@ async function persistTableMutationLogV2Core_ACU(
       error: 'V2 manualRefillProgress-only write requires an existing full checkpoint anchor.',
     };
   }
-  const initialCheckpointReason: TableCheckpointV2_ACU['reason'] = options.checkpointReason
-    || (hasExistingV2Frame ? 'migration' : 'init');
-  const shouldCheckpoint = !hasExistingCheckpoint
+  const initialCheckpointReason: TableCheckpointV2_ACU['reason'] = temporaryBaselineUpgrade
+    ? 'integrity_repair'
+    : (options.checkpointReason || (hasExistingV2Frame ? 'migration' : 'init'));
+  // 同一隔离键下同一时刻只能存在一个 full checkpoint。
+  //
+  // 只要整个聊天已经有 full checkpoint，本次写入就只能追加增量，
+  // 即使目标楼层在那个 checkpoint 之前也一样。回放只认最后一个 full checkpoint，
+  // 多出来的基线会让它之前的所有增量失效（表现为「只有最后一层有数据」）。
+  //
+  // 这条对所有 source 一致：导入只可能带来「现有没有的表」，
+  // 同一张表的差异只是列，新增列按空处理，不需要另立基线。
+  const shouldCheckpoint = !hasCheckpointAnywhere
     && !isManualRefillProgressOnly
-    && (initialCheckpointReason === 'init' || initialCheckpointReason === 'migration');
-  if (shouldCheckpoint && operations.length > 0) {
+    && (temporaryBaselineUpgrade !== null
+      || initialCheckpointReason === 'init'
+      || initialCheckpointReason === 'migration');
+  if (shouldCheckpoint && operations.length > 0 && !temporaryBaselineUpgrade) {
     return { saved: false, error: 'V2 初始 full checkpoint 不接受 operations；请仅提交 afterData 快照。' };
   }
-  if (!shouldCheckpoint && operations.length > 0) {
-    const replayPostconditionError = await getOperationReplayPostconditionError_ACU(
-      chat,
-      isolationKey,
-      target.index,
-      operations,
-      afterData,
-      effectiveChangedSheetKeys,
-    );
-    if (replayPostconditionError) return { saved: false, error: replayPostconditionError };
-  }
 
+  const targetExistingTagData = cloneIsolatedData_ACU(target.message)?.[isolationKey];
+  const targetExistingFrame = isV2TagData_ACU(targetExistingTagData)
+    ? deepClone_ACU(targetExistingTagData.storageFrame)
+    : null;
   const isolatedData = cloneIsolatedData_ACU(target.message) as Record<string, any>;
   const frame = getOrInitV2Frame_ACU(isolatedData, isolationKey);
   const replacementIsolatedDataByMessageIndex = new Map<number, Record<string, any>>();
@@ -1077,8 +1202,94 @@ async function persistTableMutationLogV2Core_ACU(
     frame.checkpoint = checkpointResult.checkpoint;
     frame.headRevision = checkpointRevision;
     frame.logEntries = [];
+    if (temporaryBaselineUpgrade) {
+      const recoveryBackup: TableV2RecoveryBackup_ACU = {
+        version: 1,
+        createdAt: now,
+        recoveryKind: 'temporary_template_baseline_upgrade',
+        sourceMessageIndex: temporaryBaselineUpgrade.sourceMessageIndex,
+        storageFrame: targetExistingFrame || temporaryBaselineUpgrade.storageFrame,
+      };
+      const tagData = isolatedData[isolationKey];
+      if (tagData && typeof tagData === 'object' && !Array.isArray(tagData)) {
+        tagData.recoveryBackup = recoveryBackup;
+      }
+    }
     logDebug_ACU(`[V2 Persist] 写入 full checkpoint: messageIndex=${target.index}, revision=${checkpointRevision}, sheets=${Object.keys(afterData).filter(k => k.startsWith('sheet_')).length}`);
   } else if (shouldAppendLogEntry) {
+    // 目标表必须在本楼的回放起点里已存在，否则这条增量永远无法回放（no such table）。
+    //
+    // 触发场景：先用旧模板填过表，之后切到新模板（新增表或新增列，rebase checkpoint
+    // 落在最新楼层），再对更早的楼层追平。那些楼的 full checkpoint 是切模板前写的，
+    // 不含新表；直接写增量就会产出注定回放失败的日志。
+    // 此时应先为该表在本楼写 per-sheet checkpoint 把它引入，再追加增量。
+    const operationSheetKeys = [...new Set(
+      operations
+        .map(operation => (operation as any)?.sheetKey)
+        .filter((sheetKey: unknown): sheetKey is string => typeof sheetKey === 'string' && sheetKey.startsWith('sheet_')),
+    )];
+    if (operationSheetKeys.length > 0) {
+      // 只做静态扫描，不触发 replay：persist 层不判断 replay applicability。
+      // 判据是「本楼及之前是否有任何 checkpoint 覆盖过该表」——这正是回放建表的来源。
+      const isSheetAnchoredAtOrBefore = (sheetKey: string): boolean => {
+        for (let index = 0; index <= target.index && index < chat.length; index += 1) {
+          const tagData = readIsolatedTagData_ACU(chat[index], isolationKey);
+          if (!isV2TagData_ACU(tagData)) continue;
+          const targetFrame = tagData.storageFrame as any;
+          const fullData = targetFrame?.checkpoint?.data;
+          if (fullData && typeof fullData === 'object' && Object.prototype.hasOwnProperty.call(fullData, sheetKey)) {
+            return true;
+          }
+          const perSheet = targetFrame?.perSheetCheckpoints;
+          const sheetCheckpoint = perSheet && typeof perSheet === 'object' ? perSheet[sheetKey] : undefined;
+          if (sheetCheckpoint && sheetCheckpoint.timeline?.kind !== 'sheet_hide') return true;
+        }
+        return false;
+      };
+      {
+        const missingSheetKeys = operationSheetKeys.filter(
+          sheetKey => Boolean((afterData as any)[sheetKey]) && !isSheetAnchoredAtOrBefore(sheetKey),
+        );
+        const introduced: TableSheetCheckpointV2_ACU[] = [];
+        for (const sheetKey of missingSheetKeys) {
+          // 锚点只提供表结构，必须裁成 header-only：
+          // 本次增量会自行写入数据行，若锚点带上同样的行，回放时会主键冲突
+          // （UNIQUE constraint failed）。
+          const anchorSheet = deepClone_ACU((afterData as any)[sheetKey]) as Sheet_ACU;
+          if (Array.isArray(anchorSheet?.content) && anchorSheet.content.length > 0) {
+            anchorSheet.content = [deepClone_ACU(anchorSheet.content[0])];
+          }
+          const sheetCheckpointResult = buildCanonicalSheetCheckpoint_ACU({
+            createdAt: now,
+            reason: 'schema_change',
+            sheetKey,
+            data: anchorSheet,
+            event: { filledSheetKeys: [], changedSheetKeys: [sheetKey], groupKeys: [] },
+            baseRevision: requestedBaseRevision,
+            context: { messageIndex: target.index, aiFloor, isolationKey },
+          });
+          if (!sheetCheckpointResult.checkpoint) {
+            return { saved: false, error: sheetCheckpointResult.error };
+          }
+          // timeline 决定回放时该表在本楼何时进入 state：必须早于本次追加的增量。
+          introduced.push({
+            ...sheetCheckpointResult.checkpoint,
+            timeline: {
+              kind: 'sheet_introduction' as const,
+              activateAtMessageIndex: target.index,
+              afterSeq: Math.max(0, ...frame.logEntries.map(item => Number(item.seq) || 0)),
+            },
+          });
+        }
+        if (introduced.length > 0) {
+          frame.perSheetCheckpoints = {
+            ...(frame.perSheetCheckpoints || {}),
+            ...Object.fromEntries(introduced.map(checkpoint => [checkpoint.sheetKey, checkpoint])),
+          };
+          logDebug_ACU(`[V2 Persist] 为本楼缺失的目标表补写 per-sheet checkpoint：${introduced.map(c => c.sheetKey).join('、')}（messageIndex=${target.index}）。`);
+        }
+      }
+    }
     const nextSeq = Math.max(0, ...frame.logEntries.map(item => Number(item.seq) || 0)) + 1;
     const parentRevision = options.parentRevision !== undefined ? options.parentRevision : (frame.headRevision ?? null);
     entry = appendMutationLogEntry_ACU(frame, {
@@ -1124,7 +1335,8 @@ async function persistTableMutationLogV2Core_ACU(
       enabled: settings_ACU.dataIsolationEnabled,
       code: settings_ACU.dataIsolationCode,
     });
-    if (options.strictSave || replacement) {
+    // 临时基线升级会替换 orphan frame、清空日志并写 recoveryBackup，必须确认宿主真实落盘。
+    if (options.strictSave || replacement || temporaryBaselineUpgrade) {
       await saveChatToHostStrict_ACU();
     } else {
       await saveChatToHost_ACU();
@@ -1151,6 +1363,166 @@ export async function persistTableMutationLogV2_ACU(
     return persistTableMutationLogV2Core_ACU(options);
   }
   return options.transactionContext.runCommit(() => persistTableMutationLogV2Core_ACU(options), options.revisionWriteSet);
+}
+
+function validateBatchOperationScope_ACU(
+  targetIndex: number,
+  operations: TableMutationOperationV2_ACU[],
+  changedSheetKeys: string[],
+): string | null {
+  const changedKeys = new Set(changedSheetKeys);
+  for (const operation of operations) {
+    if (!operation || typeof operation !== 'object') return `V2 batch write target ${targetIndex} has an invalid operation.`;
+    if (operation.kind === 'data_replace' || operation.kind === 'sql_batch' || operation.kind === 'table_edit_dsl') {
+      return `V2 batch write target ${targetIndex} contains unsupported unscoped operation: ${operation.kind}.`;
+    }
+    const sheetKey = typeof (operation as any).sheetKey === 'string' ? (operation as any).sheetKey.trim() : '';
+    if (!sheetKey || !changedKeys.has(sheetKey)) {
+      return `V2 batch write target ${targetIndex} operation scope is outside changed sheet keys.`;
+    }
+  }
+  return null;
+}
+
+function mergeBatchTargetsByMessageIndex_ACU(
+  targets: PersistTableMutationLogBatchTargetV2_ACU[],
+  afterData: TableDataObject_ACU,
+): Map<number, PersistTableMutationLogBatchTargetV2_ACU> | { error: string } {
+  const targetByIndex = new Map<number, PersistTableMutationLogBatchTargetV2_ACU>();
+  for (const target of targets) {
+    const targetIndex = Number(target?.targetMessageIndex);
+    if (!Number.isInteger(targetIndex)) return { error: `V2 batch write target index is invalid: ${targetIndex}.` };
+    if (!Array.isArray(target.operations) || target.operations.length === 0) {
+      return { error: `V2 batch write target ${targetIndex} has no operations.` };
+    }
+    const normalizedKeys = normalizeKeys_ACU(target.changedSheetKeys, afterData);
+    if (normalizedKeys.length === 0) return { error: `V2 batch write target ${targetIndex} has no valid changed sheet keys.` };
+    const scopeError = validateBatchOperationScope_ACU(targetIndex, target.operations, normalizedKeys);
+    if (scopeError) return { error: scopeError };
+    const existing = targetByIndex.get(targetIndex);
+    if (!existing) {
+      targetByIndex.set(targetIndex, {
+        targetMessageIndex: targetIndex,
+        operations: deepClone_ACU(target.operations),
+        changedSheetKeys: normalizedKeys,
+      });
+      continue;
+    }
+    existing.operations.push(...deepClone_ACU(target.operations));
+    existing.changedSheetKeys = [...new Set([...existing.changedSheetKeys, ...normalizedKeys])].sort();
+  }
+  return targetByIndex;
+}
+
+
+
+async function persistTableMutationLogBatchV2Core_ACU(
+  options: PersistTableMutationLogBatchV2Options_ACU,
+): Promise<{ saved: boolean; messageIndices?: number[]; error?: string }> {
+  const chat = getChatArray_ACU();
+  if (!Array.isArray(chat) || chat.length === 0) return { saved: false, error: 'chat history is empty' };
+  if (!Array.isArray(options.targets) || options.targets.length === 0) return { saved: false, error: 'V2 batch write requires at least one target.' };
+
+  const isolationKey = options.isolationKey ?? getCurrentIsolationKey_ACU();
+  const latestCheckpoint = findLatestFullCheckpoint_ACU(chat, isolationKey);
+  if (!latestCheckpoint) return { saved: false, error: 'V2 batch write requires an existing full checkpoint anchor.' };
+  options.transactionContext?.assertFresh?.('persistTableMutationLogBatchV2:before_persist');
+
+  const mergedTargets = mergeBatchTargetsByMessageIndex_ACU(options.targets, options.afterData);
+  if ('error' in mergedTargets) return { saved: false, error: mergedTargets.error };
+  const targetByIndex = mergedTargets;
+  const changedSheetKeys = new Set<string>();
+  for (const [targetIndex, target] of targetByIndex) {
+    if (!Number.isInteger(targetIndex) || targetIndex < latestCheckpoint.index || !chat[targetIndex] || chat[targetIndex].is_user) {
+      return { saved: false, error: `V2 batch write target is invalid or precedes replay checkpoint: ${targetIndex}.` };
+    }
+    target.changedSheetKeys.forEach(sheetKey => changedSheetKeys.add(sheetKey));
+  }
+
+  const candidateChat = deepClone_ACU(chat);
+  for (const [targetIndex, target] of targetByIndex) {
+    const message = candidateChat[targetIndex];
+    const isolatedData = cloneIsolatedData_ACU(message) as Record<string, any>;
+    const tagData = isolatedData[isolationKey];
+    if (!isV2TagData_ACU(tagData)) return { saved: false, error: `V2 batch write target ${targetIndex} has no V2 storage frame.` };
+    const frame = tagData.storageFrame as TableStorageFrameV2_ACU;
+    const nextSeq = Math.max(0, ...(frame.logEntries || []).map(item => Number(item.seq) || 0)) + 1;
+    const entryId = generateEntryId_ACU();
+    const parentRevision = frame.headRevision ?? null;
+    const entry: TableMutationLogEntryV2_ACU = {
+      seq: nextSeq,
+      entryId,
+      createdAt: Date.now(),
+      source: options.source,
+      targetMessageIndex: targetIndex,
+      aiFloor: countAiFloor_ACU(candidateChat, targetIndex),
+      filledSheetKeys: [],
+      changedSheetKeys: target.changedSheetKeys,
+      groupKeys: [],
+      requestId: options.requestId,
+      batchId: options.batchId,
+      operations: deepClone_ACU(target.operations),
+      baseRevision: options.transactionContext?.baseRevision ?? parentRevision,
+      parentRevision,
+      commitRevision: buildCommitRevision_ACU(nextSeq, entryId),
+      writeSet: options.transactionContext?.writeSet,
+    };
+    frame.logEntries = [...(frame.logEntries || []), entry];
+    frame.headRevision = entry.commitRevision;
+    message.TavernDB_ACU_IsolatedData = isolatedData;
+    writeMessageIdentity_ACU(message, {
+      enabled: settings_ACU.dataIsolationEnabled,
+      code: settings_ACU.dataIsolationCode,
+    });
+  }
+  const targetMessageIndices = [...targetByIndex.keys()].sort((a, b) => a - b);
+  const operationCount = [...targetByIndex.values()].reduce((sum, target) => sum + target.operations.length, 0);
+  logDebug_ACU(
+    `[V2 Persist] batch candidate 写入准备完成（已移除 afterData 相等性阻断）: source=${options.source}, targetMessageIndex=${targetMessageIndices.join(',')}, operations=${operationCount}, targets=${targetByIndex.size}, changedSheets=${changedSheetKeys.size}`,
+  );
+
+  const snapshots = [...targetByIndex.keys()].map(index => ({
+    index,
+    message: chat[index],
+    hadIsolatedData: Object.prototype.hasOwnProperty.call(chat[index], 'TavernDB_ACU_IsolatedData'),
+    isolatedData: chat[index].TavernDB_ACU_IsolatedData,
+    hadIdentity: Object.prototype.hasOwnProperty.call(chat[index], 'TavernDB_ACU_Identity'),
+    identity: chat[index].TavernDB_ACU_Identity,
+  }));
+  try {
+    for (const { index } of snapshots) {
+      chat[index].TavernDB_ACU_IsolatedData = candidateChat[index].TavernDB_ACU_IsolatedData;
+      if (Object.prototype.hasOwnProperty.call(candidateChat[index], 'TavernDB_ACU_Identity')) {
+        chat[index].TavernDB_ACU_Identity = candidateChat[index].TavernDB_ACU_Identity;
+      } else {
+        delete chat[index].TavernDB_ACU_Identity;
+      }
+    }
+    await saveChatToHostStrict_ACU();
+  } catch (error) {
+    for (const snapshot of snapshots) {
+      if (snapshot.hadIsolatedData) snapshot.message.TavernDB_ACU_IsolatedData = snapshot.isolatedData;
+      else delete snapshot.message.TavernDB_ACU_IsolatedData;
+      if (snapshot.hadIdentity) snapshot.message.TavernDB_ACU_Identity = snapshot.identity;
+      else delete snapshot.message.TavernDB_ACU_Identity;
+    }
+    throw error;
+  }
+
+  return { saved: true, messageIndices: [...targetByIndex.keys()].sort((left, right) => left - right) };
+}
+
+export async function persistTableMutationLogBatchV2_ACU(
+  options: PersistTableMutationLogBatchV2Options_ACU,
+): Promise<{ saved: boolean; messageIndices?: number[]; error?: string }> {
+  if (!options.transactionContext) {
+    return { saved: false, error: 'V2 batch operation log write requires TableWriteTransactionContext; direct unsafe writes are not allowed.' };
+  }
+  if (options.assumeCommitLock) return persistTableMutationLogBatchV2Core_ACU(options);
+  return options.transactionContext.runCommit(
+    () => persistTableMutationLogBatchV2Core_ACU(options),
+    options.revisionWriteSet,
+  );
 }
 
 async function persistTableSheetCheckpointV2Core_ACU(
@@ -1407,6 +1779,83 @@ function canonicalJson_ACU(value: unknown): string {
   return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${canonicalJson_ACU(record[key])}`).join(',')}}`;
 }
 
+function templatePersistentProjectionMatches_ACU(
+  baselineData: TableDataObject_ACU,
+  candidateData: TableDataObject_ACU,
+): boolean {
+  const project = (data: TableDataObject_ACU): Record<string, unknown> => Object.fromEntries(
+    Object.keys(data)
+      .filter(key => key.startsWith('sheet_'))
+      .sort()
+      .map(key => [key, templateSheetPersistentProjection_ACU(data[key] as Sheet_ACU)]),
+  );
+  return canonicalJson_ACU(project(baselineData)) === canonicalJson_ACU(project(candidateData));
+}
+
+/**
+ * Persists a chat template selection when reconciliation has proved that no
+ * sheet-level storage mutation is necessary. This deliberately remains a
+ * separate API: the structural commit entry point must keep rejecting empty
+ * change sets so accidental lost migrations cannot be reported as success.
+ */
+export async function commitCurrentFloorTemplateScopeOnly_ACU(
+  options: CommitCurrentFloorTemplateScopeOnlyOptions_ACU,
+): Promise<CommitCurrentFloorTemplateChangesResult_ACU> {
+  if (!options.guideData || typeof options.guideData !== 'object' || Array.isArray(options.guideData)) {
+    return { saved: false, error: 'scope-only 模板提交必须提供有效的 guideData。' };
+  }
+  if (!options.baselineData || !options.candidateData
+    || !templatePersistentProjectionMatches_ACU(options.baselineData, options.candidateData)) {
+    return { saved: false, error: 'scope-only 模板提交要求 baseline 与 candidate 的持久化 Sheet 投影完全一致。' };
+  }
+  const createdAt = options.createdAt ?? Date.now();
+  if (!Number.isFinite(createdAt) || createdAt < 0) {
+    return { saved: false, error: 'scope-only 模板提交 requires a finite non-negative createdAt.' };
+  }
+  const isolationKey = options.isolationKey ?? getCurrentIsolationKey_ACU();
+  try {
+    return await runTableWriteTransaction_ACU({
+      source: 'template_assistant',
+      reason: options.reason || 'commitCurrentFloorTemplateScopeOnly',
+      isolationKey,
+      writeSet: [{ kind: 'all' }],
+      maintenanceMode: 'exclusive',
+    }, async transactionContext => transactionContext.runCommit(async () => {
+      const chat = getChatArray_ACU();
+      if (!Array.isArray(chat) || chat.length === 0) throw new Error('chat history is empty');
+      assertTemplateCommitChatContext_ACU(chat, options);
+      transactionContext.assertFresh?.('commitCurrentFloorTemplateScopeOnly:before_commit');
+      assertTemplateCommitChatContext_ACU(chat, options);
+      const previousScopeContainer = cloneOptionalJson_ACU(peekChatScopedConfigContainer_ACU(chat));
+      const previousGuideContainer = cloneOptionalJson_ACU(peekChatSheetGuideContainer_ACU(chat));
+      try {
+        const guideUpdated = setChatSheetGuideDataForIsolationKey_ACU(isolationKey, options.guideData, {
+          reason: options.reason || 'chat_template_scope_only',
+          syncTemplateScope: true,
+          templateSource: options.templateSource,
+          presetName: options.presetName,
+          source: options.source,
+          updatedAt: createdAt,
+        });
+        if (!guideUpdated) throw new Error('scope-only 模板提交无法写入 guideData 与 template scope。');
+        await saveChatToHostStrict_ACU();
+        return { saved: true, mode: 'scope_only' as const };
+      } catch (error: any) {
+        setChatScopedConfigContainer_ACU(chat, previousScopeContainer);
+        setChatSheetGuideContainer_ACU(chat, previousGuideContainer);
+        try {
+          await saveChatToHostStrict_ACU();
+        } catch (rollbackError: any) {
+          throw new Error(`${error?.message || String(error)}；回滚保存也失败：${rollbackError?.message || String(rollbackError)}`);
+        }
+        throw error;
+      }
+    }, []));
+  } catch (error: any) {
+    return { saved: false, error: error?.message || String(error) };
+  }
+}
+
 function assertValidTemplateMetaUpdate_ACU(operation: Record<string, any>, sheetKey: string): void {
   if (!isPlainObjectRecord_ACU(operation.meta)) {
     throw new Error(`当前楼层模板提交 meta_update.meta 必须是普通对象：${sheetKey}。`);
@@ -1434,6 +1883,7 @@ function assertValidTemplateMetaUpdate_ACU(operation: Record<string, any>, sheet
 async function assertValidInitialTemplateSnapshot_ACU(
   data: Record<string, any>,
   guideData: Record<string, any>,
+  storageMode: StorageMode,
 ): Promise<void> {
   const mate = data.mate;
   if (!isPlainObjectRecord_ACU(mate) || typeof mate.type !== 'string' || mate.type.length === 0) {
@@ -1474,23 +1924,27 @@ async function assertValidInitialTemplateSnapshot_ACU(
     if (sheet.content.length === 0 || sheet.content[0].length === 0 || sheet.content[0][0] !== 'row_id') {
       throw new Error(`V2 首次模板提交的 templateSource Sheet 缺少 row_id 表头：${sheetKey}。`);
     }
-    if (!String(sheet.sourceData.ddl || '').trim()) {
-      sheet.sourceData.ddl = generateDDL(sheet as Sheet_ACU, sheet.uid || sheetKey);
-    }
-    const ddlValidation = validateDDLTextAgainstHeaders_ACU(sheet.sourceData.ddl, sheet.content[0]);
-    if (!ddlValidation.valid) {
-      throw new Error(`V2 首次模板提交的 templateSource Sheet DDL 无法 strict hydrate：${sheetKey}：${ddlValidation.message}`);
-    }
-    try {
-      createSheetInsertPlan(sheet as Sheet_ACU);
-    } catch (error: any) {
-      throw new Error(`V2 首次模板提交的 templateSource Sheet 无法 hydrate：${sheetKey}：${error?.message || String(error)}`);
+    if (storageMode === 'sqlite') {
+      if (!String(sheet.sourceData.ddl || '').trim()) {
+        sheet.sourceData.ddl = generateDDL(sheet as Sheet_ACU, sheet.uid || sheetKey);
+      }
+      const ddlValidation = validateDDLTextAgainstHeaders_ACU(sheet.sourceData.ddl, sheet.content[0]);
+      if (!ddlValidation.valid) {
+        throw new Error(`V2 首次模板提交的 templateSource Sheet DDL 无法 strict hydrate：${sheetKey}：${ddlValidation.message}`);
+      }
+      try {
+        createSheetInsertPlan(sheet as Sheet_ACU);
+      } catch (error: any) {
+        throw new Error(`V2 首次模板提交的 templateSource Sheet 无法 hydrate：${sheetKey}：${error?.message || String(error)}`);
+      }
     }
   }
-  try {
-    await hydrateTableDataStrict_ACU(data);
-  } catch (error: any) {
-    throw new Error(`V2 首次模板提交的完整 templateSource 无法通过 SQLite strict hydrate：${error?.message || String(error)}`);
+  if (storageMode === 'sqlite') {
+    try {
+      await hydrateTableDataStrict_ACU(data);
+    } catch (error: any) {
+      throw new Error(`V2 首次模板提交的完整 templateSource 无法通过 SQLite strict hydrate：${error?.message || String(error)}`);
+    }
   }
 }
 
@@ -1554,7 +2008,7 @@ function assertValidTemplateSheetChanges_ACU(sheetChanges: TemplateSheetChange_A
     throw new Error('当前楼层模板提交不能同时删除和变更同一 sheetKey。');
   }
   for (const change of sheetChanges) {
-    if (change.kind === 'introduction') {
+    if (change.kind === 'introduction' || change.kind === 'rebase' || change.kind === 'reveal' || change.kind === 'hide') {
       if (!isObjectRecord_ACU(change.sheetData)) throw new Error(`当前楼层模板提交缺少可恢复 Sheet：${change.sheetKey}。`);
       continue;
     }
@@ -1605,6 +2059,7 @@ export async function commitCurrentFloorTemplateChanges_ACU(
     return { saved: false, error: error?.message || String(error) };
   }
   const sheetKeys = [...new Set([...requestedChanges.map(change => change.sheetKey), ...deletedSheetKeys])];
+  const storageMode = options.storageMode === 'native' ? 'native' : 'sqlite';
   const createdAt = options.createdAt ?? Date.now();
   if (!Number.isFinite(createdAt) || createdAt < 0) {
     return { saved: false, error: '当前楼层模板提交 requires a finite non-negative createdAt.' };
@@ -1625,6 +2080,7 @@ export async function commitCurrentFloorTemplateChanges_ACU(
     if (!Array.isArray(chat) || chat.length === 0) {
       throw new Error('chat history is empty');
     }
+    assertTemplateCommitChatContext_ACU(chat, options);
 
     const latestAiTarget = findTargetAiMessage_ACU(chat, undefined);
     const target = findTargetAiMessage_ACU(chat, options.targetMessageIndex);
@@ -1654,40 +2110,93 @@ export async function commitCurrentFloorTemplateChanges_ACU(
     }
 
     transactionContext.assertFresh?.('commitCurrentFloorTemplateChanges:before_commit');
+    assertTemplateCommitChatContext_ACU(chat, options);
     if (chat[target.index] !== target.message || target.message.is_user) {
       throw new Error('target AI message changed before template commit; abort stale table write.');
     }
 
     if (storageState.kind === 'pristine_without_checkpoint') {
-      if (deletedSheetKeys.length > 0) {
-        throw new Error('预填表模板提交不支持删除历史 Sheet；当前聊天不存在可清理的 V2 checkpoint。');
-      }
       if (!isObjectRecord_ACU(options.templateSource)) {
         throw new Error('预填表模板提交必须提供完整有效的 templateSource。');
       }
       const templateSnapshot = deepClone_ACU(options.templateSource);
-      await assertValidInitialTemplateSnapshot_ACU(templateSnapshot, options.guideData);
+      // 这条分支不做增量删除：checkpoint 完全由 templateSource 重建，且此时没有任何
+      // 历史楼层数据需要回溯清理。因此删除只要求「被删表确实已不在新快照里」，
+      // 快照仍保留该表说明调用方状态不一致，必须拒绝而不是静默放行。
+      const staleDeletedSheetKeys = deletedSheetKeys.filter(sheetKey => sheetKey in templateSnapshot);
+      if (staleDeletedSheetKeys.length > 0) {
+        throw new Error(`预填表模板提交的 templateSource 仍包含已删除 Sheet：${staleDeletedSheetKeys.join(', ')}。`);
+      }
+      await assertValidInitialTemplateSnapshot_ACU(templateSnapshot, options.guideData, storageMode);
+      assertTemplateCommitChatContext_ACU(chat, options);
       for (const change of requestedChanges) {
+        // hide 的语义就是把该表从活跃模板中移除，因此它不会出现在新的 templateSource
+        // 快照里；这里要求快照包含它会让「隐藏表 + 无 checkpoint」的切换直接失败。
+        if (change.kind === 'hide') continue;
         const snapshotSheet: unknown = templateSnapshot[change.sheetKey];
         if (!isObjectRecord_ACU(snapshotSheet) || !Array.isArray(snapshotSheet.content)) {
           throw new Error(`预填表模板提交的 templateSource 缺少变更 Sheet：${change.sheetKey}。`);
         }
-        const expectedSheet = deepClone_ACU(change.kind === 'introduction' ? change.sheetData : change.targetSheetData);
+        const expectedSheet = deepClone_ACU(change.kind === 'operations' ? change.targetSheetData : change.sheetData);
         const expectedNormalization = normalizeCanonicalTableRows_ACU({ [change.sheetKey]: expectedSheet });
         if (expectedNormalization.errors.length > 0) {
           throw new Error(`预填表模板提交目标 Sheet 行标识不合法：${formatCanonicalRowIssues_ACU(expectedNormalization.errors)}`);
         }
-        if (!expectedSheet.sourceData || typeof expectedSheet.sourceData !== 'object') expectedSheet.sourceData = {} as any;
-        if (!String(expectedSheet.sourceData.ddl || '').trim()) {
-          expectedSheet.sourceData.ddl = generateDDL(expectedSheet, expectedSheet.uid || change.sheetKey);
+        if (storageMode === 'sqlite') {
+          if (!expectedSheet.sourceData || typeof expectedSheet.sourceData !== 'object') expectedSheet.sourceData = {} as any;
+          if (!String(expectedSheet.sourceData.ddl || '').trim()) {
+            expectedSheet.sourceData.ddl = generateDDL(expectedSheet, expectedSheet.uid || change.sheetKey);
+          }
         }
         if (canonicalJson_ACU(templateSheetPersistentProjection_ACU(snapshotSheet as Sheet_ACU)) !== canonicalJson_ACU(templateSheetPersistentProjection_ACU(expectedSheet))) {
           throw new Error(`预填表模板提交的 templateSource 与目标 Sheet 不一致：${change.sheetKey}。`);
         }
       }
-      const previousScopeContainer = cloneOptionalJson_ACU(getChatScopedConfigContainer_ACU(chat));
-      const previousGuideContainer = cloneOptionalJson_ACU(getChatSheetGuideContainer_ACU(chat));
+      const previousScopeContainer = cloneOptionalJson_ACU(peekChatScopedConfigContainer_ACU(chat));
+      const previousGuideContainer = cloneOptionalJson_ACU(peekChatSheetGuideContainer_ACU(chat));
+      const messageSnapshots = snapshotTemplateDeleteMessages_ACU(chat, true);
       try {
+        const checkpointData = deepClone_ACU(templateSnapshot);
+        const checkpointSheets = Object.keys(checkpointData).filter(key => key.startsWith('sheet_')).sort();
+        for (const sheetKey of checkpointSheets) {
+          const sheet = checkpointData[sheetKey] as Sheet_ACU;
+          sheet.content = [deepClone_ACU(sheet.content[0])];
+        }
+        const checkpointResult = buildCanonicalFullCheckpoint_ACU({
+          createdAt,
+          reason: 'init',
+          data: checkpointData as TableDataObject_ACU,
+          event: { filledSheetKeys: [], changedSheetKeys: checkpointSheets, groupKeys: [] },
+          context: { messageIndex: target.index, aiFloor: countAiFloor_ACU(chat, target.index), isolationKey },
+        });
+        if (!checkpointResult.checkpoint) throw new Error(checkpointResult.error);
+
+        const initialSheetCheckpoints: TableSheetCheckpointV2_ACU[] = [];
+        for (const sheetKey of checkpointSheets) {
+          const sheetCheckpointResult = buildCanonicalSheetCheckpoint_ACU({
+            createdAt,
+            reason: 'schema_change',
+            sheetKey,
+            data: checkpointData[sheetKey] as Sheet_ACU,
+            event: { filledSheetKeys: [], changedSheetKeys: [sheetKey], groupKeys: [] },
+            baseRevision: options.baseRevision !== undefined ? options.baseRevision : transactionContext.baseRevision,
+            context: { messageIndex: target.index, aiFloor: countAiFloor_ACU(chat, target.index), isolationKey },
+          });
+          if (!sheetCheckpointResult.checkpoint) throw new Error(sheetCheckpointResult.error);
+          initialSheetCheckpoints.push(sheetCheckpointResult.checkpoint);
+        }
+
+        const isolatedData = cloneIsolatedData_ACU(target.message) as Record<string, any>;
+        const frame = getOrInitV2Frame_ACU(isolatedData, isolationKey);
+        frame.checkpoint = checkpointResult.checkpoint;
+        frame.perSheetCheckpoints = Object.fromEntries(initialSheetCheckpoints.map(checkpoint => [checkpoint.sheetKey, checkpoint]));
+        frame.logEntries = [];
+        frame.headRevision = buildCommitRevision_ACU('checkpoint', generateEntryId_ACU());
+        target.message.TavernDB_ACU_IsolatedData = isolatedData;
+        writeMessageIdentity_ACU(target.message, {
+          enabled: settings_ACU.dataIsolationEnabled,
+          code: settings_ACU.dataIsolationCode,
+        });
         const guideUpdated = setChatSheetGuideDataForIsolationKey_ACU(isolationKey, options.guideData, {
           reason: options.reason || 'visualizer_v2_template_only',
           syncTemplateScope: true,
@@ -1697,9 +2206,11 @@ export async function commitCurrentFloorTemplateChanges_ACU(
           updatedAt: createdAt,
         });
         if (!guideUpdated) throw new Error('预填表模板提交无法原子写入 guideData 与 template scope。');
+        assertTemplateCommitChatContext_ACU(chat, options);
         await saveChatToHostStrict_ACU();
-        return { saved: true, mode: 'template_only', messageIndex: target.index, checkpoints: [] as TableSheetCheckpointV2_ACU[], removedNullRowCount: 0 };
+        return { saved: true, mode: 'v2_commit', messageIndex: target.index, checkpoints: initialSheetCheckpoints, removedNullRowCount: 0 };
       } catch (error: any) {
+        restoreTemplateDeleteMessageSnapshots_ACU(messageSnapshots);
         setChatScopedConfigContainer_ACU(chat, previousScopeContainer);
         setChatSheetGuideContainer_ACU(chat, previousGuideContainer);
         try {
@@ -1717,21 +2228,28 @@ export async function commitCurrentFloorTemplateChanges_ACU(
     }
 
     const messageSnapshots = snapshotTemplateDeleteMessages_ACU(chat, deletedSheetKeys.length > 0);
-    const previousScopeContainer = cloneOptionalJson_ACU(getChatScopedConfigContainer_ACU(chat));
-    const previousGuideContainer = cloneOptionalJson_ACU(getChatSheetGuideContainer_ACU(chat));
+    const previousScopeContainer = cloneOptionalJson_ACU(peekChatScopedConfigContainer_ACU(chat));
+    const previousGuideContainer = cloneOptionalJson_ACU(peekChatSheetGuideContainer_ACU(chat));
     let primarySaveAttempted = false;
+    let sharedStateMutated = false;
+    let purgedMessageCount = 0;
 
     try {
-      const purgedMessageCount = deletedSheetKeys.length === 0 ? 0 : messageSnapshots.reduce((count, snapshot) => (
-        purgeSheetKeysFromMessage_ACU(snapshot.message, deletedSheetKeys) ? count + 1 : count
-      ), 0);
-
     const introductionSheets = new Map<string, Sheet_ACU>();
+    const rebaseSheets = new Map<string, Sheet_ACU>();
+    const revealSheets = new Map<string, Sheet_ACU>();
+    const hideSheetKeys = new Set<string>();
     let removedNullRowCount = 0;
     for (const change of requestedChanges) {
-      const targetSheetData = deepClone_ACU(change.kind === 'introduction' ? change.sheetData : change.targetSheetData);
-      if (change.kind === 'introduction' && targetSheetData.content?.length !== 1) {
-        throw new Error(`V2 sheet introduction only accepts a header-only sheet: sheetKey=${change.sheetKey}.`);
+      if (change.kind === 'hide') {
+        hideSheetKeys.add(change.sheetKey);
+        continue;
+      }
+      const targetSheetData = deepClone_ACU(change.kind === 'operations' ? change.targetSheetData : change.sheetData);
+      // introduction 允许两种形态：header-only 空壳（首次填表前可改结构），
+      // 或模板自带数据的整表（作者已定义初始格式，引入时即落盘）。
+      if (change.kind === 'introduction' && !Array.isArray(targetSheetData.content?.[0])) {
+        throw new Error(`V2 sheet introduction requires a header row: sheetKey=${change.sheetKey}.`);
       }
       const normalization = normalizeCanonicalTableRows_ACU({ [change.sheetKey]: targetSheetData });
       removedNullRowCount += normalization.removedRows.length;
@@ -1742,16 +2260,20 @@ export async function commitCurrentFloorTemplateChanges_ACU(
       if (!Array.isArray(headers) || headers[0] !== 'row_id') {
         throw new Error(`V2 当前楼层模板提交缺少 row_id 表头：${change.sheetKey}。`);
       }
-      if (!targetSheetData.sourceData || typeof targetSheetData.sourceData !== 'object') targetSheetData.sourceData = {} as any;
-      if (!String(targetSheetData.sourceData.ddl || '').trim()) {
-        targetSheetData.sourceData.ddl = generateDDL(targetSheetData, targetSheetData.uid || change.sheetKey);
+      if (storageMode === 'sqlite') {
+        if (!targetSheetData.sourceData || typeof targetSheetData.sourceData !== 'object') targetSheetData.sourceData = {} as any;
+        if (!String(targetSheetData.sourceData.ddl || '').trim()) {
+          targetSheetData.sourceData.ddl = generateDDL(targetSheetData, targetSheetData.uid || change.sheetKey);
+        }
+        const ddlValidation = validateDDLTextAgainstHeaders_ACU(targetSheetData.sourceData.ddl, headers);
+        if (!ddlValidation.valid) {
+          throw new Error(`V2 当前楼层模板提交 DDL 无法 strict hydrate：${change.sheetKey}：${ddlValidation.message}`);
+        }
+        createSheetInsertPlan(targetSheetData);
       }
-      const ddlValidation = validateDDLTextAgainstHeaders_ACU(targetSheetData.sourceData.ddl, headers);
-      if (!ddlValidation.valid) {
-        throw new Error(`V2 当前楼层模板提交 DDL 无法 strict hydrate：${change.sheetKey}：${ddlValidation.message}`);
-      }
-      createSheetInsertPlan(targetSheetData);
       if (change.kind === 'introduction') introductionSheets.set(change.sheetKey, targetSheetData);
+      else if (change.kind === 'rebase') rebaseSheets.set(change.sheetKey, targetSheetData);
+      else if (change.kind === 'reveal') revealSheets.set(change.sheetKey, targetSheetData);
     }
 
     const isolatedData = cloneIsolatedData_ACU(target.message) as Record<string, any>;
@@ -1760,20 +2282,55 @@ export async function commitCurrentFloorTemplateChanges_ACU(
       throw new Error('目标 V2 storage frame 在模板提交准备期间发生变化。');
     }
     const activeReplayState = await loadTableStateFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: target.index, updateRuntimeState: false });
+    assertTemplateCommitChatContext_ACU(chat, options);
     if (!activeReplayState) {
       throw new Error('V2 当前楼层模板提交无法解析 active full checkpoint replay state。');
     }
     const checkpoints: TableSheetCheckpointV2_ACU[] = [];
     const scheduleSummaryBySheet = collectScheduleSummaryFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: target.index });
     const targetFrameLastLogSeq = getValidatedFrameLastLogSeq_ACU(frame);
+    // reveal 目标集合：包括显式 reveal change，以及"introduction 但历史存在(active 无)"自动转 reveal 的 sheetKey。
+    const revealDataBySheet = new Map<string, Sheet_ACU>();
     for (const change of requestedChanges.filter(item => item.kind === 'introduction')) {
-      if (
-        historyContainsOrCannotDisproveSheet_ACU(chat, isolationKey, target.index, change.sheetKey)
-        || Object.prototype.hasOwnProperty.call(activeReplayState, change.sheetKey)
-        || Object.prototype.hasOwnProperty.call(frame.perSheetCheckpoints || {}, change.sheetKey)
-      ) {
+      // 是否“仍活跃”只由 replay 后的 active state 判定。
+      //
+      // perSheetCheckpoints 只是历史痕迹：表可能经由 hide、data_replace 或早期删除逻辑
+      // 离开 active state，却仍留下一个没有 hide timeline 的 sheet checkpoint。
+      // 把这种痕迹当作“仍活跃”，会让重新切回带该表的模板时走不到下面的唤醒分支，
+      // 被误判成“重复引入”直接拒绝。历史里存在过的表由 historyHas 分支负责唤醒。
+      const existingSheetCheckpoint = (frame.perSheetCheckpoints || {})[change.sheetKey] as TableSheetCheckpointV2_ACU | undefined;
+      const activeHas = Object.prototype.hasOwnProperty.call(activeReplayState, change.sheetKey);
+      const historyHas = historyContainsOrCannotDisproveSheet_ACU(chat, isolationKey, target.index, change.sheetKey);
+      if (activeHas) {
+        // 仍活跃：既非全新，也非可恢复的隐藏表 → 保持 introduction 冲突防覆盖语义。
         throw new Error(`V2 sheet introduction requires a genuinely new sheet: sheetKey=${change.sheetKey} already exists in the active checkpoint state.`);
       }
+      if (historyHas) {
+        // historyHas 有两种含义：(1) 历史确实曾有该表（可恢复的隐藏表）；
+        // (2) 历史 frame 畸形/无法证伪（`cannot disprove`）——此时并非真的曾有该表，
+        // 不能凭损坏历史臆造 reveal 数据。二者的区分依据：能否 bounded replay 定位到可信数据。
+        const revealSource = await locateRevealSourceSheetData_ACU(chat, isolationKey, target.index, change.sheetKey);
+        assertTemplateCommitChatContext_ACU(chat, options);
+        if (revealSource) {
+          // 能定位到可信历史可见数据 → 曾被隐藏的表，reveal 恢复"离开时最新状态"（语义1）。
+          revealDataBySheet.set(change.sheetKey, revealSource);
+          continue;
+        }
+        // bounded replay 粒度是楼层：同一楼内离开 active state 的表无法靠“更早楼层”找回可见状态。
+        // 此时改用本 frame 里该表 sheet checkpoint 的 data —— 它就是该表离开前的完整状态，
+        // 是提交时写入的可信来源，不是臆造。
+        //
+        // 不要求它带 hide timeline：表也可能经由 data_replace 或早期删除逻辑离开，
+        // 只留下无 timeline 的残留 checkpoint；那种 data 同样是可信的离开前状态。
+        if (isObjectRecord_ACU(existingSheetCheckpoint?.data)) {
+          revealDataBySheet.set(change.sheetKey, deepClone_ACU(existingSheetCheckpoint!.data) as Sheet_ACU);
+          continue;
+        }
+        // 定位不到可信数据（含历史畸形、无法证伪）→ 保持 introduction 保守拒绝，绝不基于损坏历史覆盖。
+        // 若强行按全新表引入，新写的空 checkpoint 会在回放时盖掉历史上曾存在的同名表数据。
+        throw new Error(`V2 sheet introduction requires a genuinely new sheet: sheetKey=${change.sheetKey} already exists in the active checkpoint state.`);
+      }
+      // 真正全新表：走 introduction。
       const existingCheckpoint = frame.perSheetCheckpoints?.[change.sheetKey];
       if (existingCheckpoint && Number(existingCheckpoint.createdAt) > createdAt) {
         throw new Error(`V2 sheet checkpoint cannot replace a newer checkpoint: sheetKey=${change.sheetKey}, existingCreatedAt=${existingCheckpoint.createdAt}, requestedCreatedAt=${createdAt}.`);
@@ -1796,16 +2353,109 @@ export async function commitCurrentFloorTemplateChanges_ACU(
       });
     }
 
-    const operationChanges = requestedChanges.filter((change): change is Extract<TemplateSheetChange_ACU, { kind: 'operations' }> => change.kind === 'operations');
-    const replayCandidate = deepClone_ACU(activeReplayState);
-    const operations = operationChanges.flatMap(change => change.operations.map(operation => deepClone_ACU(operation)));
-    for (const change of operationChanges) {
-      for (const operation of change.operations) await applyTableOperationV2_ACU(replayCandidate, operation);
-      const replayedSheet = replayCandidate[change.sheetKey] as Sheet_ACU | undefined;
-      if (!replayedSheet || canonicalJson_ACU(templateSheetPersistentProjection_ACU(replayedSheet)) !== canonicalJson_ACU(templateSheetPersistentProjection_ACU(change.targetSheetData))) {
-        throw new Error(`V2 当前楼层模板提交 operation 回放结果与目标 Sheet 不一致：${change.sheetKey}。`);
-      }
+    // 显式 reveal change：数据来源为 caller 提供的 sheetData（已在准备循环校验/建表计划）。
+    for (const change of requestedChanges.filter(item => item.kind === 'reveal')) {
+      revealDataBySheet.set(change.sheetKey, revealSheets.get(change.sheetKey)!);
     }
+
+    // 统一写入 reveal checkpoint（timeline: sheet_reveal，回放语义同 rebase）。
+    for (const [sheetKey, revealData] of revealDataBySheet) {
+      if (Object.prototype.hasOwnProperty.call(activeReplayState, sheetKey)) {
+        throw new Error(`V2 sheet reveal requires a hidden sheet: sheetKey=${sheetKey} 仍存在于 active checkpoint state。`);
+      }
+      const existingCheckpoint = frame.perSheetCheckpoints?.[sheetKey];
+      if (existingCheckpoint && Number(existingCheckpoint.createdAt) > createdAt) {
+        throw new Error(`V2 sheet checkpoint cannot replace a newer checkpoint: sheetKey=${sheetKey}, existingCreatedAt=${existingCheckpoint.createdAt}, requestedCreatedAt=${createdAt}.`);
+      }
+      const scheduleSummary = scheduleSummaryBySheet[sheetKey];
+      checkpoints.push({
+        kind: 'sheet_full',
+        createdAt,
+        reason: 'schema_change',
+        sheetKey,
+        data: revealData,
+        ...(scheduleSummary ? { scheduleSummary: deepClone_ACU(scheduleSummary) } : {}),
+        event: { filledSheetKeys: [], changedSheetKeys: [sheetKey] },
+        timeline: {
+          kind: 'sheet_reveal' as const,
+          activateAtMessageIndex: target.index,
+          afterSeq: targetFrameLastLogSeq,
+        },
+        baseRevision: options.baseRevision !== undefined ? options.baseRevision : transactionContext.baseRevision,
+      });
+    }
+
+    for (const change of requestedChanges.filter(item => item.kind === 'rebase')) {
+      if (
+        !Object.prototype.hasOwnProperty.call(activeReplayState, change.sheetKey)
+      ) {
+        throw new Error(`V2 sheet rebase requires an existing sheet: sheetKey=${change.sheetKey} is absent from the active checkpoint state.`);
+      }
+      if (deletedSheetKeys.includes(change.sheetKey)) {
+        throw new Error(`V2 sheet rebase 不能与删除同一 sheetKey 组合：${change.sheetKey}。`);
+      }
+      const existingCheckpoint = frame.perSheetCheckpoints?.[change.sheetKey];
+      if (existingCheckpoint && Number(existingCheckpoint.createdAt) > createdAt) {
+        throw new Error(`V2 sheet checkpoint cannot replace a newer checkpoint: sheetKey=${change.sheetKey}, existingCreatedAt=${existingCheckpoint.createdAt}, requestedCreatedAt=${createdAt}.`);
+      }
+      const scheduleSummary = scheduleSummaryBySheet[change.sheetKey];
+      checkpoints.push({
+        kind: 'sheet_full',
+        createdAt,
+        reason: 'schema_change',
+        sheetKey: change.sheetKey,
+        data: rebaseSheets.get(change.sheetKey)!,
+        ...(scheduleSummary ? { scheduleSummary: deepClone_ACU(scheduleSummary) } : {}),
+        event: { filledSheetKeys: [], changedSheetKeys: [change.sheetKey] },
+        timeline: {
+          kind: 'sheet_rebase' as const,
+          activateAtMessageIndex: target.index,
+          afterSeq: targetFrameLastLogSeq,
+        },
+        baseRevision: options.baseRevision !== undefined ? options.baseRevision : transactionContext.baseRevision,
+      });
+    }
+
+    // hide：将当前可见的表标记隐藏，数据完整保留在 checkpoint.data，不 purge。
+    for (const sheetKey of hideSheetKeys) {
+      if (deletedSheetKeys.includes(sheetKey)) {
+        throw new Error(`V2 sheet hide 不能与删除同一 sheetKey 组合：${sheetKey}。`);
+      }
+      const hideSource = await locateRevealSourceSheetData_ACU(chat, isolationKey, target.index, sheetKey);
+      assertTemplateCommitChatContext_ACU(chat, options);
+      if (!hideSource) {
+        throw new Error(`V2 sheet hide 无法定位待隐藏表的当前数据：sheetKey=${sheetKey}。`);
+      }
+      const existingCheckpoint = frame.perSheetCheckpoints?.[sheetKey];
+      if (existingCheckpoint && Number(existingCheckpoint.createdAt) > createdAt) {
+        throw new Error(`V2 sheet checkpoint cannot replace a newer checkpoint: sheetKey=${sheetKey}, existingCreatedAt=${existingCheckpoint.createdAt}, requestedCreatedAt=${createdAt}.`);
+      }
+      const scheduleSummary = scheduleSummaryBySheet[sheetKey];
+      checkpoints.push({
+        kind: 'sheet_full',
+        createdAt,
+        reason: 'schema_change',
+        sheetKey,
+        data: hideSource,
+        ...(scheduleSummary ? { scheduleSummary: deepClone_ACU(scheduleSummary) } : {}),
+        event: { filledSheetKeys: [], changedSheetKeys: [sheetKey] },
+        timeline: {
+          kind: 'sheet_hide' as const,
+          activateAtMessageIndex: target.index,
+          // hide 必须晚于本次提交写入的 log 生效：该 log（seq = targetFrameLastLogSeq + 1）
+          // 可能仍包含针对待隐藏表的合法 operation（例如切模板前刚补齐填表）。
+          // 回放判定是 afterSeq < nextSeq，用 targetFrameLastLogSeq 会让 hide 抢在该 log 之前
+          // 删表，导致后续 operation 撞上 no such table。
+          // introduction / rebase / reveal 相反，必须早于本批 log，故仍用 targetFrameLastLogSeq。
+          afterSeq: targetFrameLastLogSeq + 1,
+        },
+        baseRevision: options.baseRevision !== undefined ? options.baseRevision : transactionContext.baseRevision,
+      });
+    }
+
+
+    const operationChanges = requestedChanges.filter((change): change is Extract<TemplateSheetChange_ACU, { kind: 'operations' }> => change.kind === 'operations');
+    const operations = operationChanges.flatMap(change => change.operations.map(operation => deepClone_ACU(operation)));
 
     const entryOptions: AppendMutationLogEntryOptions_ACU | undefined = operations.length === 0 ? undefined : (() => {
       const seq = targetFrameLastLogSeq + 1;
@@ -1826,12 +2476,21 @@ export async function commitCurrentFloorTemplateChanges_ACU(
       };
     })();
 
+      // 所有异步准备完成后，在第一次内存写入前重新核验当前活动聊天与取消状态。
+      assertTemplateCommitChatContext_ACU(chat, options);
+      sharedStateMutated = true;
+      purgedMessageCount = deletedSheetKeys.length === 0 ? 0 : messageSnapshots.reduce((count, snapshot) => (
+        purgeSheetKeysFromMessage_ACU(snapshot.message, deletedSheetKeys) ? count + 1 : count
+      ), 0);
       frame.perSheetCheckpoints = {
         ...(frame.perSheetCheckpoints || {}),
         ...Object.fromEntries(checkpoints.map(checkpoint => [checkpoint.sheetKey, checkpoint])),
       };
       if (entryOptions) appendMutationLogEntry_ACU(frame, entryOptions);
       target.message.TavernDB_ACU_IsolatedData = isolatedData;
+      // isolatedData 在异步准备前已克隆；重新挂回目标消息后必须同步应用删除，
+      // 否则会把刚刚从真实消息清理掉的目标 frame 旧快照覆盖回来。
+      if (deletedSheetKeys.length > 0) purgeSheetKeysFromMessage_ACU(target.message, deletedSheetKeys);
       writeMessageIdentity_ACU(target.message, {
         enabled: settings_ACU.dataIsolationEnabled,
         code: settings_ACU.dataIsolationCode,
@@ -1845,6 +2504,7 @@ export async function commitCurrentFloorTemplateChanges_ACU(
         updatedAt: createdAt,
       });
       if (!guideUpdated) throw new Error('当前楼层模板提交无法写入 guideData。');
+      assertTemplateCommitChatContext_ACU(chat, options);
       primarySaveAttempted = true;
       await saveChatToHostStrict_ACU();
       logDebug_ACU(`[V2 Persist] 当前楼层模板提交完成: messageIndex=${target.index}, checkpoints=${checkpoints.length}, operations=${operations.length}, isolationKey=${isolationKey}`);
@@ -1857,9 +2517,11 @@ export async function commitCurrentFloorTemplateChanges_ACU(
         ...(deletedSheetKeys.length > 0 ? { deletedSheetKeys, purgedMessageCount } : {}),
       };
     } catch (error: any) {
-      restoreTemplateDeleteMessageSnapshots_ACU(messageSnapshots);
-      setChatScopedConfigContainer_ACU(chat, previousScopeContainer);
-      setChatSheetGuideContainer_ACU(chat, previousGuideContainer);
+      if (sharedStateMutated) {
+        restoreTemplateDeleteMessageSnapshots_ACU(messageSnapshots);
+        setChatScopedConfigContainer_ACU(chat, previousScopeContainer);
+        setChatSheetGuideContainer_ACU(chat, previousGuideContainer);
+      }
       if (primarySaveAttempted) {
         try {
           await saveChatToHostStrict_ACU();

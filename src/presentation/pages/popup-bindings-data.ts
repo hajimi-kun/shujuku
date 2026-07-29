@@ -17,12 +17,11 @@ import { updateImportStatusUI_ACU, handleTxtImportAndSplit_ACU } from '../compon
 import { clearImportLocalStorage_ACU, clearImportedEntries_ACU, deleteImportedEntries_ACU, handleInjectImportedTxtSelected_ACU } from '../triggers/import-process';
 import { importCombinedSettings_ACU } from '../triggers/admin-ui';
 import { applyTemplateScopeForCurrentChat_ACU, getDataIsolationHistory_ACU, removeDataIsolationHistory_ACU, switchIsolationProfile_ACU, persistCurrentTemplatePresetName_ACU, setSummaryVectorIndexMode_ACU } from '../../service/settings/settings-service';
-import { deleteAllGeneratedEntries_ACU, updateReadableLorebookEntry_ACU } from '../../service/worldbook/pipeline';
+import { deleteAllGeneratedEntries_ACU } from '../../service/worldbook/pipeline';
 import { refreshMergedDataAndNotifyWithUI_ACU, refreshPresetUIAfterSwitch_ACU } from '../components/pipeline-ui-helpers';
 import { loadOrCreateJsonTableFromChatHistory_ACU } from '../../service/table/table-service';
-import { runTableUpdateCommit_ACU } from '../../service/table/table-update-commit';
-import { getTemplatePreset_ACU, applyTemplatePresetToCurrent_ACU, applyTemplateSnapshotToScope_ACU, deleteTemplatePreset_ACU, ensureUniqueTemplatePresetName_ACU, normalizeTemplateForPresetSave_ACU, parseImportedTemplateData_ACU, persistTemplateScopeSelectionState_ACU, resolveActiveTemplatePresetName_ACU, upsertTemplatePreset_ACU } from '../../service/template/template-preset-service';
-import { getChatSheetGuideDataForIsolationKey_ACU, getCurrentChatTemplateScopeState_ACU, sanitizeTemplateSnapshotForChat_ACU } from '../../service/template/chat-scope';
+import { getTemplatePreset_ACU, applyChatTemplateSnapshotWithReconciliation_ACU, applyTemplatePresetToCurrent_ACU, applyTemplateSnapshotToScope_ACU, deleteTemplatePreset_ACU, ensureUniqueTemplatePresetName_ACU, normalizeTemplateForPresetSave_ACU, parseImportedTemplateData_ACU, resolveActiveTemplatePresetName_ACU, upsertTemplatePreset_ACU } from '../../service/template/template-preset-service';
+import { getCurrentChatTemplateScopeState_ACU, sanitizeTemplateSnapshotForChat_ACU } from '../../service/template/chat-scope';
 import { loadTemplatePresetSelect_ACU } from '../components/template-preset-ui';
 import { openNewVisualizer_ACU } from './visualizer';
 import { deleteLocalDataInChat_ACU, exportCurrentJsonData_ACU, exportTableTemplate_ACU, importTableTemplate_ACU, migrateLegacySummaryVectorIndex_ACU, overrideLatestLayerWithTemplate_ACU, resetAllToDefaults_ACU, resetTableTemplate_ACU } from '../triggers/data-admin-ui';
@@ -34,15 +33,27 @@ import { populateImportWorldbookTargetSelector_ACU } from '../components/worldbo
 import { saveApiConfig_ACU, clearApiConfig_ACU, fetchModelsAndConnect_ACU, loadApiPreset_ACU, saveApiPreset_ACU, deleteApiPreset_ACU, saveCustomCharCardPrompt_ACU, saveImportSplitSize_ACU, resetDefaultCharCardPrompt_ACU, updateCustomApiInputsState_ACU, refreshApiPresetSelectors_ACU } from '../triggers/settings-ui-sync';
 import { handleImportSelectAll_ACU, handleImportSelectNone_ACU } from '../components/table-selector';
 import { getAggregatedSummaryVectorIndexSnapshot_ACU, getLatestSummaryVectorIndexSnapshotState_ACU, assignSummaryVectorIndexStateToTagData_ACU } from '../../service/vector/summary-vector-index-state-service';
-import { archiveSummaryVectorIndexNow_ACU } from '../../service/vector/summary-vector-index-archive-service';
+import { rebuildCurrentSummaryVectorIndexNow_ACU } from '../../service/vector/summary-vector-index-rebuild-service';
 import { getCurrentWorldbookConfig_ACU } from '../../service/settings/settings-readers';
 import { syncManualUpdateButtonAvailability_ACU } from '../components/status-display';
-import { cleanupUnreachableSummaryVectorIndexFiles_ACU, getSummaryVectorIndexStats_ACU, inspectSummaryVectorIndexHealth_ACU } from '../../service/vector/summary-vector-index-storage-service';
+import {
+    cleanupUnreachableSummaryVectorIndexFiles_ACU,
+    getSummaryVectorIndexStats_ACU,
+    inspectSummaryVectorIndexHealth_ACU,
+    validateSingleFileSnapshotIdentity_ACU,
+    type VectorIndexSingleSnapshotBlob_ACU,
+} from '../../service/vector/summary-vector-index-storage-service';
 import { clearVectorIndexTempCache_ACU } from '../../data/storage/vector-index-temp-cache';
 import { clearSummaryVectorFlushTasksByScope_ACU, clearSummaryVectorHotCache_ACU, deleteSummaryVectorHotCacheByScope_ACU } from '../../data/storage/vector-index-hot-cache';
-import { getChatArray_ACU, getLastMessageIndex_ACU, saveChatToHost_ACU } from '../../service/chat/chat-service';
-import { readIsolatedTagData_ACU, writeIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
-import { buildVectorIndexSingleSnapshotFilePath_ACU, buildLegacyVectorIndexSingleSnapshotFilePath_ACU, readVectorIndexJsonFile_ACU } from '../../data/storage/vector-index-st-files-storage';
+import { getChatArray_ACU, saveChatToHost_ACU, saveChatToHostStrict_ACU } from '../../service/chat/chat-service';
+import { cloneIsolatedData_ACU, readIsolatedTagData_ACU, writeIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
+import {
+    buildLegacyVectorIndexSingleSnapshotFilePath_ACU,
+    buildVectorIndexSingleSnapshotFilePath_ACU,
+    buildVectorIndexSingleSnapshotV2ScopeToken_ACU,
+    loadVectorIndexRegistry_ACU,
+    readVectorIndexJsonFile_ACU,
+} from '../../data/storage/vector-index-st-files-storage';
 
 function formatBytes_ACU(bytes: number): string {
     const value = Math.max(0, Number(bytes) || 0);
@@ -92,103 +103,125 @@ async function refreshVectorIndexStatsPanel_ACU(): Promise<void> {
 /**
  * 当 tag data 中没有向量索引 state 时，尝试从外部单文件快照恢复。
  * 恢复成功后会将 state 写回最新非用户消息的 tag data 并保存聊天。
- * 会尝试多种 sourceTableKey 以应对表键变化的情况。
+ * 自动恢复仅接受唯一确定的当前 canonical scope，绝不跨 sourceTableKey 猜测。
  */
-async function tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU(): Promise<boolean> {
+export async function tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU(): Promise<boolean> {
     const chatKey = String(currentChatFileIdentifier_ACU || '').trim();
     const isolationKey = String(getCurrentIsolationKey_ACU() || '').trim();
-    if (!chatKey || !isolationKey) return false;
-
-    // 收集候选 sourceTableKey：当前值 + 所有纪要/大纲表键 + 兜底 'summary'
-    const candidateTableKeys = new Set<string>();
-    const currentTableKey = getCurrentSummaryVectorIndexSourceTableKey_ACU();
-    candidateTableKeys.add(currentTableKey);
-    candidateTableKeys.add('summary');
-    const tables = currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object' ? currentJsonTableData_ACU : null;
-    if (tables) {
-        for (const key of Object.keys(tables)) {
-            const table = tables[key];
-            if (table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''))) {
-                candidateTableKeys.add(key);
-            }
-        }
-    }
+    const sourceTableKey = getCurrentSummaryVectorIndexSourceTableKey_ACU();
+    if (!chatKey || !isolationKey || !sourceTableKey) return false;
 
     // [spv3.6.8] 获取当前角色名用于恢复时尝试新格式路径
     const chatName = getCurrentCharacterCardName_ACU();
+    // V2 使用 immutable path，不能由旧的固定路径 builder 推导。只有 durable publish 后
+    // registry 标记为 published 的对象才可自动恢复；prepared/orphan 只能留给安全 GC 处置。
+    const registeredFiles = await loadVectorIndexRegistry_ACU()
+        .then((registry) => Array.isArray(registry.files) ? registry.files : [])
+        .catch((error) => {
+            logWarn_ACU('[交火模式纪要索引] 自动恢复读取 V2 registry 失败，将继续尝试 legacy 路径:', error);
+            return [] as any[];
+        });
 
-    for (const sourceTableKey of candidateTableKeys) {
+    const restoreCandidate = async (blob: VectorIndexSingleSnapshotBlob_ACU, manifest: any, sourceTableKey: string): Promise<boolean> => {
+        const chat = getChatArray_ACU();
+        if (!Array.isArray(chat) || chat.length === 0) return false;
+        let targetIndex = -1;
+        for (let i = chat.length - 1; i >= 0; i--) {
+            if (chat[i] && !chat[i].is_user) { targetIndex = i; break; }
+        }
+        if (targetIndex < 0) return false;
+        const message = chat[targetIndex];
+        const existingTagData = readIsolatedTagData_ACU(message, isolationKey);
+        if (existingTagData?.summaryVectorIndexState?.manifest?.indexId) return false;
+        // writeIsolatedTagData_ACU 会把 string container 归一化为 object。保存失败时必须还原
+        // 原字段值，而不是只还原解析后的槽位，避免留下仅运行时可见的 pointer。
+        const previousIsolatedData = {
+            exists: Object.prototype.hasOwnProperty.call(message, 'TavernDB_ACU_IsolatedData'),
+            value: message.TavernDB_ACU_IsolatedData,
+        };
+        const nextIsolatedData = cloneIsolatedData_ACU(message);
+        const tagData = nextIsolatedData[isolationKey] || { independentData: {}, modifiedKeys: {}, updateGroupKeys: {} } as any;
+        const rows = Array.isArray(blob.rows) ? blob.rows : [];
+        const chunks = Array.isArray(blob.chunks) ? blob.chunks : [];
+        assignSummaryVectorIndexStateToTagData_ACU(tagData, {
+            manifest, rows, chunks,
+            rowCount: rows.filter((row: any) => row.status !== 'removed').length,
+            chunkCount: chunks.length,
+            snapshotMessageId: String(manifest.snapshotMessageId || message.mesId || ''),
+            sourceTableKey: String(manifest.sourceTableKey || sourceTableKey),
+            sourceTableName: String(manifest.sourceTableName || sourceTableKey),
+            indexedAt: String(manifest.indexedAt || new Date().toISOString()),
+            skippedRowCount: 0,
+        } as any);
         try {
-            // [spv3.6.8] 三层回退：新格式（含角色名）→ spv3.6.7 格式（无角色名）→ 旧版格式（含 isolationKey + sourceTableKey）
-            const namedPath = buildVectorIndexSingleSnapshotFilePath_ACU({ chatKey, isolationKey, sourceTableKey, chatName });
-            const unnamedPath = buildVectorIndexSingleSnapshotFilePath_ACU({ chatKey, isolationKey, sourceTableKey });
-            let loaded = await readVectorIndexJsonFile_ACU<{
-                schema: string;
-                manifest: any;
-                rows: any[];
-                chunks: any[];
-            }>(namedPath);
-            // 回退1：spv3.6.7 格式（无角色名前缀）
-            if ((!loaded.ok || !loaded.data || loaded.data.schema !== 'single_file_snapshot') && namedPath !== unnamedPath) {
-                loaded = await readVectorIndexJsonFile_ACU<{
-                    schema: string;
-                    manifest: any;
-                    rows: any[];
-                    chunks: any[];
-                }>(unnamedPath);
-            }
-            // 回退2：旧版格式（含 isolationKey + sourceTableKey）
-            if (!loaded.ok || !loaded.data || loaded.data.schema !== 'single_file_snapshot') {
-                const legacyPath = buildLegacyVectorIndexSingleSnapshotFilePath_ACU({ chatKey, isolationKey, sourceTableKey });
-                if (legacyPath !== namedPath && legacyPath !== unnamedPath) {
-                    loaded = await readVectorIndexJsonFile_ACU<{
-                        schema: string;
-                        manifest: any;
-                        rows: any[];
-                        chunks: any[];
-                    }>(legacyPath);
-                }
-            }
-            if (!loaded.ok || !loaded.data || loaded.data.schema !== 'single_file_snapshot') continue;
-
-            const blob = loaded.data;
-            const manifest = blob.manifest;
-            if (!manifest?.indexId || manifest.status !== 'ready') continue;
-
-            const chat = getChatArray_ACU();
-            if (!Array.isArray(chat) || chat.length === 0) continue;
-
-            // 找到最新的非用户消息
-            let targetIndex = -1;
-            for (let i = chat.length - 1; i >= 0; i--) {
-                if (chat[i] && !chat[i].is_user) { targetIndex = i; break; }
-            }
-            if (targetIndex < 0) continue;
-
-            const message = chat[targetIndex];
-            const tagData = readIsolatedTagData_ACU(message, isolationKey) || { independentData: {}, modifiedKeys: {}, updateGroupKeys: {} } as any;
-            if (tagData.summaryVectorIndexState?.manifest?.indexId) return false; // 已有 state，不覆盖
-
-            const rows = Array.isArray(blob.rows) ? blob.rows : [];
-            const chunks = Array.isArray(blob.chunks) ? blob.chunks : [];
-            const recoveredState: any = {
-                manifest,
-                rows,
-                chunks,
-                rowCount: rows.filter((r: any) => r.status !== 'removed').length,
-                chunkCount: chunks.length,
-                snapshotMessageId: String(manifest.snapshotMessageId || message.mesId || ''),
-                sourceTableKey: String(manifest.sourceTableKey || sourceTableKey),
-                sourceTableName: String(manifest.sourceTableName || sourceTableKey),
-                indexedAt: String(manifest.indexedAt || new Date().toISOString()),
-                skippedRowCount: 0,
-            };
-            assignSummaryVectorIndexStateToTagData_ACU(tagData, recoveredState);
+            message.TavernDB_ACU_IsolatedData = nextIsolatedData;
             writeIsolatedTagData_ACU(message, isolationKey, tagData);
-            await saveChatToHost_ACU();
+            await saveChatToHostStrict_ACU();
             console.log(`[ACU交火向量索引] 已从外部快照自动恢复 state 到消息 #${targetIndex}（indexId=${manifest.indexId}，${rows.length} 行，${chunks.length} 块，sourceTableKey=${sourceTableKey}）`);
             return true;
-        } catch { /* 尝试下一个 sourceTableKey */ }
+        } catch (error) {
+            if (previousIsolatedData.exists) message.TavernDB_ACU_IsolatedData = previousIsolatedData.value;
+            else delete message.TavernDB_ACU_IsolatedData;
+            logWarn_ACU('[交火模式纪要索引] 自动恢复持久化失败，已回滚写前 state:', error);
+            return false;
+        }
+    };
+
+    {
+        const v2PathPrefix = `TavernDB_ACU_vector_v2_${buildVectorIndexSingleSnapshotV2ScopeToken_ACU({ chatKey, isolationKey, sourceTableKey })}_`;
+        const namedPath = buildVectorIndexSingleSnapshotFilePath_ACU({ chatKey, isolationKey, sourceTableKey, chatName });
+        const unnamedPath = buildVectorIndexSingleSnapshotFilePath_ACU({ chatKey, isolationKey, sourceTableKey });
+        const legacyPath = buildLegacyVectorIndexSingleSnapshotFilePath_ACU({ chatKey, isolationKey, sourceTableKey });
+        const v2Candidates: Array<{ path: string; blob: VectorIndexSingleSnapshotBlob_ACU; manifest: any; revision: number }> = [];
+        for (const file of registeredFiles) {
+            const path = String(file?.path || '').trim();
+            if (!path.startsWith(v2PathPrefix) || file?.publicationState !== 'published') continue;
+            try {
+                const loaded = await readVectorIndexJsonFile_ACU<VectorIndexSingleSnapshotBlob_ACU>(path);
+                const blob = loaded.data;
+                const manifest = blob?.manifest;
+                if (!loaded.ok || !blob || blob.schema !== 'single_file_snapshot' || !manifest?.indexId || manifest.status !== 'ready') continue;
+                if (String(manifest.chatKey || '') !== chatKey || String(manifest.isolationKey || '') !== isolationKey || String(manifest.sourceTableKey || '') !== sourceTableKey) continue;
+                validateSingleFileSnapshotIdentity_ACU(manifest, blob, path);
+                const revision = Number(manifest.storageIdentity?.revision ?? manifest.snapshot?.revision);
+                if (!Number.isInteger(revision) || revision < 1) continue;
+                v2Candidates.push({ path, blob, manifest, revision });
+            } catch { /* 当前 V2 候选不可信，继续检查同 scope 的其他 published 候选 */ }
+        }
+        if (v2Candidates.length > 0) {
+            const newestRevision = Math.max(...v2Candidates.map((candidate) => candidate.revision));
+            const newestCandidates = v2Candidates.filter((candidate) => candidate.revision === newestRevision);
+            if (newestCandidates.length !== 1) {
+                logWarn_ACU('[交火模式纪要索引] 自动恢复拒绝同 scope 同 revision 的多个 published V2 候选:', { scope: v2PathPrefix, revision: newestRevision, paths: newestCandidates.map((candidate) => candidate.path) });
+                return false;
+            }
+            const candidate = newestCandidates[0];
+            return restoreCandidate(candidate.blob, candidate.manifest, sourceTableKey);
+        }
+
+        // legacy 路径没有 V2 registry 的发布状态；不能由固定路径顺序决定恢复结果。
+        // 多个有效 legacy snapshot 的新旧关系不可被当前身份字段可靠证明，故只接受唯一候选。
+        const legacyCandidates: Array<{ path: string; blob: VectorIndexSingleSnapshotBlob_ACU; manifest: any }> = [];
+        for (const loadedPath of new Set([namedPath, unnamedPath, legacyPath])) {
+            try {
+                const loaded = await readVectorIndexJsonFile_ACU<VectorIndexSingleSnapshotBlob_ACU>(loadedPath);
+                if (!loaded.ok || !loaded.data || loaded.data.schema !== 'single_file_snapshot') continue;
+                const blob = loaded.data;
+                const manifest = blob.manifest;
+                if (!manifest?.indexId || manifest.status !== 'ready') continue;
+                if (String(manifest.chatKey || '') !== chatKey || String(manifest.isolationKey || '') !== isolationKey || String(manifest.sourceTableKey || '') !== sourceTableKey) continue;
+                validateSingleFileSnapshotIdentity_ACU(manifest, blob, loadedPath);
+                legacyCandidates.push({ path: loadedPath, blob, manifest });
+            } catch { /* 当前候选不可信，继续同 scope 的下一个候选 */ }
+        }
+        if (legacyCandidates.length !== 1) {
+            if (legacyCandidates.length > 1) {
+                logWarn_ACU('[交火模式纪要索引] 自动恢复拒绝多个可信 legacy 快照候选:', { paths: legacyCandidates.map((candidate) => candidate.path) });
+            }
+            return false;
+        }
+        const candidate = legacyCandidates[0];
+        return restoreCandidate(candidate.blob, candidate.manifest, sourceTableKey);
     }
     return false;
 }
@@ -197,11 +230,13 @@ function getCurrentSummaryVectorIndexSourceTableKey_ACU(): string {
     const tables = currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object'
         ? currentJsonTableData_ACU
         : null;
-    if (!tables) return 'summary';
-    return Object.keys(tables).find((key) => {
+    if (!tables) return '';
+    const candidates = Object.keys(tables).filter((key) => {
         const table = tables[key];
         return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
-    }) || 'summary';
+    });
+    // 多个纪要表无法从 popup 上下文证明哪一个是当前 scope；宁可拒绝恢复。
+    return candidates.length === 1 ? candidates[0] : '';
 }
 
 async function deleteCurrentVectorIndexFromChat_ACU(): Promise<boolean> {
@@ -351,44 +386,9 @@ export async function bindDataEvents_ACU(): Promise<void> {
           $buildVectorIndexNowButton_ACU.off('click.acu_vector_index_archive').on('click.acu_vector_index_archive', async () => {
               $buildVectorIndexNowButton_ACU.prop('disabled', true).text('正在重建交火索引快照...');
               try {
-                  if (!currentJsonTableData_ACU) {
-                      await loadOrCreateJsonTableFromChatHistory_ACU();
-                  }
-                  if (!currentJsonTableData_ACU) {
-                      showToastr_ACU('warning', '数据库未加载，无法重建交火索引快照。');
-                      return;
-                  }
-                  const summaryKey = Object.keys(currentJsonTableData_ACU).find((key) => {
-                      const table = currentJsonTableData_ACU?.[key];
-                      const name = String(table?.name || '');
-                      return name === '纪要表' || name === '总结表' || name === '总体大纲' || name.includes('纪要') || name.includes('总结');
-                  });
-                  if (summaryKey) {
-                      const writeSet = [{ kind: 'sheet' as const, sheetKey: summaryKey }];
-                      await runTableUpdateCommit_ACU<null>({
-                          source: 'system',
-                          reason: 'vector_index_rebuild_snapshot',
-                          isolationKey: getCurrentIsolationKey_ACU(),
-                          writeSet,
-                          revisionWriteSet: writeSet,
-                          initialData: currentJsonTableData_ACU as any,
-                          targetMessageIndex: getLastMessageIndex_ACU(),
-                          targetSheetKeys: [summaryKey],
-                          updateGroupKeys: null,
-                          trackingSheetKeys: [],
-                          trackAsUpdate: false,
-                          operations: [{ kind: 'sheet_replace', sheetKey: summaryKey, sheet: (currentJsonTableData_ACU as any)[summaryKey], reason: 'system' }],
-                      }, () => ({
-                          success: true,
-                          value: null,
-                          tableData: currentJsonTableData_ACU as any,
-                          mutationResult: { changes: 1, errors: [] },
-                      }));
-                  }
-                  const result = await archiveSummaryVectorIndexNow_ACU({ mode: 'sync' });
+                  const result = await rebuildCurrentSummaryVectorIndexNow_ACU();
                   await refreshVectorIndexStatsPanel_ACU();
                   if (result.success && !result.skipped) {
-                      await updateReadableLorebookEntry_ACU(true);
                       try { (topLevelWindow_ACU as any).AutoCardUpdaterAPI?._notifyTableUpdate?.(); } catch (_) {}
                       showToastr_ACU('success', `交火索引快照重建完成：${result.indexedRowCount || 0} 行，${result.chunkCount || 0} 个 chunks。`);
                       return;
@@ -746,6 +746,19 @@ export async function bindDataEvents_ACU(): Promise<void> {
             loadTemplatePresetSelect_ACU({ globalSelectName, keepGlobalValue });
         };
 
+        const applyChatTemplateWithDestructiveConfirmation_ACU = async (apply: (destructiveChangeConfirmed: boolean) => Promise<any>) => {
+            const firstResult = await apply(false);
+            if (!firstResult || firstResult.saved !== false || !Array.isArray(firstResult.blockers)) return firstResult;
+            const destructiveBlockers = firstResult.blockers.filter((blocker: unknown) => (
+                typeof blocker === 'string' && /删除(?:表|列).+需要显式确认/.test(blocker)
+            ));
+            if (destructiveBlockers.length === 0) return firstResult;
+            const confirmed = confirm(
+                `此模板变更会删除现有表或列：\n${destructiveBlockers.join('\n')}\n\n确认后将按 V2 原子提交执行。删除的数据只能通过聊天备份或 checkpoint 恢复。`,
+            );
+            return confirmed ? apply(true) : firstResult;
+        };
+
         const persistCurrentTemplateChatSnapshot_ACU = async ({ source = 'ui_chat_save', presetName = null, showToast = true } = {}) => {
             const selectedChatPresetName = normalizeTemplatePresetSelectionValue_ACU(
                 jQuery_API_ACU($templateChatPresetSelect_ACU).val(),
@@ -753,24 +766,32 @@ export async function bindDataEvents_ACU(): Promise<void> {
             const resolvedPresetName = presetName === null
                 ? (selectedChatPresetName || resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true }))
                 : normalizeTemplatePresetSelectionValue_ACU(presetName);
-            const guideData = getChatSheetGuideDataForIsolationKey_ACU(getCurrentIsolationKey_ACU());
-            persistTemplateScopeSelectionState_ACU(resolvedPresetName, {
+            const applied = await applyChatTemplateWithDestructiveConfirmation_ACU(destructiveChangeConfirmed => applyTemplateSnapshotToScope_ACU(TABLE_TEMPLATE_ACU, {
+                scope: 'chat',
                 source,
-                updateGlobal: false,
                 save: true,
                 persistChatScope: true,
-                templateSource: TABLE_TEMPLATE_ACU,
-                guideData,
-                scopeMode: 'chat_override',
-                registerChatPresetEntry: true,
-            });
-            applyTemplateScopeForCurrentChat_ACU();
-            try { await refreshMergedDataAndNotifyWithUI_ACU(); } catch (e) {}
+                presetName: resolvedPresetName,
+                registerChatPresetEntry: false,
+                destructiveChangeConfirmed,
+            }));
+            if (!applied || ('saved' in applied && applied.saved === false)) {
+                const error = applied && typeof applied === 'object' && 'error' in applied && typeof applied.error === 'string'
+                    ? applied.error
+                    : '当前聊天模板预设保存失败。';
+                showToastr_ACU('error', error, { acuToastCategory: ACU_TOAST_CATEGORY_ACU.ERROR });
+                return false;
+            }
             refreshPresetUIAfterSwitch_ACU({ keepTemplateGlobalValue: true });
             if (showToast) {
-                showToastr_ACU('success', `当前聊天预设已保存${resolvedPresetName ? `（预设名：${resolvedPresetName}）` : '（默认预设）'}；后续在此聊天再次保存会直接覆盖同名聊天预设。`, {
-                    acuToastCategory: ACU_TOAST_CATEGORY_ACU.IMPORT,
-                });
+                const warning = typeof applied === 'object' && 'postCommitWarning' in applied && typeof applied.postCommitWarning === 'string'
+                    ? applied.postCommitWarning
+                    : '';
+                showToastr_ACU(
+                    warning ? 'warning' : 'success',
+                    warning || `当前聊天预设已保存${resolvedPresetName ? `（预设名：${resolvedPresetName}）` : '（默认预设）'}；后续在此聊天再次保存会直接覆盖同名聊天预设。`,
+                    { acuToastCategory: warning ? ACU_TOAST_CATEGORY_ACU.ERROR : ACU_TOAST_CATEGORY_ACU.IMPORT },
+                );
             }
             return true;
         };
@@ -827,15 +848,21 @@ export async function bindDataEvents_ACU(): Promise<void> {
                 const name = normalizeTemplatePresetSelectionValue_ACU(jQuery_API_ACU(this).val());
                 const displayName = name || '默认预设';
                 showToastr_ACU('info', `正在切换当前聊天模板预设：${displayName}...`, { acuToastCategory: ACU_TOAST_CATEGORY_ACU.IMPORT });
-                const result = await applyTemplatePresetToCurrent_ACU(name, {
+                const result = await applyChatTemplateWithDestructiveConfirmation_ACU(destructiveChangeConfirmed => applyTemplatePresetToCurrent_ACU(name, {
                     source: 'ui_chat_select',
                     updateGlobal: false,
                     save: true,
                     persistChatScope: true,
-                });
-                if (result) {
+                    destructiveChangeConfirmed,
+                }));
+                if (result && (!(typeof result === 'object' && 'saved' in result) || result.saved !== false)) {
                     refreshPresetUIAfterSwitch_ACU({ keepTemplateGlobalValue: true });
-                    if ((result as any).mode === 'chat_override') {
+                    const warning = typeof result === 'object' && 'postCommitWarning' in result && typeof result.postCommitWarning === 'string'
+                        ? result.postCommitWarning
+                        : '';
+                    if (warning) {
+                        showToastr_ACU('warning', warning, { acuToastCategory: ACU_TOAST_CATEGORY_ACU.ERROR });
+                    } else if ((result as any).mode === 'chat_override') {
                         showToastr_ACU('success', `当前聊天已切换到本地模板预设：${displayName}`, { acuToastCategory: ACU_TOAST_CATEGORY_ACU.IMPORT });
                     } else {
                         showToastr_ACU('success', `当前聊天已切换到引用预设：${displayName}；当前聊天尚未生成本地快照。`, { acuToastCategory: ACU_TOAST_CATEGORY_ACU.IMPORT });
@@ -1040,22 +1067,21 @@ export async function bindDataEvents_ACU(): Promise<void> {
                                 fallbackLabel: selectedChatPresetName || fallbackLabel,
                             }) || selectedChatPresetName || fallbackLabel,
                         );
-                        const applied = await applyTemplateSnapshotToScope_ACU(prepared.templateStr, {
-                            scope: 'chat',
+                        const applied = await applyChatTemplateWithDestructiveConfirmation_ACU(destructiveChangeConfirmed => applyChatTemplateSnapshotWithReconciliation_ACU(prepared.templateObj, {
                             source: 'ui_chat_import',
                             presetName,
-                            save: true,
-                            persistChatScope: true,
-                            registerChatPresetEntry: true,
-                        });
-                        if (!applied) {
-                            throw new Error('模板结构无效，无法生成当前聊天模板预设。');
+                            destructiveChangeConfirmed,
+                        }));
+                        if (!applied.saved) {
+                            throw new Error(applied.error || '模板结构无效，无法生成当前聊天模板预设。');
                         }
-                        try { await refreshMergedDataAndNotifyWithUI_ACU(); } catch (e) {}
                         refreshPresetUIAfterSwitch_ACU({ keepTemplateGlobalValue: true });
-                        showToastr_ACU('success', `当前聊天模板预设已导入${presetName ? `（预设名：${presetName}）` : ''}；同名聊天预设会直接覆盖。`, {
-                            acuToastCategory: ACU_TOAST_CATEGORY_ACU.IMPORT,
-                        });
+                        const warning = typeof applied.postCommitWarning === 'string' ? applied.postCommitWarning : '';
+                        showToastr_ACU(
+                            warning ? 'warning' : 'success',
+                            warning || `当前聊天模板预设已导入${presetName ? `（预设名：${presetName}）` : ''}；同名聊天预设会直接覆盖。`,
+                            { acuToastCategory: warning ? ACU_TOAST_CATEGORY_ACU.ERROR : ACU_TOAST_CATEGORY_ACU.IMPORT },
+                        );
                     } catch (error) {
                         logError_ACU('[TemplateScope] 导入当前聊天模板预设失败:', error);
                         showToastr_ACU('error', `导入当前聊天模板预设失败: ${error.message}`, { acuToastCategory: ACU_TOAST_CATEGORY_ACU.ERROR, timeOut: 10000 });

@@ -5,8 +5,6 @@ export interface ManualCatchUpSheetPlanInput_ACU {
   batchSize: number;
   requestOptions?: Record<string, unknown> | null;
   updateMode?: string;
-  mergeBaseMaxMessageIndex?: number;
-  useLatestRuntimeMergeBase?: boolean;
   executionKind?: 'sql' | 'standard';
 }
 
@@ -17,8 +15,6 @@ export interface ManualCatchUpGroup_ACU {
   sheetKeys: string[];
   requestOptions: Record<string, unknown> | null;
   updateMode: string;
-  mergeBaseMaxMessageIndex?: number;
-  useLatestRuntimeMergeBase?: boolean;
   executionKind: 'sql' | 'standard';
 }
 
@@ -69,8 +65,6 @@ function compatibilityKey_ACU(input: ManualCatchUpSheetPlanInput_ACU): string {
     batchSize: normalizedPositiveInteger_ACU(input.batchSize, 1),
     requestOptions: input.requestOptions || null,
     updateMode: input.updateMode || 'manual_independent',
-    mergeBaseMaxMessageIndex: Number.isInteger(input.mergeBaseMaxMessageIndex) ? input.mergeBaseMaxMessageIndex : null,
-    useLatestRuntimeMergeBase: input.useLatestRuntimeMergeBase === true,
     executionKind: input.executionKind || 'standard',
   });
 }
@@ -84,8 +78,6 @@ function buildGroup_ACU(key: string, inputs: ManualCatchUpSheetPlanInput_ACU[]):
     sheetKeys: inputs.map(input => input.sheetKey).sort(),
     requestOptions: first.requestOptions || null,
     updateMode: first.updateMode || 'manual_independent',
-    ...(Number.isInteger(first.mergeBaseMaxMessageIndex) ? { mergeBaseMaxMessageIndex: first.mergeBaseMaxMessageIndex } : {}),
-    ...(first.useLatestRuntimeMergeBase === true ? { useLatestRuntimeMergeBase: true } : {}),
     executionKind: first.executionKind || 'standard',
   };
 }

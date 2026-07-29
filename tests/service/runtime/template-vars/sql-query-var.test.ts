@@ -5,7 +5,7 @@
  * 策略：用真实 SqliteEngine 作为后端，mock getStorageProvider 返回一个
  * 包装了真实引擎的 provider，这样 ORM 查询能真正执行 SQL。
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import { SqliteEngine } from '../../../../src/data/sqlite/sqlite-engine';
 
 // ═══════════════════════════════════════════════════════════════
@@ -31,6 +31,14 @@ vi.mock('../../../../src/service/table/storage-mode', () => ({
 
 // mock table-storage-strategy
 vi.mock('../../../../src/service/table/table-storage-strategy', () => ({
+  isStorageRuntimeReadyForSyncRead_ACU: vi.fn(() => true),
+  getStorageRuntimeHealth_ACU: vi.fn(() => ({
+    status: 'ready',
+    expectedMode: 'sqlite',
+    activeMode: 'sqlite',
+    loadToken: 1,
+  })),
+  getActiveStorageProvider: vi.fn(() => null),
   getStorageProvider: vi.fn(() => ({
     mode: 'sqlite' as const,
     executeQuery: (sql: string, params?: any[], options?: { suppressErrorLog?: boolean }) => {
@@ -65,13 +73,37 @@ const CHARACTERS_DDL = `CREATE TABLE characters ( -- 重要人物表
   status TEXT DEFAULT '存活' -- 状态
 );`;
 
+// DDL 原始名、sheet key、uid 与显示名均不同，故意不在 DDL 首行添加显示名注释。
+// 旧 NameMapper 无法识别该表，只有运行时共享 resolver 能安全绑定到 zabiao。
+const MISC_DDL = `CREATE TABLE legacy_misc (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  old_title TEXT, -- 名称
+  old_description TEXT -- 描述
+);`;
+
+const MISC_TABLE_DATA = {
+  mate: { type: 'acu', version: 1 },
+  sheet_misc: {
+    uid: 'misc_uid',
+    name: '杂表',
+    sourceData: { ddl: MISC_DDL },
+    content: [['row_id', '名称', '描述'], ['1', '已探索地点概览', '这里是描述']],
+  },
+};
+
 let _mapper: NameMapper;
+let _mapperStatus: { ready: boolean; tableCount: number; binding: 'unbound' | 'empty_schema' | 'bound' } = {
+  ready: true,
+  tableCount: 2,
+  binding: 'bound',
+};
 
 vi.mock('../../../../src/service/runtime/template-vars/name-mapper', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../../../src/service/runtime/template-vars/name-mapper')>();
   return {
     ...original,
     getNameMapper: vi.fn(() => _mapper),
+    getGlobalNameMapperStatus_ACU: vi.fn(() => _mapperStatus),
   };
 });
 
@@ -84,8 +116,9 @@ import {
   evaluateDbCondition,
   evaluateSqlCondition,
 } from '../../../../src/service/runtime/template-vars/sql-query-var';
+import { _set_currentJsonTableData_ACU } from '../../../../src/service/runtime/state-manager';
 import { renderAgentReadOnlyQueryTemplates_ACU } from '../../../../src/service/runtime/template-vars/agent-read-only-template-render';
-import { logError_ACU, logWarn_ACU } from '../../../../src/shared/utils';
+import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../../../src/shared/utils';
 
 // ═══════════════════════════════════════════════════════════════
 // 测试套件
@@ -94,6 +127,12 @@ describe('sql-query-var', () => {
   beforeEach(() => {
     vi.mocked(logWarn_ACU).mockClear();
     vi.mocked(logError_ACU).mockClear();
+    vi.mocked(logDebug_ACU).mockClear();
+    _mapperStatus = { ready: true, tableCount: 2, binding: 'bound' };
+  });
+
+  afterEach(() => {
+    _set_currentJsonTableData_ACU(null);
   });
 
   beforeAll(async () => {
@@ -114,6 +153,10 @@ describe('sql-query-var', () => {
       "INSERT INTO characters VALUES (2, '角色B', 30, '死亡');",
       "INSERT INTO characters VALUES (3, '角色C', 20, '存活');",
     ]);
+    _engine.run('CREATE TABLE jiyaobiao (row_id INTEGER PRIMARY KEY, content TEXT);');
+    _engine.run("INSERT INTO jiyaobiao VALUES (1, '记录A');");
+    _engine.run('CREATE TABLE zabiao (row_id INTEGER PRIMARY KEY, old_title TEXT, old_description TEXT);');
+    _engine.run("INSERT INTO zabiao VALUES (1, '已探索地点概览', '这里是描述');");
 
     // 构建 NameMapper
     const ddlMap = new Map<string, string>();
@@ -123,6 +166,7 @@ describe('sql-query-var', () => {
   });
 
   afterAll(() => {
+    _set_currentJsonTableData_ACU(null);
     _engine.dispose();
   });
 
@@ -141,6 +185,43 @@ describe('sql-query-var', () => {
         const builder = new TableQueryBuilder('背包物品表');
         const result = builder.where('物品名称', '不存在').get('数量');
         expect(result).toBeNull();
+      });
+    });
+
+    describe('运行时共享别名解析', () => {
+      beforeEach(() => {
+        _set_currentJsonTableData_ACU(MISC_TABLE_DATA as any);
+      });
+
+      it('显示表名和显示列名在旧 NameMapper 无法识别时仍读取正确行', () => {
+        expect(new TableQueryBuilder('杂表')
+          .where('名称', '已探索地点概览')
+          .get('描述'))
+          .toBe('这里是描述');
+      });
+
+      it.each(['legacy_misc', 'sheet_misc', 'misc_uid', 'zabiao'])(
+        '支持表标识符形态 %s',
+        tableName => {
+          expect(new TableQueryBuilder(tableName)
+            .where('名称', '已探索地点概览')
+            .get('描述'))
+            .toBe('这里是描述');
+        },
+      );
+
+      it('ORM 表达式、模板变量和条件求值共享同一结果', () => {
+        const expression = "db.杂表.where('名称', '已探索地点概览').get('描述')";
+
+        expect(evaluateOrmExpression(expression)).toBe('这里是描述');
+        expect(replaceDbSqlVariables(`{[${expression}]}`)).toBe('这里是描述');
+        expect(evaluateDbCondition("db.杂表.where('名称', '已探索地点概览').exists()")).toBe(true);
+      });
+
+      it('Agent ORM renderer 复用相同的只读解析路径', () => {
+        expect(renderAgentReadOnlyQueryTemplates_ACU(
+          "{[db.杂表.where('名称', '已探索地点概览').get('描述')]}",
+        )).toMatchObject({ content: '这里是描述', executedCount: 1, rejectedCount: 0 });
       });
     });
 
@@ -601,6 +682,22 @@ describe('sql-query-var', () => {
     it('支持中文名翻译', () => {
       const result = evaluateRawSqlExpression('sql "SELECT 数量 FROM 背包物品表 WHERE 物品名称 = \'铁剑\'"');
       expect(result).toBe('3');
+    });
+
+    it('兼容 DDL 原始表名与显示列名到拼音物理标识符', () => {
+      _set_currentJsonTableData_ACU({
+        mate: { type: 'acu', version: 1 },
+        sheet_0: {
+          uid: 'sheet_0',
+          name: '纪要表',
+          sourceData: { ddl: 'CREATE TABLE chronicle (\n  row_id INTEGER PRIMARY KEY, -- 行号\n  content TEXT -- 内容\n);' },
+          content: [['row_id', '内容'], ['1', '记录A']],
+        },
+      } as any);
+
+      expect(evaluateRawSqlExpression('sql "SELECT 内容 FROM chronicle"')).toBe('记录A');
+      expect(evaluateSqlCondition("SELECT 1 FROM chronicle WHERE 内容 = '记录A'")).toBe(true);
+      _set_currentJsonTableData_ACU(null);
     });
 
     it('多行单列结果用换行分隔', () => {
@@ -1095,6 +1192,23 @@ describe('sql-query-var', () => {
       querySpy.mockRestore();
     });
 
+    it('通过代理只读标签兼容原始 DDL 表名与显示列名', () => {
+      _set_currentJsonTableData_ACU({
+        mate: { type: 'acu', version: 1 },
+        sheet_0: {
+          uid: 'sheet_0',
+          name: '纪要表',
+          sourceData: { ddl: 'CREATE TABLE chronicle (\n  row_id INTEGER PRIMARY KEY, -- 行号\n  content TEXT -- 内容\n);' },
+          content: [['row_id', '内容'], ['1', '记录A']],
+        },
+      } as any);
+
+      const result = renderAgentReadOnlyQueryTemplates_ACU('{[sql "SELECT 内容 FROM chronicle"]}');
+
+      expect(result).toMatchObject({ content: '记录A', executedCount: 1, rejectedCount: 0 });
+      _set_currentJsonTableData_ACU(null);
+    });
+
     it('executes allowlisted ORM chains without evaluating arbitrary JavaScript', () => {
       const result = renderAgentReadOnlyQueryTemplates_ACU("数量: {[db.背包物品表.where('物品名称', '铁剑').get('数量')]}");
       expect(result).toMatchObject({ content: '数量: 3', executedCount: 1, rejectedCount: 0 });
@@ -1197,4 +1311,36 @@ describe('sql-query-var', () => {
       expect(evaluateSqlCondition('SELECT COUNT(*) FROM inventory')).toBe(false);
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════
+  // NameMapper 就绪门禁
+  // ═══════════════════════════════════════════════════════════════
+  describe('NameMapper 就绪门禁', () => {
+    it('runtime 尚无表结构时按 debug 记录，不产生 WARN', () => {
+      _mapperStatus = { ready: false, tableCount: 0, binding: 'empty_schema' };
+      const content = "你有 {[db.背包物品表.where('物品名称', '铁剑').get('数量')]} 把铁剑";
+
+      expect(replaceDbSqlVariables(content)).toBe(content);
+      expect(vi.mocked(logWarn_ACU)).not.toHaveBeenCalled();
+      expect(vi.mocked(logDebug_ACU).mock.calls.some(([message]) => String(message).includes('运行时尚无表结构'))).toBe(true);
+    });
+
+    it('mapper 意外丢失时仍按 WARN 上报', () => {
+      _mapperStatus = { ready: false, tableCount: 0, binding: 'unbound' };
+
+      expect(evaluateDbCondition("db.背包物品表.count() > 0")).toBe(false);
+      expect(vi.mocked(logWarn_ACU).mock.calls.some(([message]) => String(message).includes('NameMapper 未就绪'))).toBe(true);
+    });
+
+    it('空 schema 与 mapper 丢失分别去重，不会互相压掉对方告警', () => {
+      _mapperStatus = { ready: false, tableCount: 0, binding: 'empty_schema' };
+      expect(evaluateDbCondition("db.背包物品表.count() > 0")).toBe(false);
+      expect(vi.mocked(logWarn_ACU)).not.toHaveBeenCalled();
+
+      _mapperStatus = { ready: false, tableCount: 0, binding: 'unbound' };
+      expect(evaluateDbCondition("db.背包物品表.count() > 0")).toBe(false);
+      expect(vi.mocked(logWarn_ACU).mock.calls.some(([message]) => String(message).includes('NameMapper 未就绪'))).toBe(true);
+    });
+  });
+
 });

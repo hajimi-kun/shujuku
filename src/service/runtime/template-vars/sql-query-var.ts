@@ -11,10 +11,13 @@
  *   {[sql "SELECT 列名 FROM 表名 WHERE 条件"]}
  */
 
-import { getStorageProvider } from '../../table/table-storage-strategy';
-import { getNameMapper } from './name-mapper';
+import { getStorageProvider, getStorageRuntimeHealth_ACU, isStorageRuntimeReadyForSyncRead_ACU } from '../../table/table-storage-strategy';
+import { currentJsonTableData_ACU } from '../state-manager';
+import { getGlobalNameMapperStatus_ACU, getNameMapper } from './name-mapper';
 import { isSqliteMode } from '../../table/storage-mode';
 import { logDebug_ACU, logWarn_ACU, logError_ACU } from '../../../shared/utils';
+import { resolveReadQuerySql_ACU } from '../../../shared/sql-read-resolver';
+import { resolveCurrentRuntimeReadSql_ACU } from '../read-query-resolver';
 
 // ═══════════════════════════════════════════════════════════════
 // 变量系统 — 存储 {[db...as X]} / {[sql...as X]} 的结果
@@ -22,6 +25,45 @@ import { logDebug_ACU, logWarn_ACU, logError_ACU } from '../../../shared/utils';
 
 /** 模块级变量存储（每次 replaceDbSqlVariables 调用时重置） */
 let _dbSqlVars: Record<string, string | number> = {};
+let lastBlockedQueryKey_ACU = '';
+
+function resolveTemplateReadSql_ACU(sql: string): string {
+  const mapper = getNameMapper();
+  return resolveReadQuerySql_ACU(sql, currentJsonTableData_ACU as any, mapper.translateSql.bind(mapper)).sql;
+}
+
+/**
+ * 模板渲染是同步路径，绝不能为了一个 SELECT 在这里创建未 hydrate 的 SQLite provider。
+ * 未就绪时 fail-closed，避免中文展示名被空 NameMapper 原样下发给 SQLite。
+ */
+function isTemplateQueryRuntimeReady_ACU(source: string): boolean {
+  if (!isStorageRuntimeReadyForSyncRead_ACU()) {
+    const health = getStorageRuntimeHealth_ACU();
+    const key = `${health.loadToken}:${health.status}:${source}`;
+    if (lastBlockedQueryKey_ACU !== key) {
+      lastBlockedQueryKey_ACU = key;
+      logWarn_ACU(`[SQL][readiness] 运行时未就绪，已跳过${source}查询: status=${health.status}, expected=${health.expectedMode}, active=${health.activeMode || 'none'}, code=${health.failureCode || 'none'}`);
+    }
+    return false;
+  }
+  const mapperStatus = getGlobalNameMapperStatus_ACU();
+  if (!mapperStatus.ready) {
+    const health = getStorageRuntimeHealth_ACU();
+    const key = `${health.loadToken}:mapper:${mapperStatus.binding}:${source}`;
+    if (lastBlockedQueryKey_ACU !== key) {
+      lastBlockedQueryKey_ACU = key;
+      if (mapperStatus.binding === 'empty_schema') {
+        // 新聊天首次填表前 runtime 就是空的，没有表可查。这是预期状态，
+        // 不能按异常反复 WARN，否则会掩盖真正的 mapper 丢失。
+        logDebug_ACU(`[SQL][readiness] 运行时尚无表结构，已跳过${source}查询。`);
+      } else {
+        logWarn_ACU(`[SQL][readiness] NameMapper 未就绪，已跳过${source}查询。`);
+      }
+    }
+    return false;
+  }
+  return true;
+}
 
 /** 获取变量值（供外部条件求值使用） */
 export function getDbSqlVariable(name: string): string | number | null {
@@ -360,8 +402,7 @@ export class TableQueryBuilder {
    * 语法：db.背包物品表.where('类别', '武器').value("SUM(数量) * 2")
    */
   value(expression: string): string | number | null {
-    const mapper = getNameMapper();
-    const translatedExpr = mapper.translateSql(expression);
+    const translatedExpr = resolveTemplateReadSql_ACU(expression);
     const sql = this._buildSelect(translatedExpr);
     const result = this._executeQuery(sql);
     if (result.values.length === 0) return null;
@@ -461,15 +502,20 @@ export class TableQueryBuilder {
   }
 
   private _executeQuery(sql: string): { columns: string[]; values: any[][] } {
+    if (!isTemplateQueryRuntimeReady_ACU('ORM')) {
+      if (this.options.throwOnQueryError === true) throw new Error('orm_runtime_not_ready');
+      return { columns: [], values: [] };
+    }
     try {
       const provider = getStorageProvider();
-      const result = provider.executeQuery(sql, undefined, {
+      const executableSql = resolveCurrentRuntimeReadSql_ACU(sql).sql;
+      const result = provider.executeQuery(executableSql, undefined, {
         suppressErrorLog: this.options.suppressQueryErrorLog === true,
       });
       return { columns: result.columns, values: result.values };
     } catch (e: any) {
       if (this.options.throwOnQueryError === true) throw new Error('orm_query_execution_failed');
-      logWarn_ACU(`[ORM] 查询执行失败: ${sql} → ${e?.message}`);
+      logWarn_ACU('[ORM] 查询执行失败: orm_query_execution_failed');
       return { columns: [], values: [] };
     }
   }
@@ -517,8 +563,8 @@ function execExpr(expression: string): string | number | null {
       logWarn_ACU('[db.expr] 空表达式');
       return null;
     }
-    const mapper = getNameMapper();
-    const translatedExpr = mapper.translateSql(expression.trim());
+    if (!isTemplateQueryRuntimeReady_ACU('db.expr')) return null;
+    const translatedExpr = resolveTemplateReadSql_ACU(expression.trim());
     const sql = `SELECT ${translatedExpr}`;
     const provider = getStorageProvider();
     const result = provider.executeQuery(sql);
@@ -547,6 +593,7 @@ function execRand(min: number, max: number): number {
       return 0;
     }
     if (lo > hi) { const tmp = lo; lo = hi; hi = tmp; }
+    if (!isTemplateQueryRuntimeReady_ACU('db.rand')) return 0;
     const range = hi - lo + 1;
     const provider = getStorageProvider();
     const result = provider.executeQuery(`SELECT ABS(RANDOM()) % ${range} + ${lo}`);
@@ -584,6 +631,7 @@ function execCalc(expression: string): number | null {
       logWarn_ACU(`[db.calc] 表达式包含未定义变量: ${expression}`);
       return null;
     }
+    if (!isTemplateQueryRuntimeReady_ACU('db.calc')) return null;
     const provider = getStorageProvider();
     const result = provider.executeQuery(`SELECT ${processed}`);
     if (result.values.length === 0) return null;
@@ -671,6 +719,7 @@ export function evaluateOrmExpression(expr: string): string {
   try {
     const trimmed = expr.trim();
     if (!trimmed) return '';
+    if (!isTemplateQueryRuntimeReady_ACU('ORM')) return '';
 
     // 确保表达式以 db. 开头
     const fullExpr = trimmed.startsWith('db.') ? trimmed : 'db.' + trimmed;
@@ -714,10 +763,13 @@ export function evaluateRawSqlExpression(expr: string, options: RawSqlEvaluation
       logWarn_ACU('[SQL] 空的 SQL 表达式');
       return '';
     }
+    if (!isTemplateQueryRuntimeReady_ACU('SQL')) {
+      if (options.throwOnError === true) throw new Error('sql_runtime_not_ready');
+      return '';
+    }
 
     // 通过 NameMapper 翻译中文名
-    const mapper = getNameMapper();
-    const translatedSql = mapper.translateSql(trimmed);
+    const translatedSql = resolveTemplateReadSql_ACU(trimmed);
 
     // 执行查询
     const provider = getStorageProvider();
@@ -735,7 +787,13 @@ export function evaluateRawSqlExpression(expr: string, options: RawSqlEvaluation
     return formatQueryResultAsText(result.columns, result.values);
   } catch (e: any) {
     if (options.throwOnError === true) throw new Error('sql_query_execution_failed');
-    logError_ACU(`[SQL] 表达式执行失败: ${expr} → ${e?.message}`);
+    const message = e?.message || String(e);
+    // 未建表属于预期时序（首次填表前模板 SELECT 先行），降级为 debug，避免刷 ERROR。
+    if (/no such table/i.test(message)) {
+      logDebug_ACU(`[SQL] 查询命中未建表（预期时序）: ${expr} → ${message}`);
+    } else {
+      logError_ACU(`[SQL] 表达式执行失败: ${expr} → ${message}`);
+    }
     return '';
   }
 }
@@ -754,6 +812,8 @@ export function evaluateRawSqlExpression(expr: string, options: RawSqlEvaluation
 export function replaceDbSqlVariables(content: string): string {
   if (!content || typeof content !== 'string') return content || '';
   if (!isSqliteMode()) return content;
+
+  if (!isTemplateQueryRuntimeReady_ACU('模板变量')) return content;
 
   // 每轮处理开始时重置变量存储
   clearDbSqlVariables();
@@ -786,6 +846,7 @@ export function replaceDbSqlVariables(content: string): string {
  */
 export function evaluateDbCondition(expression: string): boolean {
   if (!isSqliteMode()) return false;
+  if (!isTemplateQueryRuntimeReady_ACU('<if db>')) return false;
 
   try {
     const trimmed = expression.trim();
@@ -813,13 +874,13 @@ export function evaluateDbCondition(expression: string): boolean {
  */
 export function evaluateSqlCondition(expression: string): boolean {
   if (!isSqliteMode()) return false;
+  if (!isTemplateQueryRuntimeReady_ACU('<if sql>')) return false;
 
   try {
     // 直接传入 SQL 表达式，不需要包引号
     // evaluateRawSqlExpression 内部会处理 "sql " 前缀和引号剥离
     // 但这里的 expression 来自 <if sql="...">，本身就是纯 SQL，直接执行即可
-    const mapper = getNameMapper();
-    const translatedSql = mapper.translateSql(expression.trim());
+    const translatedSql = resolveTemplateReadSql_ACU(expression.trim());
     const provider = getStorageProvider();
     const result = provider.executeQuery(translatedSql);
     if (result.values.length === 0) return false;

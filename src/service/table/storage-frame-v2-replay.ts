@@ -1,17 +1,22 @@
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { getCurrentIsolationKey_ACU, independentTableStates_ACU } from '../runtime/state-manager';
 import type { TableDataObject_ACU, Sheet_ACU, Mate_ACU } from '../../shared/models/table-data';
-import { logError_ACU, logWarn_ACU } from '../../shared/utils';
+import { logError_ACU, logWarn_ACU, stripSeedRowsFromTemplate_ACU } from '../../shared/utils';
 import { SqliteEngine } from '../../data/sqlite/sqlite-engine';
 import { SyncBridge } from '../../data/sqlite/sync-bridge';
 import { normalizeSqlStructure, normalizeStatementValues } from '../../data/sqlite/sql-normalizer';
 import type { TableCheckpointV2_ACU, TableMutationLogEntryV2_ACU, TableMutationOperationV2_ACU, TablePatchV2_ACU, TableSheetCheckpointV2_ACU, TableStorageFrameV2_ACU } from './storage-frame-v2-types';
 import { isV2TagData_ACU } from './storage-strategy-resolver';
 import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
-import { getEffectiveSeedRowsForSheet_ACU, getSortedSheetKeys_ACU } from '../template/chat-scope';
+import { ensureStableRowIdsForSeedRows_ACU, getCurrentChatTemplateScopeState_ACU, getEffectiveSeedRowsForSheet_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, getSortedSheetKeys_ACU, sanitizeTemplateSnapshotForChat_ACU } from '../template/chat-scope';
 import { formatCanonicalRowIssues_ACU, isEmptyCanonicalRowId_ACU, normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
 import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../shared/stable-row-id-allocator';
 import { applySheetSchemaMigrationOperation_ACU } from './table-schema-migration';
+import { getPhysicalTableNameForSheet_ACU } from '../../shared/sheet-identity';
+import { parseDDLTableName } from '../../shared/ddl-utils';
+import { decodeSqlIdentifier_ACU, rebindSqlMutationTableReferences_ACU } from '../../shared/sql-mutation-table-rebind';
+import { auditTableDataForUpgrade_ACU } from './table-data-upgrade-audit';
+import { repairTableDataFromAudit_ACU } from './table-data-repair';
 
 interface V2FrameRef_ACU {
   messageIndex: number;
@@ -20,6 +25,25 @@ interface V2FrameRef_ACU {
 }
 
 export type TableScheduleSummaryV2_ACU = NonNullable<TableCheckpointV2_ACU['scheduleSummary']>;
+
+export type TableReplayBaseKindV2_ACU = 'full_checkpoint' | 'temporary_template_baseline';
+
+export interface TableReplayResultV2_ACU {
+  data: TableDataObject_ACU;
+  baseKind: TableReplayBaseKindV2_ACU;
+}
+
+export interface LoadTableStateFromFramesV2Options_ACU {
+  maxMessageIndex?: number;
+  updateRuntimeState?: boolean;
+  throwOnRecoveryRequired?: boolean;
+  /**
+   * 默认关闭，保留无锚点 artifacts 返回 null 的 fail-closed 契约。
+   * 开启后只允许从有效模板建立 header-only 临时基线，且仍拒绝孤立 data_replace。
+   * 写入编排器应同时开启 throwOnRecoveryRequired，避免把待确认恢复误当成空表。
+   */
+  allowTemporaryTemplateBaseline?: boolean;
+}
 
 function deepClone_ACU<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
@@ -62,6 +86,39 @@ function hasUnanchoredReplayArtifacts_ACU(frameRefs: V2FrameRef_ACU[]): boolean 
       || persistedFrame.manualRefillProgress !== undefined
       || hasHeadRevisionArtifact;
   });
+}
+
+export function hasUnanchoredReplayArtifactsForChatV2_ACU(
+  chatArg: any[] | null | undefined,
+  isolationKey: string,
+  options: { maxMessageIndex?: number } = {},
+): boolean {
+  const chat = Array.isArray(chatArg) ? chatArg : [];
+  const frameRefs = getV2FrameRefs_ACU(chat, isolationKey)
+    .filter(ref => options.maxMessageIndex === undefined || ref.messageIndex <= options.maxMessageIndex);
+  return hasUnanchoredReplayArtifacts_ACU(frameRefs);
+}
+
+function hasOrphanDataReplace_ACU(frameRefs: V2FrameRef_ACU[]): boolean {
+  return frameRefs.some(({ frame }) => (frame.logEntries || []).some(entry =>
+    (entry.operations || []).some(operation => operation?.kind === 'data_replace')));
+}
+
+function resolveTemporaryTemplateBaseline_ACU(chat: any[], isolationKey: string): TableDataObject_ACU | null {
+  const scopeState = getCurrentChatTemplateScopeState_ACU({ chat, isolationKey });
+  const globalSnapshot = scopeState ? null : getGlobalTemplateSnapshotForCurrentProfile_ACU();
+  const effectiveTemplate = scopeState?.templateStr || scopeState?.templateObj
+    || globalSnapshot?.templateObj || globalSnapshot?.templateStr;
+  const snapshot = sanitizeTemplateSnapshotForChat_ACU(effectiveTemplate || null);
+  if (!snapshot?.templateObj) return null;
+
+  const headerOnly = stripSeedRowsFromTemplate_ACU(deepClone_ACU(snapshot.templateObj));
+  if (!headerOnly || typeof headerOnly !== 'object' || Array.isArray(headerOnly)) return null;
+  if (!Object.keys(headerOnly).some(key => key.startsWith('sheet_'))) return null;
+
+  const state = headerOnly as TableDataObject_ACU;
+  normalizeReplayState_ACU(state, 'temporary template baseline');
+  return state;
 }
 
 function applyEventToScheduleSummary_ACU(
@@ -131,12 +188,13 @@ function getValidatedSheetCheckpoints_ACU(frame: TableStorageFrameV2_ACU): Table
     }
     if (checkpoint.timeline !== undefined) {
       const timeline = checkpoint.timeline;
-      if (timeline.kind !== 'sheet_introduction'
+      if ((timeline.kind !== 'sheet_introduction' && timeline.kind !== 'sheet_rebase'
+        && timeline.kind !== 'sheet_reveal' && timeline.kind !== 'sheet_hide')
         || !Number.isInteger(timeline.activateAtMessageIndex)
         || timeline.activateAtMessageIndex < 0
         || !Number.isInteger(timeline.afterSeq)
         || timeline.afterSeq < 0) {
-        throw new Error(`perSheetCheckpoints.${recordKey} 包含非法 introduction timeline`);
+        throw new Error(`perSheetCheckpoints.${recordKey} 包含非法 timeline`);
       }
     }
     return checkpoint;
@@ -223,10 +281,53 @@ interface SqlReplayRuntime_ACU {
 }
 
 function normalizeReplayState_ACU(state: TableDataObject_ACU, context: string): void {
-  const normalization = normalizeCanonicalTableRows_ACU(state);
-  if (normalization.errors.length > 0) {
-    throw new Error(`[V2 Replay] ${context} 行标识不合法：${formatCanonicalRowIssues_ACU(normalization.errors)}`);
+  const candidate = deepClone_ACU(state);
+  const normalization = normalizeCanonicalTableRows_ACU(candidate);
+  const canonicalIssues = [...normalization.errors, ...normalization.removedRows];
+  if (canonicalIssues.length > 0) {
+    throw new Error(`[V2 Replay] ${context} 行标识不合法：${formatCanonicalRowIssues_ACU(canonicalIssues)}`);
   }
+  replaceState_ACU(state, candidate);
+}
+
+function normalizeLegacyDuplicateCheckpointState_ACU(state: TableDataObject_ACU): void {
+  const probe = deepClone_ACU(state);
+  const normalization = normalizeCanonicalTableRows_ACU(probe);
+  const nonDuplicateErrors = normalization.errors.filter(issue => issue.reason !== 'duplicate_row_id');
+  if (normalization.removedRows.length > 0 || nonDuplicateErrors.length > 0) {
+    normalizeReplayState_ACU(state, 'full checkpoint');
+    return;
+  }
+
+  const audit = auditTableDataForUpgrade_ACU(state);
+  const duplicateIssues = audit.issues.filter(issue => (
+    issue.code === 'upgrade_duplicate_row_id'
+    || issue.code === 'upgrade_seed_pool_conflict'
+  ));
+  const unsupportedIssues = audit.issues.filter(issue => (
+    issue.code !== 'upgrade_duplicate_row_id'
+    && issue.code !== 'upgrade_seed_pool_conflict'
+  ));
+  if (audit.status === 'clean' && normalization.errors.length === 0) {
+    replaceState_ACU(state, probe);
+    return;
+  }
+  if (audit.status !== 'repairable' || duplicateIssues.length === 0 || unsupportedIssues.length > 0) {
+    normalizeReplayState_ACU(state, 'full checkpoint');
+    return;
+  }
+  const repair = repairTableDataFromAudit_ACU(audit);
+  if (repair.requiresConfirmation || !repair.candidateData || typeof repair.candidateData !== 'object') {
+    normalizeReplayState_ACU(state, 'full checkpoint');
+    return;
+  }
+  const candidate = repair.candidateData as TableDataObject_ACU;
+  normalizeReplayState_ACU(candidate, 'legacy duplicate row_id repair');
+  replaceState_ACU(state, candidate);
+  const affectedSheetKeys = [...new Set(repair.idRemap.map(remap => remap.sheetKey))];
+  logWarn_ACU(
+    `[V2 Replay] 旧 full checkpoint 含重复 row_id，已在内存副本中保留全部行并重映射 ${repair.idRemap.length} 行：${affectedSheetKeys.join(', ')}。原 storage frame 未修改。`,
+  );
 }
 
 async function ensureSqlReplayRuntime_ACU(runtime: SqlReplayRuntime_ACU, state: TableDataObject_ACU): Promise<void> {
@@ -239,7 +340,7 @@ async function ensureSqlReplayRuntime_ACU(runtime: SqlReplayRuntime_ACU, state: 
 
 function getExportedSqlReplayRuntimeState_ACU(runtime: SqlReplayRuntime_ACU, state: TableDataObject_ACU): TableDataObject_ACU {
   if (!runtime.loaded) return deepClone_ACU(state);
-  const next = runtime.syncBridge.exportToTableData((state.mate || { type: 'acu', version: 1 }) as Mate_ACU);
+  const next = runtime.syncBridge.exportToTableData((state.mate || { type: 'acu', version: 1 }) as Mate_ACU, { strict: true });
   normalizeReplayState_ACU(next, 'SQL 导出结果');
   return next;
 }
@@ -251,9 +352,44 @@ function exportSqlReplayRuntime_ACU(runtime: SqlReplayRuntime_ACU, state: TableD
 
 async function reloadSqlReplayRuntime_ACU(runtime: SqlReplayRuntime_ACU, state: TableDataObject_ACU): Promise<void> {
   if (!runtime.loaded) return;
-  runtime.engine.dispose();
-  runtime.loaded = false;
-  await ensureSqlReplayRuntime_ACU(runtime, state);
+  const nextEngine = new SqliteEngine();
+  const nextRuntime: SqlReplayRuntime_ACU = {
+    engine: nextEngine,
+    syncBridge: new SyncBridge(nextEngine),
+    loaded: false,
+  };
+  try {
+    await ensureSqlReplayRuntime_ACU(nextRuntime, state);
+  } catch (error) {
+    nextEngine.dispose();
+    throw error;
+  }
+
+  const previousEngine = runtime.engine;
+  runtime.engine = nextRuntime.engine;
+  runtime.syncBridge = nextRuntime.syncBridge;
+  runtime.loaded = true;
+  previousEngine.dispose();
+}
+
+function buildReplayCandidate_ACU(
+  runtime: SqlReplayRuntime_ACU | null,
+  state: TableDataObject_ACU,
+): TableDataObject_ACU {
+  return runtime?.loaded
+    ? getExportedSqlReplayRuntimeState_ACU(runtime, state)
+    : deepClone_ACU(state);
+}
+
+async function commitReplayCandidate_ACU(
+  runtime: SqlReplayRuntime_ACU | null,
+  state: TableDataObject_ACU,
+  candidate: TableDataObject_ACU,
+  context: string,
+): Promise<void> {
+  normalizeReplayState_ACU(candidate, context);
+  if (runtime?.loaded) await reloadSqlReplayRuntime_ACU(runtime, candidate);
+  replaceState_ACU(state, candidate);
 }
 
 async function applySheetCheckpointsForReplay_ACU(
@@ -262,12 +398,65 @@ async function applySheetCheckpointsForReplay_ACU(
   runtime: SqlReplayRuntime_ACU,
 ): Promise<void> {
   if (checkpoints.length === 0) return;
-  if (runtime.loaded) exportSqlReplayRuntime_ACU(runtime, state);
+  const candidate = buildReplayCandidate_ACU(runtime, state);
   for (const checkpoint of checkpoints) {
-    state[checkpoint.sheetKey] = deepClone_ACU(checkpoint.data);
+    if (checkpoint.timeline?.kind === 'sheet_hide') {
+      // hide：从 active replay state 移除该表的可见性（数据仍留存于 checkpoint.data 供后续 reveal）。
+      delete candidate[checkpoint.sheetKey];
+    } else {
+      // introduction / rebase / reveal：用 checkpoint.data 整表写入 replay state。
+      candidate[checkpoint.sheetKey] = deepClone_ACU(checkpoint.data);
+    }
   }
-  normalizeReplayState_ACU(state, '单表 checkpoint');
-  if (runtime.loaded) await reloadSqlReplayRuntime_ACU(runtime, state);
+  await commitReplayCandidate_ACU(runtime, state, candidate, '单表 checkpoint');
+}
+
+function buildReplaySqlTableAliases_ACU(
+  state: TableDataObject_ACU,
+  operation: Extract<TableMutationOperationV2_ACU, { kind: 'sql_batch' | 'sql_sheet_batch' }>,
+): Map<string, string> {
+  const isPlainSqlIdentifier = (value: unknown): value is string => (
+    typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_$]*$/.test(value)
+  );
+  const aliases = new Map<string, string>();
+  const conflicts = new Set<string>();
+  const addAlias = (alias: unknown, runtimeName: string): void => {
+    const normalized = decodeSqlIdentifier_ACU(alias).trim().toLowerCase();
+    if (!normalized || conflicts.has(normalized)) return;
+    const existing = aliases.get(normalized);
+    if (existing && existing !== runtimeName) {
+      aliases.delete(normalized);
+      conflicts.add(normalized);
+      return;
+    }
+    aliases.set(normalized, runtimeName);
+  };
+  for (const [sheetKey, value] of Object.entries(state)) {
+    if (!sheetKey.startsWith('sheet_')) continue;
+    const sheet = value as Sheet_ACU;
+    const runtimeName = getPhysicalTableNameForSheet_ACU(state, sheetKey);
+    addAlias(parseDDLTableName(String(sheet?.sourceData?.ddl || '')), runtimeName);
+    addAlias(runtimeName, runtimeName);
+    if (isPlainSqlIdentifier(sheetKey)) addAlias(sheetKey, runtimeName);
+    if (isPlainSqlIdentifier(sheetKey.slice('sheet_'.length))) addAlias(sheetKey.slice('sheet_'.length), runtimeName);
+    if (isPlainSqlIdentifier(sheet?.uid)) addAlias(sheet.uid, runtimeName);
+  }
+  if (operation.kind === 'sql_sheet_batch') {
+    // operation.tableName 是写入当时的历史物理表名，属于历史事实。
+    // 表可能已改名（原名/拼音名互换）或该 sheetKey 暂不在当前 replay state 中，
+    // 但只要能确定目标运行时表，就必须为历史名注册别名，否则这条增量会以
+    // no such table 让整次回放失败。
+    let target: string | null = null;
+    if (state[operation.sheetKey]) {
+      target = getPhysicalTableNameForSheet_ACU(state, operation.sheetKey);
+    } else {
+      // sheetKey 不在 state 中时，退而按历史表名在已注册别名里定位目标表。
+      const historical = decodeSqlIdentifier_ACU(operation.tableName).trim().toLowerCase();
+      target = aliases.get(historical) || null;
+    }
+    if (target) addAlias(operation.tableName, target);
+  }
+  return aliases;
 }
 
 async function applySqlBatchOperationV2_ACU(
@@ -278,9 +467,13 @@ async function applySqlBatchOperationV2_ACU(
   const statements = normalizeSqlStatementsForReplay_ACU(operation.statements || []);
   if (statements.length === 0) return;
   await ensureSqlReplayRuntime_ACU(runtime, state);
+  const replayStatements = rebindSqlMutationTableReferences_ACU(statements, buildReplaySqlTableAliases_ACU(state, operation), {
+    lenient: true,
+  });
   const params = Array.isArray(operation.params) ? operation.params : undefined;
-  runtime.engine.runBatch(statements, params);
+  runtime.engine.runBatch(replayStatements, params);
 }
+
 
 function assertMetaUpdateDoesNotChangeDdl_ACU(patch: Extract<TablePatchV2_ACU, { kind: 'meta_update' }>): void {
   const sourceData = patch.meta?.sourceData;
@@ -364,7 +557,11 @@ export function applyTablePatchV2_ACU(state: TableDataObject_ACU, patch: TablePa
   }
 
   if (patch.kind === 'row_delete') {
-    sheet.content = sheet.content.filter(row => !(Array.isArray(row) && row[0] === patch.rowId));
+    const targetRowId = String(patch.rowId ?? '').trim();
+    sheet.content = sheet.content.filter((row, index) => {
+      if (index === 0 || !Array.isArray(row)) return true;
+      return String(row[0] ?? '').trim() !== targetRowId;
+    });
     return;
   }
 
@@ -472,7 +669,8 @@ function materializeSeedRowsForDslReplay_ACU(sheet: Sheet_ACU): void {
   }
   if (!Array.isArray(seedRows) || seedRows.length === 0) return;
   const headerRow = Array.isArray(sheet.content[0]) ? deepClone_ACU(sheet.content[0]) : ['row_id'];
-  sheet.content = [headerRow, ...deepClone_ACU(seedRows)];
+  // 与实时 DSL 路径保持同一身份契约：只有明确的 seedRows 新行能在物化时补 row_id。
+  sheet.content = [headerRow, ...ensureStableRowIdsForSeedRows_ACU(seedRows)];
 }
 
 function applyTableEditDslOperationV2_ACU(state: TableDataObject_ACU, text: string): void {
@@ -531,10 +729,8 @@ export async function applyTableOperationV2_ACU(
 
   try {
     if (operation.kind === 'data_replace') {
-      if (effectiveRuntime?.loaded) exportSqlReplayRuntime_ACU(effectiveRuntime, state);
-      replaceState_ACU(state, operation.data);
-      normalizeReplayState_ACU(state, 'data_replace');
-      if (effectiveRuntime?.loaded) await reloadSqlReplayRuntime_ACU(effectiveRuntime, state);
+      const candidate = deepClone_ACU(operation.data);
+      await commitReplayCandidate_ACU(effectiveRuntime, state, candidate, 'data_replace');
       return;
     }
     if (operation.kind === 'sql_batch' || operation.kind === 'sql_sheet_batch') {
@@ -544,39 +740,30 @@ export async function applyTableOperationV2_ACU(
       return;
     }
     if (operation.kind === 'sheet_schema_migrate') {
-      const sourceState = effectiveRuntime?.loaded
-        ? getExportedSqlReplayRuntimeState_ACU(effectiveRuntime, state)
-        : state;
+      const sourceState = buildReplayCandidate_ACU(effectiveRuntime, state);
       const candidate = await applySheetSchemaMigrationOperation_ACU(sourceState, operation);
-      normalizeReplayState_ACU(candidate, 'sheet_schema_migrate');
-      if (effectiveRuntime?.loaded) {
-        await reloadSqlReplayRuntime_ACU(effectiveRuntime, candidate);
-      }
-      replaceState_ACU(state, candidate);
+      await commitReplayCandidate_ACU(effectiveRuntime, state, candidate, 'sheet_schema_migrate');
       return;
     }
     if (operation.kind === 'sheet_replace') {
-      if (effectiveRuntime?.loaded) exportSqlReplayRuntime_ACU(effectiveRuntime, state);
-      state[operation.sheetKey] = deepClone_ACU(operation.sheet);
-      normalizeReplayState_ACU(state, 'sheet_replace');
-      if (effectiveRuntime?.loaded) await reloadSqlReplayRuntime_ACU(effectiveRuntime, state);
+      const candidate = buildReplayCandidate_ACU(effectiveRuntime, state);
+      candidate[operation.sheetKey] = deepClone_ACU(operation.sheet);
+      await commitReplayCandidate_ACU(effectiveRuntime, state, candidate, 'sheet_replace');
       return;
     }
     if (operation.kind === 'row_upsert' || operation.kind === 'row_delete' || operation.kind === 'meta_update') {
       if (operation.kind === 'meta_update') {
         assertMetaUpdateDoesNotChangeDdl_ACU(operation);
       }
-      if (effectiveRuntime?.loaded) exportSqlReplayRuntime_ACU(effectiveRuntime, state);
-      applyTablePatchV2_ACU(state, operation);
-      normalizeReplayState_ACU(state, operation.kind);
-      if (effectiveRuntime?.loaded) await reloadSqlReplayRuntime_ACU(effectiveRuntime, state);
+      const candidate = buildReplayCandidate_ACU(effectiveRuntime, state);
+      applyTablePatchV2_ACU(candidate, operation);
+      await commitReplayCandidate_ACU(effectiveRuntime, state, candidate, operation.kind);
       return;
     }
     if (operation.kind === 'table_edit_dsl') {
-      if (effectiveRuntime?.loaded) exportSqlReplayRuntime_ACU(effectiveRuntime, state);
-      applyTableEditDslOperationV2_ACU(state, operation.text);
-      normalizeReplayState_ACU(state, 'table_edit_dsl');
-      if (effectiveRuntime?.loaded) await reloadSqlReplayRuntime_ACU(effectiveRuntime, state);
+      const candidate = buildReplayCandidate_ACU(effectiveRuntime, state);
+      applyTableEditDslOperationV2_ACU(candidate, operation.text);
+      await commitReplayCandidate_ACU(effectiveRuntime, state, candidate, 'table_edit_dsl');
       return;
     }
 
@@ -637,11 +824,11 @@ export function collectScheduleSummaryFromFramesV2_ACU(
   return summary;
 }
 
-export async function loadTableStateFromFramesV2_ACU(
+export async function loadTableStateFromFramesV2Detailed_ACU(
   chatArg?: any[],
   isolationKeyArg?: string,
-  options: { maxMessageIndex?: number; updateRuntimeState?: boolean } = {},
-): Promise<TableDataObject_ACU | null> {
+  options: LoadTableStateFromFramesV2Options_ACU = {},
+): Promise<TableReplayResultV2_ACU | null> {
   const chat = chatArg || getChatArray_ACU();
   if (!Array.isArray(chat) || chat.length === 0) return null;
 
@@ -649,20 +836,38 @@ export async function loadTableStateFromFramesV2_ACU(
   const frameRefs = getV2FrameRefs_ACU(chat, isolationKey)
     .filter(ref => options.maxMessageIndex === undefined || ref.messageIndex <= options.maxMessageIndex);
   const checkpointRef = [...frameRefs].reverse().find(ref => ref.frame.checkpoint?.kind === 'full');
+  const hasUnanchoredArtifacts = hasUnanchoredReplayArtifacts_ACU(frameRefs);
+  let baseKind: TableReplayBaseKindV2_ACU = 'full_checkpoint';
+  let state: TableDataObject_ACU;
+  let replayStartMessageIndex: number;
 
   if (!checkpointRef?.frame.checkpoint) {
-    if (hasUnanchoredReplayArtifacts_ACU(frameRefs)) {
+    if (!hasUnanchoredArtifacts) return null;
+    if (!options.allowTemporaryTemplateBaseline) {
       logWarn_ACU('[V2 Replay] 未找到 full checkpoint，检测到无锚点 V2 replay artifacts，拒绝恢复不完整 V2 表格数据。');
+      return null;
     }
-    return null;
-  }
-
-  const checkpoint = checkpointRef.frame.checkpoint;
-  const state: TableDataObject_ACU = deepClone_ACU(checkpoint.data);
-  normalizeReplayState_ACU(state, 'full checkpoint');
-  const replayStartMessageIndex = checkpointRef.messageIndex;
-  if (options.updateRuntimeState !== false) {
-    replayCheckpointSchedule_ACU(checkpoint, checkpointRef.aiFloor);
+    if (hasOrphanDataReplace_ACU(frameRefs)) {
+      const message = '[V2 Replay] 无锚点 artifacts 包含 data_replace，必须通过显式恢复确认，拒绝使用临时模板基线。';
+      logWarn_ACU(message);
+      if (options.throwOnRecoveryRequired) throw new Error(`${message} 请先在数据管理中执行 V2 恢复诊断并确认恢复。`);
+      return null;
+    }
+    const temporaryBaseline = resolveTemporaryTemplateBaseline_ACU(chat, isolationKey);
+    if (!temporaryBaseline) {
+      logWarn_ACU('[V2 Replay] 无锚点 artifacts 缺少同聊天同隔离域的有效模板，拒绝建立临时基线。');
+      return null;
+    }
+    state = temporaryBaseline;
+    baseKind = 'temporary_template_baseline';
+    replayStartMessageIndex = frameRefs[0]?.messageIndex ?? 0;
+    logWarn_ACU('[V2 Replay] 未找到 full checkpoint，正使用当前聊天模板的 header-only 临时基线回放；该状态不是持久化锚点。');
+  } else {
+    const checkpoint = checkpointRef.frame.checkpoint;
+    state = deepClone_ACU(checkpoint.data);
+    normalizeLegacyDuplicateCheckpointState_ACU(state);
+    replayStartMessageIndex = checkpointRef.messageIndex;
+    if (options.updateRuntimeState !== false) replayCheckpointSchedule_ACU(checkpoint, checkpointRef.aiFloor);
   }
 
   const runtime: SqlReplayRuntime_ACU = {
@@ -699,17 +904,23 @@ export async function loadTableStateFromFramesV2_ACU(
         try {
           await applyDueIntroductions(entry.seq);
           if (Array.isArray(entry.operations) && entry.operations.length > 0) {
-            for (const operation of entry.operations) {
-              await applyTableOperationV2_ACU(state, operation, runtime);
+            for (const [operationIndex, operation] of entry.operations.entries()) {
+              try {
+                await applyTableOperationV2_ACU(state, operation, runtime);
+              } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                throw new Error(
+                  `[V2 Replay] operation failed: messageIndex=${ref.messageIndex}, seq=${entry.seq}, operationIndex=${operationIndex}, kind=${String((operation as any)?.kind || 'unknown')}: ${message}`,
+                );
+              }
             }
           } else {
-            if (runtime.loaded) exportSqlReplayRuntime_ACU(runtime, state);
+            const candidate = buildReplayCandidate_ACU(runtime, state);
             // 兼容旧版 derived patch log；新 V2 不再写 patches。
             for (const patch of entry.patches || []) {
-              applyTablePatchV2_ACU(state, patch);
+              applyTablePatchV2_ACU(candidate, patch);
             }
-            normalizeReplayState_ACU(state, 'legacy patches');
-            if (runtime.loaded) await reloadSqlReplayRuntime_ACU(runtime, state);
+            await commitReplayCandidate_ACU(runtime, state, candidate, 'legacy patches');
           }
           if (options.updateRuntimeState !== false) {
             replayEventForState_ACU(entry, ref.aiFloor);
@@ -723,10 +934,19 @@ export async function loadTableStateFromFramesV2_ACU(
     }
 
     if (runtime.loaded) exportSqlReplayRuntime_ACU(runtime, state);
-    return state;
+    return { data: state, baseKind };
   } finally {
     runtime.engine.dispose();
   }
+}
+
+export async function loadTableStateFromFramesV2_ACU(
+  chatArg?: any[],
+  isolationKeyArg?: string,
+  options: LoadTableStateFromFramesV2Options_ACU = {},
+): Promise<TableDataObject_ACU | null> {
+  const result = await loadTableStateFromFramesV2Detailed_ACU(chatArg, isolationKeyArg, options);
+  return result?.data ?? null;
 }
 
 export async function validateCurrentChatTableRecovery_ACU(

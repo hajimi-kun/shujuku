@@ -4,19 +4,37 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+let mockCurrentJsonTableData: any = { mate: { type: 'acu', version: 1 }, sheet_0: { name: 'T', content: [['row_id'], ['1']] } };
+
 const mocks = vi.hoisted(() => ({
   refreshMergedDataAndNotifyWithUI: vi.fn().mockResolvedValue(undefined),
   executeQuery: vi.fn(() => ({ columns: ['id'], values: [[1]], rowCount: 1 })),
   executeMutation: vi.fn(() => ({ changes: 1, errors: [] })),
+  applyEditsBatch: vi.fn(() => ({ success: true, modifiedKeys: ['sheet_0'], appliedEdits: 2 })),
   applyEdits: vi.fn(() => ({ success: true, modifiedKeys: ['sheet_0'], appliedEdits: 2 })),
   saveToChat: vi.fn().mockResolvedValue({ saved: true, messageIndex: 3 }),
   persistTablesToChatMessage: vi.fn().mockResolvedValue({ saved: true, messageIndex: 3 }),
   getCurrentData: vi.fn(() => ({ mate: { type: 'acu', version: 1 }, sheet_0: { name: 'T', content: [['row_id'], ['1']] } })),
+  getNameMapper: vi.fn(),
+  translateSql: vi.fn((sql: string) => sql.replaceAll('背包物品表', 'inventory').replaceAll('物品名称', 'item_name').replaceAll('内容', 'content')),
+  resolveColumnName: vi.fn((_tableName: string, columnName: string) => columnName),
+  getChineseColumnName: vi.fn((_tableName: string, columnName: string) => columnName),
+  getChineseTableName: vi.fn((tableName: string) => tableName),
+  getStorageProvider: vi.fn(),
+  isSqliteMode: vi.fn(() => true),
+  isStorageRuntimeReadyForSyncRead: vi.fn(() => true),
+  getStorageRuntimeHealth: vi.fn(() => ({
+    status: 'ready',
+    expectedMode: 'sqlite',
+    activeMode: 'sqlite',
+    loadToken: 1,
+  })),
   runTableUpdateApplyWithScopeLock: vi.fn(async (_scopeKey: string, task: () => Promise<unknown>) => task()),
   reloadStorageProvider: vi.fn().mockResolvedValue(undefined),
   ensureStorageProviderReady: vi.fn().mockResolvedValue({
     executeQuery: vi.fn(() => ({ columns: ['id'], values: [[1]], rowCount: 1 })),
     executeMutation: vi.fn(() => ({ changes: 1, errors: [] })),
+    applyEditsBatch: vi.fn(() => ({ success: true, modifiedKeys: ['sheet_0'], appliedEdits: 2 })),
     applyEdits: vi.fn(() => ({ success: true, modifiedKeys: ['sheet_0'], appliedEdits: 2 })),
     saveToChat: vi.fn().mockResolvedValue({ saved: true, messageIndex: 3 }),
     getCurrentData: vi.fn(() => ({ mate: { type: 'acu', version: 1 }, sheet_0: { name: 'T', content: [['row_id'], ['1']] } })),
@@ -46,16 +64,27 @@ vi.mock('../../src/presentation/components/pipeline-ui-helpers', () => ({
 }));
 
 vi.mock('../../src/service/table/table-storage-strategy', () => ({
-  getStorageProvider: vi.fn(() => ({
+  getStorageProvider: mocks.getStorageProvider,
+  reloadStorageProvider: mocks.reloadStorageProvider,
+  ensureStorageProviderReady_ACU: mocks.ensureStorageProviderReady,
+  isStorageRuntimeReadyForSyncRead_ACU: mocks.isStorageRuntimeReadyForSyncRead,
+  getStorageRuntimeHealth_ACU: mocks.getStorageRuntimeHealth,
+}));
+
+vi.mock('../../src/service/table/storage-mode', () => ({
+  isSqliteMode: mocks.isSqliteMode,
+}));
+
+function createBareProvider_ACU() {
+  return {
     executeQuery: mocks.executeQuery,
     executeMutation: mocks.executeMutation,
     applyEdits: mocks.applyEdits,
+    applyEditsBatch: mocks.applyEditsBatch,
     saveToChat: mocks.saveToChat,
     getCurrentData: mocks.getCurrentData,
-  })),
-  reloadStorageProvider: mocks.reloadStorageProvider,
-  ensureStorageProviderReady_ACU: mocks.ensureStorageProviderReady,
-}));
+  };
+}
 
 vi.mock('../../src/service/chat/chat-service', () => ({
   getChatArray_ACU: mocks.getChatArray,
@@ -72,18 +101,24 @@ vi.mock('../../src/service/table/table-service', () => ({
 
 vi.mock('../../src/service/runtime/state-manager', () => ({
   currentChatFileIdentifier_ACU: 'chat-a',
-  currentJsonTableData_ACU: { mate: { type: 'acu', version: 1 }, sheet_0: { name: 'T', content: [['row_id'], ['1']] } },
+  get currentJsonTableData_ACU() { return mockCurrentJsonTableData; },
   getCurrentIsolationKey_ACU: vi.fn(() => 'iso-a'),
   _set_currentJsonTableData_ACU: vi.fn(),
 }));
 
 vi.mock('../../src/service/runtime/template-vars/name-mapper', () => ({
-  getNameMapper: vi.fn(() => ({
-    resolveColumnName: (_tableName: string, columnName: string) => columnName,
-    getChineseColumnName: (_tableName: string, columnName: string) => columnName,
-    getChineseTableName: (tableName: string) => tableName,
-  })),
+  getNameMapper: mocks.getNameMapper,
 }));
+
+vi.mock('../../src/service/runtime/read-query-resolver', async () => {
+  const { resolveReadQuerySql_ACU } = await import('../../src/shared/sql-read-resolver');
+  return {
+    resolveCurrentRuntimeReadSql_ACU: (sql: string) => {
+      const mapper = mocks.getNameMapper();
+      return resolveReadQuerySql_ACU(sql, mockCurrentJsonTableData, mapper.translateSql.bind(mapper));
+    },
+  };
+});
 
 vi.mock('../../src/service/table/table-update-queue', () => ({
   buildTableUpdateApplyScopeKey_ACU: vi.fn((parts: any) => `${parts.chatKey}::${parts.isolationKey}::${parts.targetMessageIndex}`),
@@ -95,7 +130,7 @@ vi.mock('../../src/service/table/table-write-transaction', () => ({
   runTableWriteTransaction_ACU: mocks.runTableWriteTransaction,
 }));
 
-import { createSqlApi, isSqlReadStatement_ACU } from '../../src/presentation/bootstrap/api-groups/sql-api';
+import { createSqlApi, installRuntimeGatedSqlReadApi_ACU, isSqlReadStatement_ACU } from '../../src/presentation/bootstrap/api-groups/sql-api';
 
 describe('isSqlReadStatement_ACU', () => {
   it('识别查询类 SQL', () => {
@@ -123,9 +158,20 @@ describe('createSqlApi', () => {
   const ctx: any = { getApi: () => ({ _notifyTableUpdate: vi.fn() }) };
 
   beforeEach(() => {
+    mockCurrentJsonTableData = { mate: { type: 'acu', version: 1 }, sheet_0: { name: 'T', content: [['row_id'], ['1']] } };
     vi.clearAllMocks();
+    mocks.isSqliteMode.mockReturnValue(true);
+    mocks.isStorageRuntimeReadyForSyncRead.mockReturnValue(true);
+    mocks.getStorageProvider.mockImplementation(createBareProvider_ACU);
+    mocks.getNameMapper.mockReturnValue({
+      translateSql: mocks.translateSql,
+      resolveColumnName: mocks.resolveColumnName,
+      getChineseColumnName: mocks.getChineseColumnName,
+      getChineseTableName: mocks.getChineseTableName,
+    });
     mocks.executeQuery.mockReturnValue({ columns: ['id'], values: [[1]], rowCount: 1 });
     mocks.executeMutation.mockReturnValue({ changes: 1, errors: [] });
+    mocks.applyEditsBatch.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'], appliedEdits: 2 });
     mocks.applyEdits.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'], appliedEdits: 2 });
     mocks.saveToChat.mockResolvedValue({ saved: true, messageIndex: 3 });
     mocks.persistTablesToChatMessage.mockResolvedValue({ saved: true, messageIndex: 3 });
@@ -134,6 +180,7 @@ describe('createSqlApi', () => {
       executeQuery: mocks.executeQuery,
       executeMutation: mocks.executeMutation,
       applyEdits: mocks.applyEdits,
+      applyEditsBatch: mocks.applyEditsBatch,
       saveToChat: mocks.saveToChat,
       getCurrentData: mocks.getCurrentData,
     });
@@ -154,6 +201,36 @@ describe('createSqlApi', () => {
     api = createSqlApi(ctx);
   });
 
+  it('全局只读 SQL 方法仅在 SQLite runtime ready 后可见', () => {
+    const publishedApi: Record<string, any> = { ...api };
+    installRuntimeGatedSqlReadApi_ACU(publishedApi, api);
+
+    mocks.isSqliteMode.mockReturnValue(false);
+    expect(publishedApi.querySql).toBeUndefined();
+    expect(publishedApi.executeSqlQuery).toBeUndefined();
+    expect(publishedApi.queryTableRows).toBeUndefined();
+
+    mocks.isSqliteMode.mockReturnValue(true);
+    mocks.isStorageRuntimeReadyForSyncRead.mockReturnValue(false);
+    expect(publishedApi.querySql).toBeUndefined();
+
+    mocks.isStorageRuntimeReadyForSyncRead.mockReturnValue(true);
+    expect(publishedApi.querySql).toBe(api.querySql);
+    expect(publishedApi.executeSqlQuery).toBe(api.executeSqlQuery);
+    expect(publishedApi.queryTableRows).toBe(api.queryTableRows);
+  });
+
+  it('聊天切换或重载导致 runtime 失去 ready 时会重新隐藏只读 SQL 方法', () => {
+    const publishedApi: Record<string, any> = { ...api };
+    installRuntimeGatedSqlReadApi_ACU(publishedApi, api);
+
+    expect(typeof publishedApi.querySql).toBe('function');
+    mocks.isStorageRuntimeReadyForSyncRead.mockReturnValue(false);
+    expect(publishedApi.querySql).toBeUndefined();
+    mocks.isStorageRuntimeReadyForSyncRead.mockReturnValue(true);
+    expect(typeof publishedApi.querySql).toBe('function');
+  });
+
   it('executeSqlQuery 调用 provider.executeQuery 并返回对象行', () => {
     const result = api.executeSqlQuery('SELECT * FROM inventory WHERE row_id = ?', [1]);
 
@@ -170,7 +247,86 @@ describe('createSqlApi', () => {
   it('queryTableRows 支持声明式分页查询', () => {
     api.queryTableRows({ tableName: 'T', columns: ['row_id'], where: { row_id: '1' }, limit: 20, offset: 10 });
 
-    expect(mocks.executeQuery).toHaveBeenCalledWith('SELECT `row_id` FROM `T` WHERE `row_id` = ? LIMIT ? OFFSET ?', ['1', 20, 10]);
+    expect(mocks.executeQuery).toHaveBeenCalledWith('SELECT `row_id` FROM `t` WHERE `row_id` = ? LIMIT ? OFFSET ?', ['1', 20, 10]);
+  });
+
+  it('queryTableRows 将唯一历史 DDL 名定位到显示名派生的 runtime 表', () => {
+    mockCurrentJsonTableData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: {
+        name: '纪要表',
+        sourceData: { ddl: 'CREATE TABLE chronicle (row_id INTEGER PRIMARY KEY, content TEXT);' },
+        content: [['row_id', 'content'], ['1', '记录']],
+      },
+    };
+
+    api.queryTableRows({ tableName: 'chronicle', columns: ['row_id'], limit: 20, offset: 0 });
+
+    expect(mocks.executeQuery).toHaveBeenCalledWith('SELECT `row_id` FROM `jiyaobiao` LIMIT ? OFFSET ?', [20, 0]);
+  });
+
+  it('queryTableRows 通过 uid 定位表，并接受显示列名与物理列名混用', () => {
+    mockCurrentJsonTableData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_misc: {
+        uid: 'misc_uid',
+        name: '杂表',
+        sourceData: {
+          ddl: 'CREATE TABLE legacy_misc (\n  row_id INTEGER PRIMARY KEY, -- 行号\n  old_title TEXT, -- 名称\n  old_description TEXT -- 描述\n);',
+        },
+        content: [['row_id', '名称', '描述'], ['1', '已探索地点概览', '这里是描述']],
+      },
+    };
+
+    api.queryTableRows({
+      tableName: 'misc_uid',
+      columns: ['old_description'],
+      where: { 名称: '已探索地点概览' },
+      orderBy: { column: '描述', direction: 'DESC' },
+      limit: 20,
+      offset: 0,
+    });
+
+    expect(mocks.executeQuery).toHaveBeenCalledWith(
+      'SELECT `old_description` FROM `zabiao` WHERE `old_title` = ? ORDER BY `old_description` DESC LIMIT ? OFFSET ?',
+      ['已探索地点概览', 20, 0],
+    );
+  });
+
+  it('queryTableRows 遇到重复表别名时 fail-closed 并记录 alias_conflict', () => {
+    mockCurrentJsonTableData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_a: {
+        uid: 'a_uid', name: '甲表',
+        sourceData: { ddl: 'CREATE TABLE shared_legacy (row_id INTEGER PRIMARY KEY);' },
+        content: [['row_id'], ['1']],
+      },
+      sheet_b: {
+        uid: 'b_uid', name: '乙表',
+        sourceData: { ddl: 'CREATE TABLE shared_legacy (row_id INTEGER PRIMARY KEY);' },
+        content: [['row_id'], ['1']],
+      },
+    };
+
+    expect(api.queryTableRows({ tableName: 'shared_legacy', columns: ['row_id'] })).toBeNull();
+    expect(mocks.executeQuery).not.toHaveBeenCalled();
+    expect(api.getLastSqlApiError()).toMatchObject({ method: 'queryTableRows', code: 'alias_conflict' });
+  });
+
+  it('executeSqlQuery 将原始 DDL 表名和显示列名重绑定到拼音物理标识符', () => {
+    mockCurrentJsonTableData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: {
+        name: '纪要表',
+        sourceData: { ddl: 'CREATE TABLE chronicle (\n  row_id INTEGER PRIMARY KEY, -- 行号\n  content TEXT -- 内容\n);' },
+        content: [['row_id', '内容'], ['1', '记录']],
+      },
+    };
+
+    const result = api.executeSqlQuery('SELECT 内容 FROM chronicle WHERE 内容 = ?', ['记录']);
+
+    expect(result).not.toBeNull();
+    expect(mocks.executeQuery).toHaveBeenCalledWith('SELECT content FROM jiyaobiao WHERE content = ?', ['记录']);
   });
 
   it('querySql 拒绝写语句', () => {
@@ -187,15 +343,94 @@ describe('createSqlApi', () => {
     expect(mocks.executeQuery).not.toHaveBeenCalled();
   });
 
-  it('executeSqlMutation 支持参数化单条写入并默认保存通知', async () => {
+  it('只读 SQL 在 runtime ready 时执行查询', () => {
+    const result = api.executeSqlQuery('SELECT * FROM inventory');
+
+    expect(result).toEqual({ columns: ['id'], values: [[1]], rowCount: 1, rows: [{ id: 1 }], sql: 'SELECT * FROM inventory', offset: 0 });
+    expect(mocks.getStorageProvider).toHaveBeenCalledOnce();
+    expect(mocks.isStorageRuntimeReadyForSyncRead).toHaveBeenCalledOnce();
+    expect(mocks.executeQuery).toHaveBeenCalledWith('SELECT * FROM inventory', undefined);
+  });
+
+  it('只读 SQL 会翻译中文表列名后执行', () => {
+    const sql = "SELECT 物品名称 FROM 背包物品表 WHERE 物品名称 = '铁剑'";
+
+    const result = api.executeSqlQuery(sql);
+
+    expect(result).toEqual(expect.objectContaining({ sql: "SELECT item_name FROM inventory WHERE item_name = '铁剑'" }));
+    expect(mocks.getNameMapper).toHaveBeenCalled();
+    expect(mocks.translateSql).toHaveBeenCalledOnce();
+    expect(mocks.translateSql.mock.calls[0][0]).toContain('__ACU_SQL_PROTECTED_0__');
+    expect(mocks.executeQuery).toHaveBeenCalledWith("SELECT item_name FROM inventory WHERE item_name = '铁剑'", undefined);
+  });
+
+  it('runtime 未就绪时拒绝只读 SQL，且不触发 provider 懒查询', () => {
+    mocks.isStorageRuntimeReadyForSyncRead.mockReturnValueOnce(false);
+    mocks.getStorageRuntimeHealth.mockReturnValueOnce({ status: 'degraded', expectedMode: 'sqlite', activeMode: 'native', loadToken: 2, failureCode: 'provider_fallback' });
+
+    expect(api.executeSqlQuery('SELECT * FROM inventory')).toBeNull();
+    expect(mocks.executeQuery).not.toHaveBeenCalled();
+  });
+
+  it('保留只读失败契约，并公开结构化最后错误', () => {
+    mocks.executeQuery.mockImplementationOnce(() => { throw new Error('no such table: missing_table'); });
+
+    expect(api.querySql('SELECT * FROM missing_table')).toBeNull();
+    expect(api.getLastSqlApiError()).toEqual(expect.objectContaining({
+      method: 'querySql',
+      code: 'table_not_found',
+      message: 'no such table: missing_table',
+    }));
+  });
+
+  it('无关 schema 别名冲突不掩盖缺失表错误', () => {
+    mockCurrentJsonTableData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: {
+        uid: 'sheet_0',
+        name: 'Alpha',
+        sourceData: { ddl: 'CREATE TABLE legacy (row_id INTEGER PRIMARY KEY);' },
+        content: [['row_id'], ['1']],
+      },
+      sheet_1: {
+        uid: 'sheet_1',
+        name: 'Legacy',
+        sourceData: { ddl: 'CREATE TABLE other (row_id INTEGER PRIMARY KEY);' },
+        content: [['row_id'], ['1']],
+      },
+    };
+    mocks.executeQuery.mockImplementationOnce(() => { throw new Error('no such table: missing_table'); });
+
+    expect(api.querySql('SELECT * FROM missing_table')).toBeNull();
+    expect(api.getLastSqlApiError()).toEqual(expect.objectContaining({
+      method: 'querySql',
+      code: 'table_not_found',
+      message: 'no such table: missing_table',
+    }));
+  });
+
+  it('executeSqlMutation 将唯一 DDL alias 重绑定为 runtime SQL，并记录 sql_sheet_batch', async () => {
+    mockCurrentJsonTableData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: {
+        name: 'T',
+        sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT);' },
+        content: [['row_id', 'name'], ['1', '旧值']],
+      },
+    };
+    mocks.getCurrentData.mockReturnValue(mockCurrentJsonTableData);
+
     const result = await api.executeSqlMutation('INSERT INTO inventory(name) VALUES (?)', ['铁剑']);
 
-    expect(mocks.executeMutation).toHaveBeenCalledWith('INSERT INTO inventory(name) VALUES (?)', ['铁剑']);
+    expect(mocks.executeMutation).toHaveBeenCalledWith('INSERT INTO t(name) VALUES (?)', ['铁剑']);
     expect(mocks.persistTablesToChatMessage).toHaveBeenCalledWith(expect.objectContaining({
       source: 'raw_sql_mutation',
-      targetSheetKeys: null,
+      targetSheetKeys: ['sheet_0'],
       trackingSheetKeys: [],
-      operations: [{ kind: 'sql_batch', statements: ['INSERT INTO inventory(name) VALUES (?)'], params: [['铁剑']] }],
+      operations: [{
+        kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 't',
+        statements: ['INSERT INTO t(name) VALUES (?)'], params: [['铁剑']], reason: 'manual_crud',
+      }],
     }));
     expect(mocks.refreshMergedDataAndNotifyWithUI).toHaveBeenCalledWith({ skipNotify: false });
     expect(result).toEqual({ changes: 1, errors: [], saved: true, messageIndex: 3 });
@@ -293,12 +528,13 @@ describe('createSqlApi', () => {
     expect(saveOptions.assumeCommitLock).toBe(true);
   });
 
-  it('executeSqlBatch 通过 applyEdits 执行多语句事务并保存受影响表', async () => {
+  it('executeSqlBatch 执行并持久化 runtime SQL 与 physical tableName', async () => {
     const sql = "INSERT INTO T VALUES (1, 'a'); UPDATE T SET name = 'b' WHERE row_id = 1;";
 
     const result = await api.executeSqlBatch(sql);
 
-    expect(mocks.applyEdits).toHaveBeenCalledWith(sql, 'raw_sql_api');
+    expect(mocks.applyEditsBatch).toHaveBeenCalledWith(["INSERT INTO t VALUES (1, 'a')", "UPDATE t SET name = 'b' WHERE row_id = 1"], 'raw_sql_api');
+    expect(mocks.applyEdits).not.toHaveBeenCalled();
     expect(mocks.runTableWriteTransaction).toHaveBeenCalledWith(expect.objectContaining({
       source: 'raw_sql_batch',
       writeSet: [{ kind: 'sheet', sheetKey: 'sheet_0' }],
@@ -307,7 +543,10 @@ describe('createSqlApi', () => {
       source: 'raw_sql_batch',
       targetSheetKeys: ['sheet_0'],
       trackingSheetKeys: [],
-      operations: [{ kind: 'sql_batch', statements: ["INSERT INTO T VALUES (1, 'a')", "UPDATE T SET name = 'b' WHERE row_id = 1"] }],
+      operations: [{
+        kind: 'sql_sheet_batch', sheetKey: 'sheet_0', tableName: 't',
+        statements: ["INSERT INTO t VALUES (1, 'a')", "UPDATE t SET name = 'b' WHERE row_id = 1"], reason: 'manual_crud',
+      }],
     }));
     expect(mocks.refreshMergedDataAndNotifyWithUI).toHaveBeenCalledWith({ skipNotify: false });
     expect(result).toEqual({
@@ -323,22 +562,22 @@ describe('createSqlApi', () => {
 
   it('executeSqlBatch 支持覆盖 applyEdits 推断的写回范围', async () => {
     await api.executeSqlBatch({
-      sql: "INSERT INTO inventory VALUES (1, 'a');",
-      targetSheetKeys: ['sheet_2'],
-      updateGroupKeys: ['sheet_2'],
-      trackingSheetKeys: ['sheet_2'],
+      sql: "INSERT INTO T VALUES (1, 'a');",
+      targetSheetKeys: ['sheet_0'],
+      updateGroupKeys: ['sheet_0'],
+      trackingSheetKeys: ['sheet_0'],
     });
 
     expect(mocks.persistTablesToChatMessage).toHaveBeenCalledWith(expect.objectContaining({
       source: 'raw_sql_batch',
-      targetSheetKeys: ['sheet_2'],
-      updateGroupKeys: ['sheet_2'],
-      trackingSheetKeys: ['sheet_2'],
+      targetSheetKeys: ['sheet_0'],
+      updateGroupKeys: ['sheet_0'],
+      trackingSheetKeys: ['sheet_0'],
     }));
   });
 
   it('executeSqlBatch 失败时返回错误且不保存', async () => {
-    mocks.applyEdits.mockImplementation(() => { throw new Error('rollback'); });
+    mocks.applyEditsBatch.mockImplementationOnce(() => { throw new Error('rollback'); });
 
     const result = await api.executeSqlBatch('INSERT INTO missing VALUES (1);');
 

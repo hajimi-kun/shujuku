@@ -1,0 +1,790 @@
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90me:/xiangmu/shujuku[39m
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateCell[2m > [22m[2m生成正确的 UPDATE SQL（列名为字符串）
+[22m[39m[TableUpdateCommit] updateCell:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateCell[2m > [22m[2mSQLite updateCell 在统一事务内执行
+[22m[39m[TableUpdateCommit] updateCell:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateCell[2m > [22m[2m生成正确的 UPDATE SQL（列名为数字索引）
+[22m[39m[TableUpdateCommit] updateCell:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateCell[2m > [22m[2mvalue 为 null 时生成 NULL
+[22m[39m[TableUpdateCommit] updateCell:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateCell[2m > [22m[2mvalue 包含单引号时正确转义
+[22m[39m[TableUpdateCommit] updateCell:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateCell[2m > [22m[2m历史 DDL 表名只能定位 sheet，写入必须使用显示名派生的 runtime 表名
+[22m[39m[TableUpdateCommit] updateCell:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateCell[2m > [22m[2m表不存在返回 false
+[22m[39mupdateCell: Table "不存在的表" not found.
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateCell[2m > [22m[2m列不存在返回 false
+[22m[39mupdateCell: Column mapping is unavailable. sheetKey=sheet_0, table=beibaowupinbiao, column=不存在的列; SQLite write was rejected.
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateCell[2m > [22m[2m行索引越界返回 false
+[22m[39mupdateCell: Row index 0 out of bounds in table "背包物品表".
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateCell[2m > [22m[2mSQL 执行失败返回 false
+[22m[39m[TableUpdateCommit] updateCell:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateCell[2m > [22m[2m运行时未就绪时拒绝写入且不持久化
+[22m[39m[TableUpdateCommit] updateCell:sqlite failed: Error: [StorageStrategy] sqlite 存储运行时未就绪，已阻止 SQL 写入。
+    at [90me:\xiangmu\shujuku\[39mtests\presentation\table-crud-api.test.ts:368:60
+    at [90mfile:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:155:11
+    at [90mfile:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:752:26
+    at [90mfile:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1897:20
+    at new Promise (<anonymous>)
+    at runWithTimeout [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1863:10[90m)[39m
+    at runTest [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1574:12[90m)[39m
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at runSuite [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1729:8[90m)[39m
+    at runSuite [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1729:8[90m)[39m
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateCell[2m > [22m[2mcurrentJsonTableData 为 null 返回 false
+[22m[39mupdateCell: No table data loaded.
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateCell[2m > [22m[2m已有历史数据时不把编辑器保存记为最新填表更新
+[22m[39m[TableUpdateCommit] updateCell:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateRow[2m > [22m[2m生成正确的 UPDATE SQL（多列）
+[22m[39m[TableUpdateCommit] updateRow:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateRow[2m > [22m[2m跳过 isImportMode 内部标记
+[22m[39m[TableUpdateCommit] updateRow:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateRow[2m > [22m[2m包含未解析列时原子拒绝，不能执行部分更新
+[22m[39mupdateRow: Column mapping is unavailable. sheetKey=sheet_0, table=beibaowupinbiao, column=不存在的列; SQLite write was rejected.
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateRow[2m > [22m[2m无有效列时返回 false（无效操作）
+[22m[39mupdateRow: Column mapping is unavailable. sheetKey=sheet_0, table=beibaowupinbiao, column=不存在的列; SQLite write was rejected.
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateRow[2m > [22m[2mrowIndex < 1 返回 false
+[22m[39mupdateRow: Cannot modify header row (index 0).
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateRow[2m > [22m[2m运行时未就绪时拒绝写入且不持久化
+[22m[39m[TableUpdateCommit] updateRow:sqlite failed: Error: [StorageStrategy] sqlite 存储运行时未就绪，已阻止 SQL 写入。
+    at [90me:\xiangmu\shujuku\[39mtests\presentation\table-crud-api.test.ts:441:60
+    at [90mfile:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:155:11
+    at [90mfile:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:752:26
+    at [90mfile:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1897:20
+    at new Promise (<anonymous>)
+    at runWithTimeout [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1863:10[90m)[39m
+    at runTest [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1574:12[90m)[39m
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at runSuite [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1729:8[90m)[39m
+    at runSuite [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1729:8[90m)[39m
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mupdateRow[2m > [22m[2mrow_id 不存在返回 false
+[22m[39mupdateRow: row_id not found at index 1
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2minsertRow[2m > [22m[2m生成正确的 INSERT SQL
+[22m[39m[TableUpdateCommit] insertRow:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2minsertRow[2m > [22m[2m跳过 row_id 列（自增）
+[22m[39m[TableUpdateCommit] insertRow:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2minsertRow[2m > [22m[2m空 data 生成 DEFAULT VALUES
+[22m[39m[TableUpdateCommit] insertRow:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2minsertRow[2m > [22m[2mvalue 为 null 时将 null 作为参数传递
+[22m[39m[TableUpdateCommit] insertRow:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2minsertRow[2m > [22m[2mvalue 包含单引号时传递原始值不作转义（由参数化查询处理）
+[22m[39m[TableUpdateCommit] insertRow:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2minsertRow[2m > [22m[2m表不存在返回 -1
+[22m[39minsertRow: Table "不存在的表" not found.
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2minsertRow[2m > [22m[2mSQL 执行失败返回 -1
+[22m[39m[TableUpdateCommit] insertRow:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2minsertRow[2m > [22m[2m包含未解析列时拒绝 INSERT，不能静默丢弃字段
+[22m[39minsertRow: Column mapping is unavailable. sheetKey=sheet_0, table=beibaowupinbiao, column=不存在的列; SQLite write was rejected.
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2minsertRow[2m > [22m[2m真实运行时 DB 约束失败时不写持久层
+[22m[39m[TableUpdateCommit] insertRow:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2minsertRow[2m > [22m[2m运行时未就绪时拒绝写入且不持久化
+[22m[39m[TableUpdateCommit] insertRow:sqlite failed: Error: [StorageStrategy] sqlite 存储运行时未就绪，已阻止 SQL 写入。
+    at [90me:\xiangmu\shujuku\[39mtests\presentation\table-crud-api.test.ts:527:60
+    at [90mfile:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:155:11
+    at [90mfile:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:752:26
+    at [90mfile:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1897:20
+    at new Promise (<anonymous>)
+    at runWithTimeout [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1863:10[90m)[39m
+    at runTest [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1574:12[90m)[39m
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at runSuite [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1729:8[90m)[39m
+    at runSuite [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1729:8[90m)[39m
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2minsertRow[2m > [22m[2m持久化失败时在同一公共提交模型内 reload 运行时
+[22m[39m[TableUpdateCommit] insertRow:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mdeleteRow[2m > [22m[2m生成正确的 DELETE SQL
+[22m[39m[TableUpdateCommit] deleteRow:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mdeleteRow[2m > [22m[2mrowIndex < 1 返回 false
+[22m[39mdeleteRow: Cannot delete header row (index 0).
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mdeleteRow[2m > [22m[2mrowIndex 越界返回 false
+[22m[39mdeleteRow: Row index 99 out of bounds.
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mdeleteRow[2m > [22m[2mrow_id 为 null 返回 false
+[22m[39mdeleteRow: row_id not found at index 1
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mdeleteRow[2m > [22m[2mSQL 执行失败返回 false
+[22m[39m[TableUpdateCommit] deleteRow:sqlite failed: Error: [vitest] No "rebindSqlMutationTableIdentifiers_ACU" export is defined on the "../../src/service/table/sql-table-service" mock. Did you forget to return it from "vi.mock"?
+If you need to partially mock a module, you can use "importOriginal" helper inside:
+
+    at VitestMocker.createError [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:284:17[90m)[39m
+    at Object.get [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/vitest@3.2.7_jsdom@29.1.1_lightningcss@1.32.0/node_modules/[4mvitest[24m/dist/chunks/execute.B7h3T_Hc.js:330:16[90m)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:212:9
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at [90me:\xiangmu\shujuku\[39msrc\service\table\table-update-commit.ts:134:25 {
+  codeFrame: [32m'vi\x1B[33m.\x1B[39m\x1B[34mmock\x1B[39m(\x1B[35mimport\x1B[39m(\x1B[32m"../../src/service/table/sql-table-service"\x1B[39m)\x1B[33m,\x1B[39m \x1B[35masync\x1B[39m (importOriginal) \x1B[33m=>\x1B[39m {\n'[39m +
+    [32m'  \x1B[35mconst\x1B[39m actual \x1B[33m=\x1B[39m \x1B[35mawait\x1B[39m \x1B[34mimportOriginal\x1B[39m()\n'[39m +
+    [32m'  \x1B[35mreturn\x1B[39m {\n'[39m +
+    [32m'    \x1B[33m...\x1B[39mactual\x1B[33m,\x1B[39m\n'[39m +
+    [32m'    \x1B[90m// your mocked methods\x1B[39m\n'[39m +
+    [32m'  }\n'[39m +
+    [32m'})'[39m
+}
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mdeleteRow[2m > [22m[2m运行时未就绪时拒绝写入且不持久化
+[22m[39m[TableUpdateCommit] deleteRow:sqlite failed: Error: [StorageStrategy] sqlite 存储运行时未就绪，已阻止 SQL 写入。
+    at [90me:\xiangmu\shujuku\[39mtests\presentation\table-crud-api.test.ts:606:60
+    at [90mfile:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:155:11
+    at [90mfile:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:752:26
+    at [90mfile:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1897:20
+    at new Promise (<anonymous>)
+    at runWithTimeout [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1863:10[90m)[39m
+    at runTest [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1574:12[90m)[39m
+[90m    at processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at runSuite [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1729:8[90m)[39m
+    at runSuite [90m(file:///e:/xiangmu/shujuku/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@3.2.7/node_modules/[4m@vitest[24m/runner/dist/chunk-hooks.js:1729:8[90m)[39m
+
+[90mstderr[2m | tests/presentation/table-crud-api.test.ts[2m > [22m[2mcreateTableCrudApi — SQLite 模式[2m > [22m[2mdeleteRow[2m > [22m[2m表不存在返回 false
+[22m[39mdeleteRow: Table "不存在的表" not found.
+
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mquoteIdentifier[2m > [22m普通英文标识符[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mquoteIdentifier[2m > [22m中文标识符[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mquoteIdentifier[2m > [22m包含反引号的标识符（转义）[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mquoteIdentifier[2m > [22m空字符串[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mquoteIdentifier[2m > [22m包含空格的标识符[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mquoteIdentifier[2m > [22m包含特殊字符的标识符[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mquoteIdentifier[2m > [22m多个反引号[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mfindTargetSheet[2m > [22m找到匹配的表[32m 10[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mfindTargetSheet[2m > [22m找不到表返回 null[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mfindTargetSheet[2m > [22mcurrentJsonTableData 为 null 返回 null[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mfindTargetSheet[2m > [22m跳过非 sheet_ 开头的键[32m 0[2mms[22m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m生成正确的 UPDATE SQL（列名为字符串）[32m 12[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22mSQLite updateCell 在统一事务内执行[32m 3[2mms[22m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m生成正确的 UPDATE SQL（列名为数字索引）[32m 1[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22mvalue 为 null 时生成 NULL[32m 1[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22mvalue 包含单引号时正确转义[32m 1[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m历史 DDL 表名只能定位 sheet，写入必须使用显示名派生的 runtime 表名[32m 3[2mms[22m[39m
+[31m   → expected false to be true // Object.is equality[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m表不存在返回 false[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m列不存在返回 false[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m行索引越界返回 false[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22mSQL 执行失败返回 false[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m运行时未就绪时拒绝写入且不持久化[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22mcurrentJsonTableData 为 null 返回 false[32m 0[2mms[22m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m已有历史数据时不把编辑器保存记为最新填表更新[32m 2[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ ObjectContaining{…} ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22m生成正确的 UPDATE SQL（多列）[32m 1[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22m跳过 isImportMode 内部标记[32m 1[2mms[22m[39m
+[31m   → Cannot read properties of undefined (reading '0')[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22m包含未解析列时原子拒绝，不能执行部分更新[32m 2[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22m无有效列时返回 false（无效操作）[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22mrowIndex < 1 返回 false[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22m运行时未就绪时拒绝写入且不持久化[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22mrow_id 不存在返回 false[32m 0[2mms[22m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m生成正确的 INSERT SQL[32m 1[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m跳过 row_id 列（自增）[32m 1[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m空 data 生成 DEFAULT VALUES[32m 1[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22mvalue 为 null 时将 null 作为参数传递[32m 1[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22mvalue 包含单引号时传递原始值不作转义（由参数化查询处理）[32m 1[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m表不存在返回 -1[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22mSQL 执行失败返回 -1[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m包含未解析列时拒绝 INSERT，不能静默丢弃字段[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m真实运行时 DB 约束失败时不写持久层[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m运行时未就绪时拒绝写入且不持久化[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m非 SQLite insertRow 使用最小未占用 row_id，并使 operation 身份与 cells 一致[32m 1[2mms[22m[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m持久化失败时在同一公共提交模型内 reload 运行时[32m 1[2mms[22m[39m
+[31m   → expected "spy" to be called at least once[39m
+ [31m×[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22m生成正确的 DELETE SQL[32m 1[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22mrowIndex < 1 返回 false[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22mrowIndex 越界返回 false[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22mrow_id 为 null 返回 false[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22mSQL 执行失败返回 false[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22m运行时未就绪时拒绝写入且不持久化[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22m表不存在返回 false[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 15 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m生成正确的 UPDATE SQL（列名为字符串）
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m297:42[22m[39m
+    [90m295| [39m    [34mit[39m([32m'生成正确的 UPDATE SQL（列名为字符串）'[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m296| [39m      [35mawait[39m api[33m.[39m[34mupdateCell[39m([32m'背包物品表'[39m[33m,[39m [34m1[39m[33m,[39m [32m'数量'[39m[33m,[39m [32m'10'[39m)[33m;[39m
+    [90m297| [39m      [34mexpect[39m(mockExecuteRuntimeMutation)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   | [39m                                         [31m^[39m
+    [90m298| [39m        'UPDATE `beibaowupinbiao` SET `quantity` = ? WHERE `row_id` = …
+    [90m299| [39m        [[32m'10'[39m[33m,[39m [32m'1'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m生成正确的 UPDATE SQL（列名为数字索引）
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m314:42[22m[39m
+    [90m312| [39m    [34mit[39m([32m'生成正确的 UPDATE SQL（列名为数字索引）'[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m313| [39m      [35mawait[39m api[33m.[39m[34mupdateCell[39m([32m'背包物品表'[39m[33m,[39m [34m1[39m[33m,[39m [34m1[39m[33m,[39m [32m'新铁剑'[39m)[33m;[39m
+    [90m314| [39m      [34mexpect[39m(mockExecuteRuntimeMutation)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   | [39m                                         [31m^[39m
+    [90m315| [39m        'UPDATE `beibaowupinbiao` SET `item_name` = ? WHERE `row_id` =…
+    [90m316| [39m        [[32m'新铁剑'[39m[33m,[39m [32m'1'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22mvalue 为 null 时生成 NULL
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m322:42[22m[39m
+    [90m320| [39m    [34mit[39m([32m'value 为 null 时生成 NULL'[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m321| [39m      [35mawait[39m api[33m.[39m[34mupdateCell[39m([32m'背包物品表'[39m[33m,[39m [34m1[39m[33m,[39m [32m'数量'[39m[33m,[39m [35mnull[39m)[33m;[39m
+    [90m322| [39m      [34mexpect[39m(mockExecuteRuntimeMutation)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   | [39m                                         [31m^[39m
+    [90m323| [39m        'UPDATE `beibaowupinbiao` SET `quantity` = ? WHERE `row_id` = …
+    [90m324| [39m        [[35mnull[39m[33m,[39m [32m'1'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22mvalue 包含单引号时正确转义
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m330:42[22m[39m
+    [90m328| [39m    [34mit[39m([32m'value 包含单引号时正确转义'[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m329| [39m      [35mawait[39m api[33m.[39m[34mupdateCell[39m([32m'背包物品表'[39m[33m,[39m [34m1[39m[33m,[39m [32m'物品名'[39m[33m,[39m [32m"铁剑'加强版"[39m)[33m;[39m
+    [90m330| [39m      [34mexpect[39m(mockExecuteRuntimeMutation)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   | [39m                                         [31m^[39m
+    [90m331| [39m        'UPDATE `beibaowupinbiao` SET `item_name` = ? WHERE `row_id` =…
+    [90m332| [39m        [[32m"铁剑'加强版"[39m[33m,[39m [32m'1'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m历史 DDL 表名只能定位 sheet，写入必须使用显示名派生的 runtime 表名
+[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- true[39m
+[31m+ false[39m
+
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m339:22[22m[39m
+    [90m337| [39m      [35mconst[39m result [33m=[39m [35mawait[39m api[33m.[39m[34mupdateCell[39m([32m'inventory'[39m[33m,[39m [34m1[39m[33m,[39m [32m'数量'[39m[33m,[39m [32m'10'[39m)[33m;[39m
+    [90m338| [39m
+    [90m339| [39m      [34mexpect[39m(result)[33m.[39m[34mtoBe[39m([35mtrue[39m)[33m;[39m
+    [90m   | [39m                     [31m^[39m
+    [90m340| [39m      [34mexpect[39m(mockExecuteRuntimeMutation)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m341| [39m        'UPDATE `beibaowupinbiao` SET `quantity` = ? WHERE `row_id` = …
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateCell[2m > [22m已有历史数据时不把编辑器保存记为最新填表更新
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ ObjectContaining{…} ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m397:46[22m[39m
+    [90m395| [39m      const { saveCurrentDataForTable_ACU } = await import('../../src/…
+    [90m396| [39m      expect(vi.mocked(saveCurrentDataForTable_ACU)).not.toHaveBeenCal…
+    [90m397| [39m      expect(mockPersistTablesToChatMessage).toHaveBeenCalledWith(expe…
+    [90m   | [39m                                             [31m^[39m
+    [90m398| [39m        source[33m:[39m [32m'manual_crud'[39m[33m,[39m
+    [90m399| [39m        targetSheetKeys[33m:[39m [[32m'sheet_0'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22m生成正确的 UPDATE SQL（多列）
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m411:42[22m[39m
+    [90m409| [39m    [34mit[39m([32m'生成正确的 UPDATE SQL（多列）'[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m410| [39m      [35mawait[39m api[33m.[39m[34mupdateRow[39m([32m'背包物品表'[39m[33m,[39m [34m1[39m[33m,[39m { [32m'物品名'[39m[33m:[39m [32m'钢剑'[39m[33m,[39m [32m'数量'[39m[33m:[39m [32m'7'[39m })[33m;[39m
+    [90m411| [39m      [34mexpect[39m(mockExecuteRuntimeMutation)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   | [39m                                         [31m^[39m
+    [90m412| [39m        'UPDATE `beibaowupinbiao` SET `item_name` = ?, `quantity` = ? …
+    [90m413| [39m        [[32m'钢剑'[39m[33m,[39m [32m'7'[39m[33m,[39m [32m'1'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mupdateRow[2m > [22m跳过 isImportMode 内部标记
+[31m[1mTypeError[22m: Cannot read properties of undefined (reading '0')[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m419:53[22m[39m
+    [90m417| [39m    [34mit[39m([32m'跳过 isImportMode 内部标记'[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m418| [39m      await api.updateRow('背包物品表', 1, { '物品名': '钢剑', isImportMode: tru…
+    [90m419| [39m      expect(mockExecuteRuntimeMutation.mock.calls[0][0] as string).no…
+    [90m   | [39m                                                    [31m^[39m
+    [90m420| [39m    })[33m;[39m
+    [90m421| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m生成正确的 INSERT SQL
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m462:42[22m[39m
+    [90m460| [39m    [34mit[39m([32m'生成正确的 INSERT SQL'[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m461| [39m      [35mawait[39m api[33m.[39m[34minsertRow[39m([32m'背包物品表'[39m[33m,[39m { [32m'物品名'[39m[33m:[39m [32m'盾牌'[39m[33m,[39m [32m'数量'[39m[33m:[39m [32m'1'[39m })[33m;[39m
+    [90m462| [39m      [34mexpect[39m(mockExecuteRuntimeMutation)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   | [39m                                         [31m^[39m
+    [90m463| [39m        'INSERT INTO `beibaowupinbiao` (`item_name`, `quantity`) VALUE…
+    [90m464| [39m        [[32m'盾牌'[39m[33m,[39m [32m'1'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m跳过 row_id 列（自增）
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m470:42[22m[39m
+    [90m468| [39m    [34mit[39m([32m'跳过 row_id 列（自增）'[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m469| [39m      [35mawait[39m api[33m.[39m[34minsertRow[39m([32m'背包物品表'[39m[33m,[39m { row_id[33m:[39m [32m'99'[39m[33m,[39m [32m'物品名'[39m[33m:[39m [32m'盾牌'[39m })[33m;[39m
+    [90m470| [39m      [34mexpect[39m(mockExecuteRuntimeMutation)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   | [39m                                         [31m^[39m
+    [90m471| [39m        [32m'INSERT INTO `beibaowupinbiao` (`item_name`) VALUES (?);'[39m[33m,[39m
+    [90m472| [39m        [[32m'盾牌'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m空 data 生成 DEFAULT VALUES
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m478:42[22m[39m
+    [90m476| [39m    [34mit[39m([32m'空 data 生成 DEFAULT VALUES'[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m477| [39m      [35mawait[39m api[33m.[39m[34minsertRow[39m([32m'背包物品表'[39m[33m,[39m {})[33m;[39m
+    [90m478| [39m      expect(mockExecuteRuntimeMutation).toHaveBeenCalledWith('INSERT …
+    [90m   | [39m                                         [31m^[39m
+    [90m479| [39m    })[33m;[39m
+    [90m480| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22mvalue 为 null 时将 null 作为参数传递
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m483:42[22m[39m
+    [90m481| [39m    [34mit[39m([32m'value 为 null 时将 null 作为参数传递'[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m482| [39m      [35mawait[39m api[33m.[39m[34minsertRow[39m([32m'背包物品表'[39m[33m,[39m { [32m'物品名'[39m[33m:[39m [35mnull[39m[33m,[39m [32m'数量'[39m[33m:[39m [32m'1'[39m })[33m;[39m
+    [90m483| [39m      [34mexpect[39m(mockExecuteRuntimeMutation)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   | [39m                                         [31m^[39m
+    [90m484| [39m        'INSERT INTO `beibaowupinbiao` (`item_name`, `quantity`) VALUE…
+    [90m485| [39m        [[35mnull[39m[33m,[39m [32m'1'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22mvalue 包含单引号时传递原始值不作转义（由参数化查询处理）
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m491:42[22m[39m
+    [90m489| [39m    [34mit[39m([32m'value 包含单引号时传递原始值不作转义（由参数化查询处理）'[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m490| [39m      [35mawait[39m api[33m.[39m[34minsertRow[39m([32m'背包物品表'[39m[33m,[39m { [32m'物品名'[39m[33m:[39m [32m"铁剑'加强版"[39m })[33m;[39m
+    [90m491| [39m      [34mexpect[39m(mockExecuteRuntimeMutation)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   | [39m                                         [31m^[39m
+    [90m492| [39m        [32m'INSERT INTO `beibaowupinbiao` (`item_name`) VALUES (?);'[39m[33m,[39m
+    [90m493| [39m        [[32m"铁剑'加强版"[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[13/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22minsertRow[2m > [22m持久化失败时在同一公共提交模型内 reload 运行时
+[31m[1mAssertionError[22m: expected "spy" to be called at least once[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m563:42[22m[39m
+    [90m561| [39m
+    [90m562| [39m      [34mexpect[39m(result)[33m.[39m[34mtoBe[39m([33m-[39m[34m1[39m)[33m;[39m
+    [90m563| [39m      [34mexpect[39m(mockExecuteRuntimeMutation)[33m.[39m[34mtoHaveBeenCalled[39m()[33m;[39m
+    [90m   | [39m                                         [31m^[39m
+    [90m564| [39m      expect(mockPersistTablesToChatMessage).toHaveBeenCalledWith(expe…
+    [90m565| [39m        source[33m:[39m [32m'manual_crud'[39m[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[14/15]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/table-crud-api.test.ts[2m > [22mcreateTableCrudApi — SQLite 模式[2m > [22mdeleteRow[2m > [22m生成正确的 DELETE SQL
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ …(2) ][90m
+
+Number of calls: [1m0[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/table-crud-api.test.ts:[2m577:42[22m[39m
+    [90m575| [39m    [34mit[39m([32m'生成正确的 DELETE SQL'[39m[33m,[39m [35masync[39m () [33m=>[39m {
+    [90m576| [39m      [35mawait[39m api[33m.[39m[34mdeleteRow[39m([32m'背包物品表'[39m[33m,[39m [34m1[39m)[33m;[39m
+    [90m577| [39m      [34mexpect[39m(mockExecuteRuntimeMutation)[33m.[39m[34mtoHaveBeenCalledWith[39m(
+    [90m   | [39m                                         [31m^[39m
+    [90m578| [39m        [32m'DELETE FROM `beibaowupinbiao` WHERE `row_id` = ?;'[39m[33m,[39m
+    [90m579| [39m        [[32m'1'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[15/15]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m15 failed[39m[22m[2m | [22m[1m[32m35 passed[39m[22m[90m (50)[39m
+[2m   Start at [22m 18:43:30
+[2m   Duration [22m 1.56s[2m (transform 760ms, setup 0ms, collect 1.18s, tests 60ms, environment 0ms, prepare 119ms)[22m
+

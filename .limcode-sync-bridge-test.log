@@ -1,0 +1,233 @@
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90me:/xiangmu/shujuku[39m
+
+[90mstderr[2m | tests/data/sqlite/sync-bridge.test.ts[2m > [22m[2mSyncBridge[2m > [22m[2mloadFromTableData[2m > [22m[2m加载快照时保留 NOT NULL 字段中的空字符串
+[22m[39m[shujuku_v120] [SQLite引擎] query 执行失败: SELECT note FROM characters WHERE name = ?; | 错误: no such table: characters
+
+[90mstderr[2m | tests/data/sqlite/sync-bridge.test.ts[2m > [22m[2mSyncBridge[2m > [22m[2mloadFromTableData[2m > [22m[2m非 strict 模式下必需值缺失时不留下半建表状态
+[22m[39m[shujuku_v120] [SyncBridge] 加载表 sheet_invalid (必填值表) 失败: 第 1 行缺少必需列「name」的值
+
+[90mstderr[2m | tests/data/sqlite/sync-bridge.test.ts[2m > [22m[2mSyncBridge[2m > [22m[2mloadFromTableData[2m > [22m[2m非 strict 模式下失败表不写 meta，后续合法表仍完整加载
+[22m[39m[shujuku_v120] [SyncBridge] 加载表 sheet_invalid (必填值表) 失败: 第 1 行缺少必需列「name」的值
+
+[90mstderr[2m | tests/data/sqlite/sync-bridge.test.ts[2m > [22m[2mSyncBridge[2m > [22m[2mloadFromTableData[2m > [22m[2m非 strict 模式下 INSERT 约束失败会回滚用户表和 meta，后续表继续加载
+[22m[39m[shujuku_v120] [SyncBridge] 加载表 sheet_invalid (受约束表) 失败: SQLite 写入失败
+
+[90mstderr[2m | tests/data/sqlite/sync-bridge.test.ts[2m > [22m[2mSyncBridge[2m > [22m[2mloadFromTableData[2m > [22m[2m单张表加载失败不影响其他表
+[22m[39m[shujuku_v120] [SyncBridge] 加载表 sheet_0 (坏表) 失败: 显式 DDL 缺少可用的 row_id INTEGER PRIMARY KEY 结构。
+
+[90mstderr[2m | tests/data/sqlite/sync-bridge.test.ts[2m > [22m[2mSyncBridge[2m > [22m[2mloadFromTableData[2m > [22m[2mruntime fallback 可加载非法显式 DDL，保留原文并按稳定 columnMap round-trip
+[22m[39m[shujuku_v120] [SyncBridge][runtime-ddl-fallback] {"sheetKey":"sheet_runtime","reason":"fallback_invalid","originalDdlDigest":"c1v9pq","effectiveTableName":"yunxingshihuituibiao","phase":"initial_load"} 显式 DDL 缺少可用的 row_id INTEGER PRIMARY KEY 结构。
+
+[90mstderr[2m | tests/data/sqlite/sync-bridge.test.ts[2m > [22m[2mSyncBridge[2m > [22m[2mloadFromTableData[2m > [22m[2mruntime fallback 按 sheetKey 记录一次结构化诊断
+[22m[39m[shujuku_v120] [SyncBridge][runtime-ddl-fallback] {"sheetKey":"sheet_observable","reason":"fallback_invalid","originalDdlDigest":"1ssgzxp","effectiveTableName":"beibaowupinbiao","phase":"initial_load"} 显式 DDL 缺少可用的 row_id INTEGER PRIMARY KEY 结构。
+[shujuku_v120] [SQLite引擎] run 执行失败: DROP TABLE sheet_observable; | 错误: no such table: sheet_observable
+
+[90mstderr[2m | tests/data/sqlite/sync-bridge.test.ts[2m > [22m[2mSyncBridge[2m > [22m[2mloadFromTableData[2m > [22m[2m解析通过但 SQLite 建表失败时仅在 runtime context 重试 fallback
+[22m[39m[shujuku_v120] [SyncBridge][runtime-ddl-fallback] {"sheetKey":"sheet_execution","reason":"fallback_invalid","originalDdlDigest":"jeesqx","effectiveTableName":"zhixingshibaihuituibiao","phase":"runtime_ddl_retry","failureSummary":"第 1 条语句失败: CREATE TABLE zhixingshibaihuituibiao (\n  row_id INTEGER PRIMARY KEY, -- 行号\n  item_name TEXT -- 物品名称\n) INVALID_SUFFIX; → unknown table option: INVALID_SUFFIX"} 显式 DDL 无法在 runtime SQLite 执行，已使用 fallback schema。
+
+[90mstderr[2m | tests/data/sqlite/sync-bridge.test.ts[2m > [22m[2mSyncBridge[2m > [22m[2mloadFromTableData[2m > [22m[2mDDL 合法但快照存在非空未映射字段时继续 fail closed，不触发 fallback
+[22m[39m[shujuku_v120] [SyncBridge] 加载表 sheet_unsafe (背包物品表) 失败: 表头「旧字段」没有对应的 DDL 列，拒绝丢弃非空数据
+
+[90mstderr[2m | tests/data/sqlite/sync-bridge.test.ts[2m > [22m[2mSyncBridge[2m > [22m[2mloadFromTableData[2m > [22m[2mstrict hydrate 未显式允许 runtime fallback 时拒绝非法 DDL
+[22m[39m[shujuku_v120] [SyncBridge] 加载表 sheet_broken (背包物品表) 失败: 显式 DDL 缺少可用的 row_id INTEGER PRIMARY KEY 结构。
+
+[90mstderr[2m | tests/data/sqlite/sync-bridge.test.ts[2m > [22m[2mSyncBridge[2m > [22m[2mloadFromTableData[2m > [22m[2m同一快照内重复 row_id 时保留最后一行且不让整表从导出结果消失
+[22m[39m[shujuku_v120] [SyncBridge] snapshot 行标识不合法：sheet_0 第 2 行：duplicate_row_id
+[shujuku_v120] [SQLite引擎] query 执行失败: SELECT item_name, quantity, description FROM inventory ORDER BY row_id; | 错误: no such table: inventory
+
+[90mstderr[2m | tests/data/sqlite/sync-bridge.test.ts[2m > [22m[2mSyncBridge[2m > [22m[2msyncToJson[2m > [22m[2m同步 SQLite 数据到 JSON 视图
+[22m[39m[shujuku_v120] [SQLite引擎] run 执行失败: UPDATE inventory SET quantity = 10 WHERE item_name = '铁剑'; | 错误: no such table: inventory
+
+[90mstderr[2m | tests/data/sqlite/sync-bridge.test.ts[2m > [22m[2mSyncBridge[2m > [22m[2m无 DDL 的 fallback 模式[2m > [22m[2m无 DDL 时自动生成全 TEXT DDL
+[22m[39m[shujuku_v120] [SyncBridge][runtime-ddl-fallback] {"sheetKey":"sheet_0","reason":"fallback_missing","originalDdlDigest":"","effectiveTableName":"beibaowupinbiao","phase":"initial_load"} DDL 缺失，已使用运行时 fallback schema。
+
+ [31m❯[39m tests/data/sqlite/sync-bridge.test.ts [2m([22m[2m24 tests[22m[2m | [22m[31m11 failed[39m[2m)[22m[32m 298[2mms[22m[39m
+[31m   [31m×[31m SyncBridge[2m > [22mloadFromTableData[2m > [22m加载单张表到 SQLite[39m[32m 130[2mms[22m[39m
+[31m     → expected [ 'beibaowupinbiao' ] to include 'inventory'[39m
+[31m   [31m×[31m SyncBridge[2m > [22mloadFromTableData[2m > [22m加载多张表[39m[32m 17[2mms[22m[39m
+[31m     → expected [ 'beibaowupinbiao', …(1) ] to include 'inventory'[39m
+   [32m✓[39m SyncBridge[2m > [22mloadFromTableData[2m > [22mnull 或空对象不报错[32m 5[2mms[22m[39m
+   [32m✓[39m SyncBridge[2m > [22mloadFromTableData[2m > [22m引擎未初始化时抛出错误[32m 1[2mms[22m[39m
+[31m   [31m×[31m SyncBridge[2m > [22mloadFromTableData[2m > [22m加载快照时保留 NOT NULL 字段中的空字符串[39m[32m 15[2mms[22m[39m
+[31m     → no such table: characters[39m
+   [32m✓[39m SyncBridge[2m > [22mloadFromTableData[2m > [22m显式 legacy DDL 表名不覆盖显示名派生的 runtime 物理名，且保持 round-trip[32m 13[2mms[22m[39m
+   [32m✓[39m SyncBridge[2m > [22mloadFromTableData[2m > [22m非 strict 模式下必需值缺失时不留下半建表状态[32m 4[2mms[22m[39m
+[31m   [31m×[31m SyncBridge[2m > [22mloadFromTableData[2m > [22m非 strict 模式下失败表不写 meta，后续合法表仍完整加载[39m[32m 9[2mms[22m[39m
+[31m     → expected [ 'beibaowupinbiao' ] to include 'inventory'[39m
+[31m   [31m×[31m SyncBridge[2m > [22mloadFromTableData[2m > [22m非 strict 模式下 INSERT 约束失败会回滚用户表和 meta，后续表继续加载[39m[32m 16[2mms[22m[39m
+[31m     → expected [ 'beibaowupinbiao' ] to include 'inventory'[39m
+[31m   [31m×[31m SyncBridge[2m > [22mloadFromTableData[2m > [22m单张表加载失败不影响其他表[39m[32m 8[2mms[22m[39m
+[31m     → expected [ 'beibaowupinbiao' ] to include 'inventory'[39m
+[31m   [31m×[31m SyncBridge[2m > [22mloadFromTableData[2m > [22mruntime fallback 可加载非法显式 DDL，保留原文并按稳定 columnMap round-trip[39m[32m 7[2mms[22m[39m
+[31m     → expected [ 'yunxingshihuituibiao' ] to include 'sheet_runtime'[39m
+[31m   [31m×[31m SyncBridge[2m > [22mloadFromTableData[2m > [22mruntime fallback 按 sheetKey 记录一次结构化诊断[39m[32m 7[2mms[22m[39m
+[31m     → no such table: sheet_observable[39m
+[31m   [31m×[31m SyncBridge[2m > [22mloadFromTableData[2m > [22m解析通过但 SQLite 建表失败时仅在 runtime context 重试 fallback[39m[32m 7[2mms[22m[39m
+[31m     → expected [ 'zhixingshibaihuituibiao' ] to include 'execution_broken'[39m
+   [32m✓[39m SyncBridge[2m > [22mloadFromTableData[2m > [22mDDL 合法但快照存在非空未映射字段时继续 fail closed，不触发 fallback[32m 3[2mms[22m[39m
+   [32m✓[39m SyncBridge[2m > [22mloadFromTableData[2m > [22mstrict hydrate 未显式允许 runtime fallback 时拒绝非法 DDL[32m 3[2mms[22m[39m
+[31m   [31m×[31m SyncBridge[2m > [22mloadFromTableData[2m > [22m同一快照内重复 row_id 时保留最后一行且不让整表从导出结果消失[39m[32m 4[2mms[22m[39m
+[31m     → no such table: inventory[39m
+   [32m✓[39m SyncBridge[2m > [22mexportToTableData[2m > [22m从 SQLite 导出为 TableDataObject[32m 7[2mms[22m[39m
+   [32m✓[39m SyncBridge[2m > [22mexportToTableData[2m > [22m导出后数据与原始数据一致[32m 6[2mms[22m[39m
+   [32m✓[39m SyncBridge[2m > [22mexportToTableData[2m > [22m空表导出时从 DDL 恢复完整表头，避免只剩 row_id[32m 6[2mms[22m[39m
+   [32m✓[39m SyncBridge[2m > [22mexportToTableData[2m > [22m引擎未初始化时抛出错误[32m 1[2mms[22m[39m
+[31m   [31m×[31m SyncBridge[2m > [22msyncToJson[2m > [22m同步 SQLite 数据到 JSON 视图[39m[32m 7[2mms[22m[39m
+[31m     → no such table: inventory[39m
+   [32m✓[39m SyncBridge[2m > [22m元数据保存与恢复[2m > [22msourceData 在导出后保留[32m 7[2mms[22m[39m
+   [32m✓[39m SyncBridge[2m > [22m元数据保存与恢复[2m > [22muid 和 name 在导出后保留[32m 6[2mms[22m[39m
+   [32m✓[39m SyncBridge[2m > [22m无 DDL 的 fallback 模式[2m > [22m无 DDL 时自动生成全 TEXT DDL[32m 7[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 11 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m tests/data/sqlite/sync-bridge.test.ts[2m > [22mSyncBridge[2m > [22mloadFromTableData[2m > [22m加载单张表到 SQLite
+[31m[1mAssertionError[22m: expected [ 'beibaowupinbiao' ] to include 'inventory'[39m
+[36m [2m❯[22m tests/data/sqlite/sync-bridge.test.ts:[2m82:26[22m[39m
+    [90m 80| [39m      [90m// 验证表已创建[39m
+    [90m 81| [39m      [35mconst[39m tableNames [33m=[39m engine[33m.[39m[34mgetTableNames[39m()[33m;[39m
+    [90m 82| [39m      [34mexpect[39m(tableNames)[33m.[39m[34mtoContain[39m([32m'inventory'[39m)[33m;[39m
+    [90m   | [39m                         [31m^[39m
+    [90m 83| [39m
+    [90m 84| [39m      [90m// 验证数据已灌入[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/data/sqlite/sync-bridge.test.ts[2m > [22mSyncBridge[2m > [22mloadFromTableData[2m > [22m加载多张表
+[31m[1mAssertionError[22m: expected [ 'beibaowupinbiao', …(1) ] to include 'inventory'[39m
+[36m [2m❯[22m tests/data/sqlite/sync-bridge.test.ts:[2m115:38[22m[39m
+    [90m113| [39m      bridge[33m.[39m[34mloadFromTableData[39m(data)[33m;[39m
+    [90m114| [39m
+    [90m115| [39m      [34mexpect[39m(engine[33m.[39m[34mgetTableNames[39m())[33m.[39m[34mtoContain[39m([32m'inventory'[39m)[33m;[39m
+    [90m   | [39m                                     [31m^[39m
+    [90m116| [39m      [34mexpect[39m(engine[33m.[39m[34mgetTableNames[39m())[33m.[39m[34mtoContain[39m([32m'characters'[39m)[33m;[39m
+    [90m117| [39m    })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/data/sqlite/sync-bridge.test.ts[2m > [22mSyncBridge[2m > [22mloadFromTableData[2m > [22m加载快照时保留 NOT NULL 字段中的空字符串
+[31m[1mError[22m: no such table: characters[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m tests/data/sqlite/sync-bridge.test.ts:[2m151:29[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/data/sqlite/sync-bridge.test.ts[2m > [22mSyncBridge[2m > [22mloadFromTableData[2m > [22m非 strict 模式下失败表不写 meta，后续合法表仍完整加载
+[31m[1mAssertionError[22m: expected [ 'beibaowupinbiao' ] to include 'inventory'[39m
+[36m [2m❯[22m tests/data/sqlite/sync-bridge.test.ts:[2m235:38[22m[39m
+    [90m233| [39m      [34mexpect[39m(engine[33m.[39m[34mgetTableNames[39m())[33m.[39mnot[33m.[39m[34mtoContain[39m([32m'required_value'[39m)[33m;[39m
+    [90m234| [39m      expect(engine.query("SELECT sheet_key FROM _acu_sheet_meta WHERE…
+    [90m235| [39m      [34mexpect[39m(engine[33m.[39m[34mgetTableNames[39m())[33m.[39m[34mtoContain[39m([32m'inventory'[39m)[33m;[39m
+    [90m   | [39m                                     [31m^[39m
+    [90m236| [39m      expect(engine.query('SELECT item_name FROM inventory ORDER BY ro…
+    [90m237| [39m        [[32m'铁剑'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/data/sqlite/sync-bridge.test.ts[2m > [22mSyncBridge[2m > [22mloadFromTableData[2m > [22m非 strict 模式下 INSERT 约束失败会回滚用户表和 meta，后续表继续加载
+[31m[1mAssertionError[22m: expected [ 'beibaowupinbiao' ] to include 'inventory'[39m
+[36m [2m❯[22m tests/data/sqlite/sync-bridge.test.ts:[2m263:38[22m[39m
+    [90m261| [39m      [34mexpect[39m(engine[33m.[39m[34mgetTableNames[39m())[33m.[39mnot[33m.[39m[34mtoContain[39m([32m'checked_value'[39m)[33m;[39m
+    [90m262| [39m      expect(engine.query("SELECT sheet_key FROM _acu_sheet_meta WHERE…
+    [90m263| [39m      [34mexpect[39m(engine[33m.[39m[34mgetTableNames[39m())[33m.[39m[34mtoContain[39m([32m'inventory'[39m)[33m;[39m
+    [90m   | [39m                                     [31m^[39m
+    [90m264| [39m      expect(engine.query('SELECT item_name FROM inventory ORDER BY ro…
+    [90m265| [39m        [[32m'铁剑'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/data/sqlite/sync-bridge.test.ts[2m > [22mSyncBridge[2m > [22mloadFromTableData[2m > [22m单张表加载失败不影响其他表
+[31m[1mAssertionError[22m: expected [ 'beibaowupinbiao' ] to include 'inventory'[39m
+[36m [2m❯[22m tests/data/sqlite/sync-bridge.test.ts:[2m290:38[22m[39m
+    [90m288| [39m
+    [90m289| [39m      [90m// 好的表应该正常加载[39m
+    [90m290| [39m      [34mexpect[39m(engine[33m.[39m[34mgetTableNames[39m())[33m.[39m[34mtoContain[39m([32m'inventory'[39m)[33m;[39m
+    [90m   | [39m                                     [31m^[39m
+    [90m291| [39m    })[33m;[39m
+    [90m292| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/data/sqlite/sync-bridge.test.ts[2m > [22mSyncBridge[2m > [22mloadFromTableData[2m > [22mruntime fallback 可加载非法显式 DDL，保留原文并按稳定 columnMap round-trip
+[31m[1mAssertionError[22m: expected [ 'yunxingshihuituibiao' ] to include 'sheet_runtime'[39m
+[36m [2m❯[22m tests/data/sqlite/sync-bridge.test.ts:[2m310:38[22m[39m
+    [90m308| [39m      bridge.loadFromTableData(makeTableData({ sheet_runtime: sheet })…
+    [90m309| [39m
+    [90m310| [39m      [34mexpect[39m(engine[33m.[39m[34mgetTableNames[39m())[33m.[39m[34mtoContain[39m([32m'sheet_runtime'[39m)[33m;[39m
+    [90m   | [39m                                     [31m^[39m
+    [90m311| [39m      expect(engine.query('SELECT wu_pin_ming_cheng, col_select FROM s…
+    [90m312| [39m      const exported = bridge.exportToTableData(makeMate()).sheet_runt…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/data/sqlite/sync-bridge.test.ts[2m > [22mSyncBridge[2m > [22mloadFromTableData[2m > [22mruntime fallback 按 sheetKey 记录一次结构化诊断
+[31m[1mError[22m: no such table: sheet_observable[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.run node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:256[22m[39m
+[36m [2m❯[22m SqliteEngine.run src/data/sqlite/sqlite-engine.ts:[2m133:16[22m[39m
+    [90m131| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m132| [39m    [35mtry[39m {
+    [90m133| [39m      [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mrun[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m               [31m^[39m
+    [90m134| [39m      [35mreturn[39m { changes[33m:[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mgetRowsModified[39m() }[33m;[39m
+    [90m135| [39m    } [35mcatch[39m (e[33m:[39m any) {
+[90m [2m❯[22m tests/data/sqlite/sync-bridge.test.ts:[2m328:14[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/data/sqlite/sync-bridge.test.ts[2m > [22mSyncBridge[2m > [22mloadFromTableData[2m > [22m解析通过但 SQLite 建表失败时仅在 runtime context 重试 fallback
+[31m[1mAssertionError[22m: expected [ 'zhixingshibaihuituibiao' ] to include 'execution_broken'[39m
+[36m [2m❯[22m tests/data/sqlite/sync-bridge.test.ts:[2m354:38[22m[39m
+    [90m352| [39m      bridge.loadFromTableData(makeTableData({ sheet_execution: sheet …
+    [90m353| [39m
+    [90m354| [39m      [34mexpect[39m(engine[33m.[39m[34mgetTableNames[39m())[33m.[39m[34mtoContain[39m([32m'execution_broken'[39m)[33m;[39m
+    [90m   | [39m                                     [31m^[39m
+    [90m355| [39m      expect(engine.query('SELECT wu_pin_ming_cheng FROM execution_bro…
+    [90m356| [39m      const exported = bridge.exportToTableData(makeMate()).sheet_exec…
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/data/sqlite/sync-bridge.test.ts[2m > [22mSyncBridge[2m > [22mloadFromTableData[2m > [22m同一快照内重复 row_id 时保留最后一行且不让整表从导出结果消失
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.exec node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:461[22m[39m
+[36m [2m❯[22m SqliteEngine.query src/data/sqlite/sqlite-engine.ts:[2m106:32[22m[39m
+    [90m104| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m105| [39m    [35mtry[39m {
+    [90m106| [39m      [35mconst[39m results [33m=[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mexec[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m107| [39m      [35mif[39m (results[33m.[39mlength [33m===[39m [34m0[39m) {
+    [90m108| [39m        [35mreturn[39m { columns[33m:[39m [][33m,[39m values[33m:[39m [] }[33m;[39m
+[90m [2m❯[22m tests/data/sqlite/sync-bridge.test.ts:[2m398:21[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/11]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/data/sqlite/sync-bridge.test.ts[2m > [22mSyncBridge[2m > [22msyncToJson[2m > [22m同步 SQLite 数据到 JSON 视图
+[31m[1mError[22m: no such table: inventory[39m
+[90m [2m❯[22m e.handleError node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m90:192[22m[39m
+[90m [2m❯[22m e.run node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-asm-memory-growth.js:[2m87:256[22m[39m
+[36m [2m❯[22m SqliteEngine.run src/data/sqlite/sqlite-engine.ts:[2m133:16[22m[39m
+    [90m131| [39m    [35mthis[39m[33m.[39m[34m_ensureDb[39m()[33m;[39m
+    [90m132| [39m    [35mtry[39m {
+    [90m133| [39m      [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mrun[39m(sql[33m,[39m params)[33m;[39m
+    [90m   | [39m               [31m^[39m
+    [90m134| [39m      [35mreturn[39m { changes[33m:[39m [35mthis[39m[33m.[39mdb[33m![39m[33m.[39m[34mgetRowsModified[39m() }[33m;[39m
+    [90m135| [39m    } [35mcatch[39m (e[33m:[39m any) {
+[90m [2m❯[22m tests/data/sqlite/sync-bridge.test.ts:[2m490:14[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/11]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m11 failed[39m[22m[2m | [22m[1m[32m13 passed[39m[22m[90m (24)[39m
+[2m   Start at [22m 17:06:36
+[2m   Duration [22m 1.28s[2m (transform 197ms, setup 0ms, collect 437ms, tests 298ms, environment 0ms, prepare 191ms)[22m
+

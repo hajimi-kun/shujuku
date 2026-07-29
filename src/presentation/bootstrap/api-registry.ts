@@ -16,7 +16,7 @@ import { createDataAdminApi } from './api-groups/data-admin-api';
 import { createSettingsConfigApi } from './api-groups/settings-config-api';
 import { createWorldbookAiApi } from './api-groups/worldbook-ai-api';
 import { createAgentWorldbookApi } from './api-groups/agent-worldbook-api';
-import { createSqlApi } from './api-groups/sql-api';
+import { createSqlApi, installRuntimeGatedSqlReadApi_ACU } from './api-groups/sql-api';
 
 // --- 共享状态（回调数组） ---
 const tableUpdateCallbacks: Function[] = [];
@@ -29,6 +29,8 @@ const ctx: ApiGroupContext = {
     tableFillStartCallbacks,
     getApi: () => apiRef,
 };
+
+const sqlApi = createSqlApi(ctx);
 
 // --- 组装所有领域 API ---
 const api = Object.assign(
@@ -43,8 +45,12 @@ const api = Object.assign(
     createSettingsConfigApi(ctx),
     createWorldbookAiApi(ctx),
     createAgentWorldbookApi(ctx),
-    createSqlApi(ctx),
+    sqlApi,
 );
+
+// SQL 同步读取只能在 SQLite runtime 完整发布后对外可见。
+// getter 会在聊天切换/重载窗口自动隐藏，避免第三方脚本把“函数存在”误判为“运行时可查询”。
+installRuntimeGatedSqlReadApi_ACU(api, sqlApi);
 
 // 将最终组装的 api 赋给 apiRef，使 ctx.getApi() 返回完整对象
 apiRef = api;

@@ -24,7 +24,6 @@ export {
     listChatTemplateArchiveEntries_ACU,
     getChatTemplateArchiveOptionLabel_ACU,
     upsertChatTemplatePresetEntry_ACU,
-    restoreChatTemplateArchiveEntry_ACU,
     buildChatTemplatePresetLinkState_ACU,
     activateChatTemplatePresetSelection_ACU,
     clearCurrentChatTemplateSnapshots_ACU,
@@ -62,3 +61,13 @@ export {
     sanitizeChatSheetsObject_ACU,
     getTemplateSheetKeys_ACU,
 } from './chat-scope-sheet';
+
+// F 组：模板范围（只有模板声明的表与列参与填表/快照/prompt）
+export {
+    resolveTemplateScope_ACU,
+    filterSheetKeysByTemplateScope_ACU,
+    resolveOutOfScopeColumns_ACU,
+    projectSheetForTemplateScope_ACU,
+    projectTableDataForTemplateScope_ACU,
+    type TemplateScope_ACU,
+} from './chat-scope-range';

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   validateCanonicalCheckpoint_ACU,
   validateCanonicalCheckpointData_ACU,
+  validateMigrationProvenanceV1_ACU,
 } from '../../src/shared/canonical-checkpoint-validator';
 
 function fullCheckpoint(data: any) {
@@ -64,5 +65,46 @@ describe('canonical-checkpoint-validator', () => {
     expect(invalidHeader.issues).toEqual([
       expect.objectContaining({ checkpointKind: 'full', type: 'invalid_header', sheetKey: 'sheet_0', rowIndex: 0 }),
     ]);
+  });
+
+  it('严格校验可审计的 migration provenance，但不要求历史 checkpoint 包含它', () => {
+    const provenance = {
+      version: 1,
+      legacyDataFingerprint: 'fnv1a:abcd1234',
+      legacySourceMessageIndices: [0, 3],
+      legacySourceAiFloors: [1, 2],
+      legacyLastChangedAiFloorBySheet: { sheet_0: 2 },
+      targetMessageIndex: 5,
+      targetAiFloor: 3,
+      isolationKey: 'tag-a',
+      migratedAt: 123,
+    };
+
+    expect(validateMigrationProvenanceV1_ACU(provenance)).toEqual({ valid: true, issues: [] });
+    expect(validateCanonicalCheckpoint_ACU(fullCheckpoint({ sheet_0: sheet() }))).toEqual({ valid: true, issues: [] });
+  });
+
+  it.each([
+    ['缺少 fingerprint', { legacyDataFingerprint: '' }, 'invalid_legacy_fingerprint'],
+    ['未知版本', { version: 2 }, 'unsupported_provenance_version'],
+    ['重复或未排序来源索引', { legacySourceMessageIndices: [3, 3] }, 'invalid_source_indices'],
+    ['无效来源 floor', { legacySourceAiFloors: [0, 2] }, 'invalid_source_ai_floors'],
+    ['无效 sheet floor map', { legacyLastChangedAiFloorBySheet: { invalid: 1 } }, 'invalid_last_changed_floor_by_sheet'],
+    ['无效 target', { targetMessageIndex: -1, targetAiFloor: 0 }, 'invalid_target_message_index'],
+  ])('拒绝 %s 的 provenance', (_name, patch, expectedIssue) => {
+    const provenance = {
+      version: 1,
+      legacyDataFingerprint: 'fnv1a:abcd1234',
+      legacySourceMessageIndices: [0, 3],
+      legacySourceAiFloors: [1, 2],
+      legacyLastChangedAiFloorBySheet: { sheet_0: 2 },
+      targetMessageIndex: 5,
+      targetAiFloor: 3,
+      isolationKey: '',
+      migratedAt: 123,
+      ...patch,
+    };
+    expect(validateMigrationProvenanceV1_ACU(provenance)).toEqual(expect.objectContaining({ valid: false }));
+    expect(validateMigrationProvenanceV1_ACU(provenance).issues).toContain(expectedIssue);
   });
 });

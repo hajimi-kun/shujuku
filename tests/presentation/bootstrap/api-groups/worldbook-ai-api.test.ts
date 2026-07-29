@@ -4,25 +4,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockGetApiConfigByPreset, mockBuildCustomBody, mockSettings, mockHandleApiResponse } = vi.hoisted(() => ({
-  mockGetApiConfigByPreset: vi.fn(),
-  mockBuildCustomBody: vi.fn(() => ({ messages: [], model: 'gpt-4', max_tokens: 4096, temperature: 1.0, top_p: 0.95, stream: false })),
+const { mockCallAIWithPreset, mockSettings } = vi.hoisted(() => ({
+  mockCallAIWithPreset: vi.fn(),
   mockSettings: { streamingEnabled: false, tavernProfile: 'default' } as any,
-  mockHandleApiResponse: vi.fn(),
 }));
 
 vi.mock('../../../../src/service/ai/api-call', () => ({
-  getApiConfigByPreset_ACU: mockGetApiConfigByPreset,
-  buildCustomApiRequestBody_ACU: mockBuildCustomBody,
-}));
-vi.mock('../../../../src/service/ai/ai-service', () => ({
-  sendConnectionManagerRequest_ACU: vi.fn(),
-  generateRaw_ACU: vi.fn(),
-  isGenerateRawAvailable_ACU: vi.fn(() => false),
-  getHostRequestHeaders_ACU: vi.fn(() => ({})),
-}));
-vi.mock('../../../../src/service/ai/prompt-builder', () => ({
-  handleApiResponse_ACU: mockHandleApiResponse,
+  callAIWithPreset_ACU: mockCallAIWithPreset,
 }));
 vi.mock('../../../../src/service/runtime/state-manager', () => ({
   settings_ACU: mockSettings,
@@ -43,115 +31,53 @@ vi.mock('../../../../src/presentation/components/optimization-ui', () => ({ reop
 vi.mock('../../../../src/presentation/components/pipeline-ui-helpers', () => ({ refreshMergedDataAndNotifyWithUI_ACU: vi.fn() }));
 vi.mock('../../../../src/presentation/theme/toast', () => ({ showToastr_ACU: vi.fn() }));
 
-const mockFetch = vi.fn();
-vi.stubGlobal('fetch', mockFetch);
-
 import { createWorldbookAiApi } from '../../../../src/presentation/bootstrap/api-groups/worldbook-ai-api';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockGetApiConfigByPreset.mockReturnValue({
-    apiMode: 'custom',
-    apiConfig: { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', temperature: 1.0, max_tokens: 4096 },
-    tavernProfile: '',
-  });
-  mockFetch.mockResolvedValue({ ok: true });
-  mockHandleApiResponse.mockResolvedValue('AI reply');
+  mockCallAIWithPreset.mockResolvedValue('AI reply');
 });
 
-describe('callAI 参数透传', () => {
-  it('custom API 分支 overrides 不含 temperature/topP', async () => {
+describe('callAI 委托与输入边界', () => {
+  it('使用默认 preset 和未指定的 max tokens 委托 service 层', async () => {
     const api = createWorldbookAiApi({} as any);
-    await api.callAI([{ role: 'user', content: 'hello' }]);
-    expect(mockBuildCustomBody).toHaveBeenCalled();
-    const overrides = mockBuildCustomBody.mock.calls[0][2];
-    expect(overrides).not.toHaveProperty('temperature');
-    expect(overrides).not.toHaveProperty('topP');
-    expect(overrides.stripModelPrefix).toBe(false);
+    const messages = [{ role: 'user', content: 'hello' }];
+
+    await expect(api.callAI(messages)).resolves.toBe('AI reply');
+    expect(mockCallAIWithPreset).toHaveBeenCalledWith(messages, '', undefined);
   });
 
-  it('custom API 分支 temperature=0 配置透传到 buildCustomApiRequestBody_ACU', async () => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'custom',
-      apiConfig: { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', temperature: 0, max_tokens: 4096 },
-      tavernProfile: '',
-    });
+  it('保留 presetName 并透传 max_tokens=0', async () => {
     const api = createWorldbookAiApi({} as any);
-    await api.callAI([{ role: 'user', content: 'hello' }]);
-    const effectiveApiConfig = mockBuildCustomBody.mock.calls[0][1];
-    expect(effectiveApiConfig.temperature).toBe(0);
+    const messages = [{ role: 'user', content: 'hello' }];
+
+    await api.callAI(messages, { presetName: ' preset-A ', max_tokens: 0 });
+    expect(mockCallAIWithPreset).toHaveBeenCalledWith(messages, 'preset-A', 0);
   });
 
-  it('custom API 分支 topP 驼峰别名透传', async () => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'custom',
-      apiConfig: { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', topP: 0.3 },
-      tavernProfile: '',
-    });
+  it('接受 maxTokens 驼峰别名', async () => {
     const api = createWorldbookAiApi({} as any);
-    await api.callAI([{ role: 'user', content: 'hello' }]);
-    const effectiveApiConfig = mockBuildCustomBody.mock.calls[0][1];
-    expect(effectiveApiConfig.topP).toBe(0.3);
+    const messages = [{ role: 'user', content: 'hello' }];
+
+    await api.callAI(messages, { maxTokens: 0 });
+    expect(mockCallAIWithPreset).toHaveBeenCalledWith(messages, '', 0);
   });
 
-  it('custom API 分支 max_tokens=0 配置不被 override 改为 4096', async () => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'custom',
-      apiConfig: { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', max_tokens: 0 },
-      tavernProfile: '',
-    });
+  it('拒绝空消息而不调用 service 层', async () => {
     const api = createWorldbookAiApi({} as any);
-    await api.callAI([{ role: 'user', content: 'hello' }]);
-    expect(mockBuildCustomBody).toHaveBeenCalled();
-    const overrides = mockBuildCustomBody.mock.calls[0][2];
-    // 无 options 时不传 maxTokens override，由 buildCustomApiRequestBody_ACU 统一兜底
-    expect(overrides.maxTokens).toBeUndefined();
-    const effectiveApiConfig = mockBuildCustomBody.mock.calls[0][1];
-    expect(effectiveApiConfig.max_tokens).toBe(0);
+    await expect(api.callAI([])).resolves.toBeNull();
+    expect(mockCallAIWithPreset).not.toHaveBeenCalled();
   });
 
-  it('custom API 分支 options.max_tokens=0 时作为 override 透传', async () => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'custom',
-      apiConfig: { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', max_tokens: 4096 },
-      tavernProfile: '',
-    });
+  it.each(['apiConfig', 'apiKey', 'url', 'requestHeaders', 'temperature', 'stream'])('拒绝禁止字段 %s', async forbiddenKey => {
     const api = createWorldbookAiApi({} as any);
-    await api.callAI([{ role: 'user', content: 'hello' }], { max_tokens: 0 });
-    expect(mockBuildCustomBody).toHaveBeenCalled();
-    const overrides = mockBuildCustomBody.mock.calls[0][2];
-    expect(overrides.maxTokens).toBe(0);
+    await expect(api.callAI([{ role: 'user', content: 'hello' }], { [forbiddenKey]: 'unsafe' })).resolves.toBeNull();
+    expect(mockCallAIWithPreset).not.toHaveBeenCalled();
   });
 
-  it('custom API 分支 topP=0 配置透传', async () => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'custom',
-      apiConfig: { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', topP: 0 },
-      tavernProfile: '',
-    });
+  it('service 层抛错时返回 null', async () => {
+    mockCallAIWithPreset.mockRejectedValue(new Error('upstream failure'));
     const api = createWorldbookAiApi({} as any);
-    await api.callAI([{ role: 'user', content: 'hello' }]);
-    const effectiveApiConfig = mockBuildCustomBody.mock.calls[0][1];
-    expect(effectiveApiConfig.topP).toBe(0);
-  });
-
-  it('tavern API 分支 max_tokens=0 透传给 sendConnectionManagerRequest_ACU', async () => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'tavern',
-      apiConfig: { max_tokens: 0 },
-      tavernProfile: 'profile-1',
-    });
-    const { sendConnectionManagerRequest_ACU } = await import('../../../../src/service/ai/ai-service');
-    vi.mocked(sendConnectionManagerRequest_ACU).mockResolvedValue({
-      result: { choices: [{ message: { content: 'tavern reply' } }] },
-    } as any);
-    const api = createWorldbookAiApi({} as any);
-    const result = await api.callAI([{ role: 'user', content: 'hello' }]);
-    expect(sendConnectionManagerRequest_ACU).toHaveBeenCalledWith(
-      'profile-1',
-      expect.any(Array),
-      0,
-    );
-    expect(result).toBe('tavern reply');
+    await expect(api.callAI([{ role: 'user', content: 'hello' }])).resolves.toBeNull();
   });
 });

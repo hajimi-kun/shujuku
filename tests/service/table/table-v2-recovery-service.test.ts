@@ -1,0 +1,318 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const h = vi.hoisted(() => ({
+  chat: [] as any[], save: vi.fn().mockResolvedValue(undefined),
+  scope: { chatKey: 'recovery-test', isolationKey: '' },
+  storageMode: 'native' as 'native' | 'sqlite',
+  reload: vi.fn().mockResolvedValue(undefined),
+  didFallback: vi.fn(() => false),
+}));
+vi.mock('../../../src/service/table/storage-mode', () => ({
+  getCurrentStorageMode: () => h.storageMode,
+}));
+vi.mock('../../../src/service/table/table-storage-strategy', () => ({
+  reloadStorageProvider: h.reload,
+  didSqliteFallbackAfterReload_ACU: h.didFallback,
+}));
+vi.mock('../../../src/data/gateways/chat-gateway', () => ({
+  getChatArray_ACU: () => h.chat,
+  saveChatToHostStrict_ACU: h.save,
+}));
+vi.mock('../../../src/service/runtime/state-manager', () => ({
+  get currentChatFileIdentifier_ACU() { return h.scope.chatKey; },
+  getCurrentIsolationKey_ACU: () => h.scope.isolationKey,
+}));
+vi.mock('../../../src/service/table/table-write-transaction', () => ({
+  runTableWriteTransaction_ACU: async (_options: any, task: any) => task({ runCommit: async (commit: any) => commit() }),
+}));
+
+import { commitPreparedV2Recovery_ACU, prepareV2Recovery_ACU, scanV2IsolationDiagnostics_ACU } from '../../../src/service/table/table-v2-recovery-service';
+import { loadTableStateFromFramesV2_ACU } from '../../../src/service/table/storage-frame-v2-replay';
+import * as storageFrameV2Replay from '../../../src/service/table/storage-frame-v2-replay';
+
+function data(rows: any[][] = [['1', '铁剑']]) {
+  return { mate: { type: 'acu', version: 1 }, sheet_0: { uid: 'inventory', name: '背包', content: [['row_id', '名称'], ...rows], sourceData: {}, updateConfig: {}, exportConfig: {}, orderNo: 0 } } as any;
+}
+function frame(checkpoint: any, logEntries: any[] = []) {
+  return { version: 2, checkpoint, logEntries };
+}
+function chatWithFrame(storageFrame: any) {
+  return [{ is_user: false, TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame } } }];
+}
+
+describe('table-v2-recovery-service', () => {
+  beforeEach(() => {
+    h.chat = [];
+    h.save.mockReset();
+    h.save.mockResolvedValue(undefined);
+    h.scope.chatKey = 'recovery-test';
+    h.scope.isolationKey = '';
+    h.storageMode = 'native';
+    h.reload.mockReset();
+    h.reload.mockResolvedValue(undefined);
+    h.didFallback.mockReset();
+    h.didFallback.mockReturnValue(false);
+  });
+
+  it('扫描全部 V2 isolationKey 只返回诊断，不创建恢复计划或触发持久化副作用', async () => {
+    h.scope.isolationKey = 'beta';
+    h.chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        alpha: { _acu_storage_version: 2, storageFrame: frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) }) },
+        beta: { _acu_storage_version: 2, storageFrame: frame(undefined, [{ seq: 1, entryId: 'log-only', createdAt: 1, source: 'system', targetMessageIndex: 0, aiFloor: 1, filledSheetKeys: [], changedSheetKeys: [], groupKeys: [], operations: [{ kind: 'row_delete', sheetKey: 'sheet_0', rowId: '1' }] }]) },
+      },
+    }];
+    const before = structuredClone(h.chat);
+
+    const diagnostics = scanV2IsolationDiagnostics_ACU();
+
+    expect(diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ isolationKey: 'alpha', status: 'recoverable_repaired_checkpoint', isCurrentIsolation: false }),
+      expect.objectContaining({ isolationKey: 'beta', status: 'unrecoverable_no_base', isCurrentIsolation: true }),
+    ]));
+    expect(h.chat).toEqual(before);
+    expect(h.save).not.toHaveBeenCalled();
+    expect(h.reload).not.toHaveBeenCalled();
+    await expect(commitPreparedV2Recovery_ACU('not-created-by-scan')).resolves.toMatchObject({
+      status: 'commit_failed_rolled_back', error: expect.stringContaining('不存在或已失效'),
+    });
+  });
+
+  it('修复重复 row_id checkpoint，持久化原 frame 备份并生成 integrity_repair anchor', async () => {
+    const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
+    h.chat = chatWithFrame(source);
+    const prepared = prepareV2Recovery_ACU();
+
+    expect(prepared).toMatchObject({ status: 'recoverable_repaired_checkpoint', requiresConfirmation: false });
+    const result = await commitPreparedV2Recovery_ACU(prepared.planId!);
+    const tag = h.chat[0].TavernDB_ACU_IsolatedData[''];
+
+    expect(result).toEqual({ status: 'committed', planId: prepared.planId });
+    expect(h.save).toHaveBeenCalledTimes(1);
+    expect(tag.storageFrame.checkpoint.reason).toBe('integrity_repair');
+    expect(tag.recoveryBackup.storageFrame).toEqual(source);
+    expect(h.reload).not.toHaveBeenCalled();
+    await expect(loadTableStateFromFramesV2_ACU(h.chat, '', { updateRuntimeState: false })).resolves.toBeTruthy();
+  });
+
+  it('后续 operation 引用被重复身份修复重映射的 row_id 时拒绝猜测', () => {
+    const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
+    h.chat = chatWithFrame(source);
+    h.chat.push({
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: frame(undefined, [{
+            seq: 1, entryId: 'ambiguous-row-id', createdAt: 2, source: 'system', targetMessageIndex: 1, aiFloor: 1,
+            filledSheetKeys: [], changedSheetKeys: ['sheet_0'], groupKeys: [],
+            operations: [{ kind: 'row_delete', sheetKey: 'sheet_0', rowId: '1' }],
+          }]),
+        },
+      },
+    });
+
+    expect(prepareV2Recovery_ACU()).toMatchObject({
+      status: 'unrecoverable',
+      message: expect.stringContaining('重复 row_id 修复会改变后续引用的语义'),
+    });
+    expect(h.save).not.toHaveBeenCalled();
+  });
+
+  it('后续 SQL operation 绑定被重映射的 row_id 时拒绝猜测', () => {
+    const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
+    h.chat = chatWithFrame(source);
+    h.chat.push({
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: frame(undefined, [{
+            seq: 1, entryId: 'ambiguous-sql-row-id', createdAt: 2, source: 'system', targetMessageIndex: 1, aiFloor: 1,
+            filledSheetKeys: [], changedSheetKeys: ['sheet_0'], groupKeys: [],
+            operations: [{ kind: 'sql_sheet_batch', sheetKey: 'sheet_0', statements: ['DELETE FROM inventory WHERE row_id = ?'], params: [['1']] }],
+          }]),
+        },
+      },
+    });
+
+    expect(prepareV2Recovery_ACU()).toMatchObject({
+      status: 'unrecoverable',
+      message: expect.stringContaining('重复 row_id 修复会改变后续引用的语义'),
+    });
+    expect(h.save).not.toHaveBeenCalled();
+  });
+
+  it('孤立 data_replace 需要明确确认，未确认时零写入零保存', async () => {
+    const source = frame(undefined, [{ seq: 1, entryId: 'replace', createdAt: 1, source: 'import', targetMessageIndex: 0, aiFloor: 1, filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [], operations: [{ kind: 'data_replace', data: data(), reason: 'import' }] }]);
+    h.chat = chatWithFrame(source);
+    const before = structuredClone(h.chat);
+    const prepared = prepareV2Recovery_ACU();
+
+    expect(prepared).toMatchObject({ status: 'recoverable_orphan_data_replace', requiresConfirmation: true });
+    await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({ status: 'commit_failed_rolled_back', error: expect.stringContaining('必须显式确认') });
+    expect(h.chat).toEqual(before);
+    expect(h.save).not.toHaveBeenCalled();
+  });
+
+  it('宿主严格保存失败时恢复 live chat', async () => {
+    const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
+    h.chat = chatWithFrame(source);
+    const before = structuredClone(h.chat);
+    const prepared = prepareV2Recovery_ACU();
+    h.save.mockRejectedValueOnce(new Error('host write failed'));
+
+    await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({
+      status: 'commit_failed_rolled_back', error: expect.stringContaining('host write failed'),
+    });
+    expect(h.chat).toEqual(before);
+    expect(h.save).toHaveBeenCalledTimes(1);
+    expect(h.reload).not.toHaveBeenCalled();
+
+    await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toEqual({ status: 'committed', planId: prepared.planId });
+    expect(h.save).toHaveBeenCalledTimes(2);
+  });
+
+  it('恢复候选 replay 校验失败时不保存且不改写 live chat', async () => {
+    const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
+    h.chat = chatWithFrame(source);
+    const before = structuredClone(h.chat);
+    const prepared = prepareV2Recovery_ACU();
+    const replaySpy = vi.spyOn(storageFrameV2Replay, 'loadTableStateFromFramesV2_ACU').mockRejectedValueOnce(new Error('candidate replay failed'));
+
+    try {
+      await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({
+        status: 'commit_failed_rolled_back', error: expect.stringContaining('候选 replay 校验失败'),
+      });
+      expect(h.chat).toEqual(before);
+      expect(h.save).not.toHaveBeenCalled();
+      expect(h.reload).not.toHaveBeenCalled();
+    } finally {
+      replaySpy.mockRestore();
+    }
+  });
+
+  it('SQLite 恢复保存后重载 provider', async () => {
+    const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
+    h.chat = chatWithFrame(source);
+    h.storageMode = 'sqlite';
+    const prepared = prepareV2Recovery_ACU();
+
+    await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toEqual({ status: 'committed', planId: prepared.planId });
+    expect(h.save).toHaveBeenCalledTimes(1);
+    expect(h.reload).toHaveBeenCalledTimes(1);
+    expect(h.didFallback).toHaveBeenCalledWith('sqlite');
+  });
+
+  it('SQLite provider 重载失败时保留已保存恢复结果并报告后置条件失败', async () => {
+    const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
+    h.chat = chatWithFrame(source);
+    h.storageMode = 'sqlite';
+    const prepared = prepareV2Recovery_ACU();
+    h.reload.mockRejectedValueOnce(new Error('sqlite reload failed'));
+
+    await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({
+      status: 'committed_postcondition_failed', planId: prepared.planId, error: expect.stringContaining('sqlite reload failed'),
+    });
+    expect(h.save).toHaveBeenCalledTimes(1);
+    expect(h.reload).toHaveBeenCalledTimes(1);
+    expect(h.chat[0].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.reason).toBe('integrity_repair');
+  });
+
+  it('SQLite reload 静默 fallback 时保留已保存恢复结果并报告后置条件失败', async () => {
+    const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
+    h.chat = chatWithFrame(source);
+    h.storageMode = 'sqlite';
+    h.didFallback.mockReturnValueOnce(true);
+    const prepared = prepareV2Recovery_ACU();
+
+    await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({
+      status: 'committed_postcondition_failed', planId: prepared.planId, error: expect.stringContaining('静默回退'),
+    });
+    expect(h.save).toHaveBeenCalledTimes(1);
+    expect(h.reload).toHaveBeenCalledTimes(1);
+    expect(h.didFallback).toHaveBeenCalledWith('sqlite');
+    expect(h.chat[0].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.reason).toBe('integrity_repair');
+  });
+
+  it('SQLite reload 执行期间设置切换为 native 时不误报 fallback', async () => {
+    const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
+    h.chat = chatWithFrame(source);
+    h.storageMode = 'sqlite';
+    h.reload.mockImplementationOnce(async () => { h.storageMode = 'native'; });
+    h.didFallback.mockImplementationOnce(expectedMode => expectedMode === 'sqlite' && h.storageMode === 'sqlite');
+    const prepared = prepareV2Recovery_ACU();
+
+    await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toEqual({ status: 'committed', planId: prepared.planId });
+    expect(h.save).toHaveBeenCalledTimes(1);
+    expect(h.reload).toHaveBeenCalledTimes(1);
+    expect(h.didFallback).toHaveBeenCalledWith('sqlite');
+    expect(h.storageMode).toBe('native');
+  });
+
+  it('计划生成后 chat identifier 或 isolation key 漂移时拒绝提交且零保存', async () => {
+    h.chat = chatWithFrame(frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) }));
+    const before = structuredClone(h.chat);
+    const prepared = prepareV2Recovery_ACU();
+    h.scope.chatKey = 'other-chat';
+
+    await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({ status: 'commit_failed_rolled_back' });
+    expect(h.chat).toEqual(before);
+    expect(h.save).not.toHaveBeenCalled();
+    h.scope.chatKey = 'recovery-test';
+    await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({
+      status: 'commit_failed_rolled_back', error: expect.stringContaining('不存在或已失效'),
+    });
+    expect(h.save).not.toHaveBeenCalled();
+  });
+
+  it('同一作用域重新诊断会淘汰旧计划，仅最新计划可提交', async () => {
+    h.chat = chatWithFrame(frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) }));
+    const first = prepareV2Recovery_ACU();
+    const second = prepareV2Recovery_ACU();
+
+    expect(first.planId).not.toBe(second.planId);
+    await expect(commitPreparedV2Recovery_ACU(first.planId!)).resolves.toMatchObject({
+      status: 'commit_failed_rolled_back', error: expect.stringContaining('不存在或已失效'),
+    });
+    await expect(commitPreparedV2Recovery_ACU(second.planId!)).resolves.toEqual({ status: 'committed', planId: second.planId });
+    expect(h.save).toHaveBeenCalledTimes(1);
+  });
+
+  it('恢复源 frame 漂移后使计划失效，旧计划不能覆盖新 frame', async () => {
+    const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
+    h.chat = chatWithFrame(source);
+    const prepared = prepareV2Recovery_ACU();
+    h.chat[0].TavernDB_ACU_IsolatedData[''].storageFrame = frame({ kind: 'full', createdAt: 2, reason: 'init', data: data([['2', '新源']]) });
+
+    await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({
+      status: 'commit_failed_rolled_back', error: expect.stringContaining('恢复源 frame 已变化'),
+    });
+    await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({
+      status: 'commit_failed_rolled_back', error: expect.stringContaining('不存在或已失效'),
+    });
+    expect(h.save).not.toHaveBeenCalled();
+  });
+
+  it('checkpoint 后存在日志或健康 checkpoint 时拒绝自动重写', () => {
+    const invalidWithLog = frame(
+      { kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) },
+      [{ seq: 1, entryId: 'later', createdAt: 2, source: 'system', targetMessageIndex: 0, aiFloor: 1, filledSheetKeys: [], changedSheetKeys: [], groupKeys: [], operations: [{ kind: 'data_replace', data: data([['2', '后续']]), reason: 'system' }] }],
+    );
+    h.chat = chatWithFrame(invalidWithLog);
+    expect(prepareV2Recovery_ACU()).toMatchObject({ status: 'unrecoverable', message: expect.stringContaining('replay artifact') });
+
+    h.chat = chatWithFrame(frame({ kind: 'full', createdAt: 1, reason: 'init', data: data() }));
+    expect(prepareV2Recovery_ACU()).toMatchObject({ status: 'unrecoverable', message: expect.stringContaining('无需恢复') });
+    expect(h.save).not.toHaveBeenCalled();
+  });
+
+  it('纯无 base 日志保持不可恢复且零保存', () => {
+    h.chat = chatWithFrame(frame(undefined, [{ seq: 1, entryId: 'log-only', createdAt: 1, source: 'system', targetMessageIndex: 0, aiFloor: 1, filledSheetKeys: [], changedSheetKeys: [], groupKeys: [], operations: [{ kind: 'row_delete', sheetKey: 'sheet_0', rowId: '1' }] }]));
+    expect(prepareV2Recovery_ACU()).toMatchObject({ status: 'unrecoverable_no_base' });
+    expect(h.save).not.toHaveBeenCalled();
+  });
+
+});
+

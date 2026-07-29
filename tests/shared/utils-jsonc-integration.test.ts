@@ -10,6 +10,7 @@ const mockSharedDependencies_ACU = () => {
   vi.doMock('../../src/shared/log-buffer', () => ({
     pushLog: vi.fn(),
     isDebugLogEnabled: () => false,
+    isWarnLogEnabled: () => false,
   }));
 };
 

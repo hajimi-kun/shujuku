@@ -53,6 +53,11 @@ export default defineConfig({
     include: ['tests/**/*.test.ts'],
     globals: true,
     testTimeout: 15000,
+    // 全量套件已超过 5000 个用例。默认并行 worker 会同时启动多份 Vite/Vue/jsdom/SQLite
+    // 运行时，峰值内存远高于单个测试本身。生产门禁优先稳定完成，而不是榨干本机资源。
+    maxWorkers: 1,
+    fileParallelism: false,
+    maxConcurrency: 1,
     typecheck: {
       tsconfig: './tsconfig.json',
     },

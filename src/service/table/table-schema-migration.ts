@@ -145,7 +145,6 @@ function getExpectedChanges_ACU(
   target: TableSheetSchemaDescriptorV2_ACU,
 ): TableSchemaColumnChangeV2_ACU[] {
   if (before.uid !== target.uid) throw new Error('schema migration 不允许修改 sheet uid。');
-  if (before.tableName !== target.tableName) throw new Error('schema migration 不允许修改物理表名。');
   if (canonicalJson_ACU(before.tableConstraints) !== canonicalJson_ACU(target.tableConstraints)) throw new Error('P1 不支持表级 constraint 变更。');
   if (before.tableSuffix !== target.tableSuffix) throw new Error('P1 不支持 CREATE TABLE suffix 变更。');
   const beforeByName = new Map(before.columns.map(column => [column.physicalName, column]));
@@ -300,7 +299,7 @@ function buildMigratedSheetV2_ACU(currentSheet: Sheet_ACU, operation: TableSheet
   const current = getSheetSchemaDescriptorV2Contract_ACU(currentSheet);
   assertDescriptorV2MatchesSheet_ACU(operation.beforeSchema, currentSheet, 'schema migration V2 beforeSchema');
   assertDescriptorV2MatchesSheet_ACU(operation.targetSchema, descriptorV2ToSheet_ACU(operation.targetSchema), 'schema migration V2 targetSchema');
-  if (current.uid !== operation.targetSchema.uid || current.tableName !== operation.targetSchema.tableName) throw new Error('schema migration V2 不允许修改 sheet uid 或物理表名。');
+  if (current.uid !== operation.targetSchema.uid) throw new Error('schema migration V2 不允许修改 sheet uid。');
   if (current.columns[0]?.physicalName !== 'row_id' || operation.targetSchema.columns[0]?.physicalName !== 'row_id') throw new Error('schema migration V2 必须保留 row_id。');
 
   const sourceByName = new Map(current.columns.map(column => [column.physicalName, column]));
@@ -317,7 +316,6 @@ function buildMigratedSheetV2_ACU(currentSheet: Sheet_ACU, operation: TableSheet
   });
   const removed = current.columns.slice(1).filter(column => !targetByName.has(column.physicalName) && !mappings.some(item => item.fromPhysicalName === column.physicalName));
   const added = operation.targetSchema.columns.slice(1).filter(column => !sourceByName.has(column.physicalName) && !mappedSource.has(column.physicalName));
-  if (mappings.length === 0 && removed.length > 0 && added.length > 0) throw new Error('新增与删除 physical column 同时存在时必须由完整的一对一 physicalColumnMappings 覆盖。');
   if (removed.length > 0 && !operation.migrationPolicy?.destructiveChangeConfirmed) throw new Error('schema migration V2 删除列需要 destructiveChangeConfirmed。');
 
   const conversionByTarget = new Map<string, TableSchemaConversionPolicyV2_ACU>();

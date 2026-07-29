@@ -24,6 +24,26 @@ function hasNonEmptyStringArray_ACU(value: unknown): boolean {
   return Array.isArray(value) && value.some(item => typeof item === 'string' && item.startsWith('sheet_'));
 }
 
+/**
+ * Detects persisted V2 table evidence, including damaged slots whose version markers were lost.
+ * Vector-index-only metadata is deliberately excluded: it does not establish a sheet identity.
+ */
+export function hasV2TableHistoryEvidence_ACU(tagData: unknown): boolean {
+  if (!isObjectRecord_ACU(tagData)) return false;
+  if (tagData._acu_storage_version === 2) return true;
+
+  const frame = tagData.storageFrame;
+  if (!isObjectRecord_ACU(frame)) return false;
+  if (frame.version === 2) return true;
+  if (frame.checkpoint !== undefined) return true;
+  if (frame.perSheetCheckpoints !== undefined) return true;
+  if (Array.isArray(frame.logEntries) && frame.logEntries.length > 0) return true;
+  if (frame.manualRefillProgress !== undefined) return true;
+  return frame.headRevision !== undefined
+    && frame.headRevision !== null
+    && (typeof frame.headRevision !== 'string' || frame.headRevision.length > 0);
+}
+
 export function isV2TagData_ACU(tagData: unknown): tagData is IsolationTagData_ACU & { storageFrame: TableStorageFrameV2_ACU } {
   if (!isObjectRecord_ACU(tagData)) return false;
   const frame = tagData.storageFrame;
@@ -75,6 +95,7 @@ export function resolveTableStorageStrategy_ACU(
   }
 
   let hasV2 = false;
+  let hasV2Marker = false;
   let hasLegacy = false;
   const legacyReasons = new Set<string>();
 
@@ -84,6 +105,10 @@ export function resolveTableStorageStrategy_ACU(
 
     const tagData = readIsolatedTagData_ACU(message, isolationKey) as any;
     if (tagData) {
+      // A malformed/partial V2 slot is still persisted table-history evidence. Treating it as
+      // empty would allow callers to enter pristine initialization and reassign stable keys.
+      // Downstream replay/commit owns structural validation and must fail closed instead.
+      if (hasV2TableHistoryEvidence_ACU(tagData)) hasV2Marker = true;
       if (isV2TagData_ACU(tagData)) {
         hasV2 = true;
       }
@@ -107,7 +132,7 @@ export function resolveTableStorageStrategy_ACU(
     };
   }
 
-  if (hasV2) {
+  if (hasV2 || hasV2Marker) {
     return { mode: 'v2' };
   }
 

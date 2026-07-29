@@ -45,6 +45,23 @@ export interface ApplyEditsResult {
   error?: string;
 }
 
+/** SQLite 原子行身份分配与批量执行结果。 */
+export interface ApplyEditsWithRowIdMaterializationResult_ACU extends ApplyEditsResult {
+  /** 与输入 editsList 一一对应的、实际执行并用于 V2 记录的 SQL。 */
+  materializedSqlTexts: string[];
+  /** 执行完成后从 SQLite 严格导出的真实运行时数据。 */
+  tableData: TableDataObject_ACU;
+}
+
+/** AI 请求发起前捕获的 SQLite 模板上下文。提交阶段不得重新读取当前聊天模板。 */
+export interface SqlTableApplyScope_ACU {
+  readonly isolationKey: string;
+  /** 去除模板数据行后的建表/别名权威快照。 */
+  readonly templateData: TableDataObject_ACU;
+  /** 保留作者数据行的模板快照，仅供首次建表补种。 */
+  readonly templateDataWithRows: TableDataObject_ACU;
+}
+
 /**
  * 统一的表格存储提供者接口
  *
@@ -123,11 +140,30 @@ export interface ITableStorageProvider {
    */
   applyEditsBatch?(editsList: string[], updateMode?: string, paramsList?: (string | number | null)[][]): ApplyEditsResult;
 
+  /**
+   * 在 provider 内原子完成模板建表、空表补种、系统 row_id 分配和批量执行。
+   * 仅 SQLite provider 实现；调用方不得在 provider 外预分配 row_id。
+   */
+  applyEditsWithSystemRowIds?(
+    editsList: string[],
+    updateMode?: string,
+    scope?: SqlTableApplyScope_ACU,
+  ): ApplyEditsWithRowIdMaterializationResult_ACU;
+
   /** 创建运行时快照，用于提交失败或重试前回滚。sqlite 返回二进制 DB 快照；native 可不实现。 */
   createRuntimeSnapshot?(): unknown;
 
   /** 恢复 createRuntimeSnapshot 创建的运行时快照。 */
   restoreRuntimeSnapshot?(snapshot: unknown): Promise<void>;
+
+  /**
+   * 按给定 canonical 快照刷新本 provider 发布的中英文名映射。
+   * 供 provider 常规 hydrate 之外的入口（回滚、外部 CRUD）在活跃 runtime 上同步映射，
+   * 使映射的所有权、内容与 schema 始终来自同一次合法发布。native 可不实现。
+   *
+   * @returns 是否已发布可信映射。
+   */
+  refreshNameMapperForData_ACU?(data: TableDataObject_ACU): boolean;
 
   /**
    * 精确清空运行时表格状态，不读取聊天记录也不创建模板数据。

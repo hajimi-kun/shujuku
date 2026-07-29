@@ -14,22 +14,37 @@ describe('canonical-checkpoint-builder', () => {
     const scheduleSummary = { sheet_0: { lastFilledAiFloor: 3, lastChangedAiFloor: 2 } } as any;
     const event = { filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'] } as any;
     const manualRefillProgress = { kind: 'manual_refill', status: 'complete', selectedSheetKeys: ['sheet_0'] } as any;
+    const migrationProvenance = {
+      version: 1 as const,
+      legacyDataFingerprint: 'fnv1a:abcd1234',
+      legacySourceMessageIndices: [0],
+      legacySourceAiFloors: [1],
+      legacyLastChangedAiFloorBySheet: { sheet_0: 1 },
+      targetMessageIndex: 4,
+      targetAiFloor: 2,
+      isolationKey: 'tag-a',
+      migratedAt: 10,
+    };
 
     const result = buildCanonicalFullCheckpoint_ACU({
-      createdAt: 10, reason: 'init', data, scheduleSummary, event, manualRefillProgress,
+      createdAt: 10, reason: 'migration', data, scheduleSummary, event, manualRefillProgress, migrationProvenance,
       context: { messageIndex: 4, aiFloor: 2, isolationKey: 'tag-a' },
     });
 
-    expect(result.checkpoint).toMatchObject({ kind: 'full', createdAt: 10, reason: 'init', data, scheduleSummary, event, manualRefillProgress });
+    expect(result.checkpoint).toMatchObject({ kind: 'full', createdAt: 10, reason: 'migration', data, scheduleSummary, event, manualRefillProgress, migrationProvenance });
     expect(result.issues).toBeUndefined();
     data.sheet_0.content[1][1] = '调用方修改';
     scheduleSummary.sheet_0.lastFilledAiFloor = 99;
     event.changedSheetKeys.push('sheet_other');
     manualRefillProgress.selectedSheetKeys.push('sheet_other');
+    migrationProvenance.legacySourceMessageIndices.push(9);
+    migrationProvenance.legacyLastChangedAiFloorBySheet.sheet_0 = 99;
     expect(result.checkpoint?.data.sheet_0.content[1][1]).toBe('铁剑');
     expect(result.checkpoint?.scheduleSummary?.sheet_0.lastFilledAiFloor).toBe(3);
     expect(result.checkpoint?.event?.changedSheetKeys).toEqual(['sheet_0']);
     expect(result.checkpoint?.manualRefillProgress?.selectedSheetKeys).toEqual(['sheet_0']);
+    expect(result.checkpoint?.migrationProvenance?.legacySourceMessageIndices).toEqual([0]);
+    expect(result.checkpoint?.migrationProvenance?.legacyLastChangedAiFloorBySheet).toEqual({ sheet_0: 1 });
   });
 
   it('构建 sheet checkpoint 时保留 baseRevision 并深拷贝 metadata', () => {

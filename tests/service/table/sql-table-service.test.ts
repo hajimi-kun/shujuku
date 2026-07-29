@@ -18,6 +18,7 @@ vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: vi.fn(),
   logWarn_ACU: vi.fn(),
   logError_ACU: vi.fn(),
+  hashUserInput_ACU: vi.fn((text: string) => text ? 'mock-ddl-digest' : ''),
   isSummaryOrOutlineTable_ACU: vi.fn(() => false),
   parseTableTemplateJson_ACU: vi.fn(() => null),
   stripSeedRowsFromTemplate_ACU: vi.fn((obj: any) => {
@@ -54,9 +55,17 @@ vi.mock('../../../src/service/runtime/helpers-data-merge', () => ({
 }));
 
 // mock name-mapper
+const { mockPublishGlobalNameMapper, mockReleaseGlobalNameMapper, mockPublishGlobalNameMapperEmptySchema, mockCreateNameMapperOwnerToken } = vi.hoisted(() => ({
+  mockPublishGlobalNameMapper: vi.fn(() => true),
+  mockReleaseGlobalNameMapper: vi.fn(() => true),
+  mockPublishGlobalNameMapperEmptySchema: vi.fn(() => true),
+  mockCreateNameMapperOwnerToken: vi.fn((label: string) => ({ id: 1, label })),
+}));
 vi.mock('../../../src/service/runtime/template-vars/name-mapper', () => ({
-  buildGlobalNameMapper: vi.fn(),
-  disposeGlobalNameMapper: vi.fn(),
+  createNameMapperOwnerToken_ACU: mockCreateNameMapperOwnerToken,
+  publishGlobalNameMapperForDDLs_ACU: mockPublishGlobalNameMapper,
+  publishGlobalNameMapperEmptySchema_ACU: mockPublishGlobalNameMapperEmptySchema,
+  releaseGlobalNameMapperForOwner_ACU: mockReleaseGlobalNameMapper,
 }));
 
 // mock chat-scope（getEffectiveSeedRowsForSheet_ACU + getCurrentChatTemplateScopeState_ACU）
@@ -102,12 +111,79 @@ vi.mock('../../../src/shared/json-helpers', () => ({
 // 现在 import 被测模块
 import {
   applySqlEditsToTableDataSnapshot_ACU,
+  assertNoHiddenPhysicalColumnMutations_ACU,
   buildSqlSheetBatchOperations_ACU,
+  captureSqlTableApplyScope_ACU,
+  materializeSystemRowIdsForSqlInserts_ACU,
+  rebindSqlMutationTableIdentifiers_ACU,
+  SqlRuntimeSnapshotError_ACU,
   SqlTableService,
   splitSqlStatements,
   extractTableNamesFromStatements,
 } from '../../../src/service/table/sql-table-service';
 import { parseTableTemplateJson_ACU } from '../../../src/shared/utils';
+// ═══════════════════════════════════════════════════════════════
+// 回归：新卡首次填表时 rebind 必须覆盖模板里的表（no such table 修复）
+// ═══════════════════════════════════════════════════════════════
+describe('rebindSqlMutationTableIdentifiers_ACU · 模板别名补充', () => {
+  const protagonistDdl = `CREATE TABLE protagonist_info ( -- 主角信息表\n  row_id INTEGER PRIMARY KEY, -- 行号\n  name TEXT -- 姓名\n);`;
+  const templateData: any = {
+    mate: {},
+    sheet_zhujue: {
+      uid: 'protagonist',
+      name: '主角信息表',
+      sourceData: { ddl: protagonistDdl },
+      content: [['row_id', '姓名']],
+      updateConfig: {},
+      exportConfig: {},
+      orderNo: 0,
+    },
+  };
+
+  beforeEach(() => {
+    mockGetCurrentChatTemplateScopeState.mockReturnValue(null);
+  });
+
+  it('运行时快照为空时，仍能借模板把 DDL 旧表名重绑定为拼音物理名', () => {
+    mockGetCurrentChatTemplateScopeState.mockReturnValue({
+      mode: 'chat_override',
+      templateStr: JSON.stringify(templateData),
+    });
+    // 场景 A：新卡首次填表，baseSnapshot 里还没有这张表。
+    const emptySnapshot: any = { mate: {} };
+    const [rebound] = rebindSqlMutationTableIdentifiers_ACU(
+      ["INSERT INTO protagonist_info (row_id, name) VALUES (1, '阿不思')"],
+      emptySnapshot,
+    );
+    expect(rebound).toContain('zhujuexinxibiao');
+    expect(rebound).not.toContain('protagonist_info');
+  });
+
+  it('显式传入 null 补充源时不读模板，保持调用方完全控制', () => {
+    mockGetCurrentChatTemplateScopeState.mockReturnValue({
+      mode: 'chat_override',
+      templateStr: JSON.stringify(templateData),
+    });
+    const [rebound] = rebindSqlMutationTableIdentifiers_ACU(
+      ["INSERT INTO protagonist_info (row_id, name) VALUES (1, '阿不思')"],
+      { mate: {} } as any,
+      null,
+    );
+    expect(rebound).toContain('protagonist_info');
+  });
+
+  it('运行时快照已有该表时，物理名解析结果一致（幂等）', () => {
+    const [rebound] = rebindSqlMutationTableIdentifiers_ACU(
+      ["INSERT INTO protagonist_info (row_id, name) VALUES (1, '阿不思')"],
+      templateData,
+      null,
+    );
+    expect(rebound).toContain('zhujuexinxibiao');
+    expect(rebound).not.toContain('protagonist_info');
+  });
+});
+
+
 
 // ═══════════════════════════════════════════════════════════════
 // 纯函数测试：splitSqlStatements
@@ -206,6 +282,16 @@ describe('extractTableNamesFromStatements', () => {
     expect(result).toEqual(['inventory']);
   });
 
+  it.each([
+    ["REPLACE INTO inventory VALUES (1, '铁剑', 3)", 'inventory'],
+    ["REPLACE INTO inventory (row_id, value) VALUES (1, 'INSERT INTO quest_log')", 'inventory'],
+    ["REPLACE INTO inventory (row_id, value) VALUES (1, 'x') /* INSERT INTO quest_log */", 'inventory'],
+    ["INSERT OR REPLACE INTO inventory (row_id, value) VALUES (1, 'UPDATE quest_log SET value = 1')", 'inventory'],
+    ["REPLACE INTO main.inventory (row_id, value) VALUES (1, 'x')", 'inventory'],
+  ])('使用 mutation token 提取真实目标表：%s', (sql, expected) => {
+    expect(extractTableNamesFromStatements([sql])).toEqual([expected]);
+  });
+
   it('提取 UPDATE 的表名', () => {
     const result = extractTableNamesFromStatements(["UPDATE inventory SET quantity = 5 WHERE row_id = 1"]);
     expect(result).toEqual(['inventory']);
@@ -294,7 +380,7 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
 
   it('基于显式快照应用 SQL，返回 workingData 且不污染输入快照与全局状态', async () => {
     const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
-    const result = await applySqlEditsToTableDataSnapshot_ACU("UPDATE inventory SET quantity = 9 WHERE row_id = 1; INSERT INTO inventory VALUES (2, '治疗药水', 5);", inputSnapshot);
+    const result = await applySqlEditsToTableDataSnapshot_ACU("UPDATE inventory SET quantity = 9 WHERE row_id = 1; INSERT INTO inventory (item_name, quantity) VALUES ('治疗药水', 5);", inputSnapshot);
 
     expect(result.success).toBe(true);
     expect(result.modifiedKeys).toEqual(['sheet_0']);
@@ -302,6 +388,20 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
     expect(result.workingData?.sheet_0.content).toEqual([['row_id', 'item_name', 'quantity'], ['1', '铁剑', '9'], ['2', '治疗药水', '5']]);
     expect(inputSnapshot.sheet_0.content).toEqual([['row_id', 'item_name', 'quantity'], ['1', '铁剑', '3']]);
     expect(mockCurrentJsonTableData).toBeNull();
+  });
+
+  it('generation 链不接受 replay 专属 sheetKey 或 uid alias', async () => {
+    const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+    inputSnapshot.sheet_0.uid = 'inventory_uid';
+
+    const sheetKeyResult = await applySqlEditsToTableDataSnapshot_ACU('UPDATE sheet_0 SET quantity = 9 WHERE row_id = 1;', inputSnapshot);
+    const uidResult = await applySqlEditsToTableDataSnapshot_ACU('UPDATE inventory_uid SET quantity = 9 WHERE row_id = 1;', inputSnapshot);
+
+    expect(sheetKeyResult.success).toBe(false);
+    expect(sheetKeyResult.error).toMatch(/no such table: sheet_0/i);
+    expect(uidResult.success).toBe(false);
+    expect(uidResult.error).toMatch(/no such table: inventory_uid/i);
+    expect(inputSnapshot.sheet_0.content).toEqual([['row_id', 'item_name', 'quantity'], ['1', '铁剑', '3']]);
   });
 
   it('SQL 失败时返回错误且不污染输入快照与全局状态', async () => {
@@ -317,7 +417,7 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
   it('严格单表日志模式下返回 sql_sheet_batch 而不是旧 sql_batch', async () => {
     const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
     const result = await applySqlEditsToTableDataSnapshot_ACU(
-      "UPDATE inventory SET quantity = 9 WHERE row_id = 1; INSERT INTO inventory VALUES (2, '治疗药水', 5);",
+      "UPDATE inventory SET quantity = 9 WHERE row_id = 1; INSERT INTO inventory (item_name, quantity) VALUES ('治疗药水', 5);",
       inputSnapshot,
       'auto_standard',
       { targetSheetKeys: ['sheet_0'], requireSheetScopedOperations: true, allowSingleTargetFallback: true },
@@ -328,25 +428,266 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
       kind: 'sql_sheet_batch',
       sheetKey: 'sheet_0',
       statements: [
-        'UPDATE inventory SET quantity = 9 WHERE row_id = 1',
-        "INSERT INTO inventory VALUES (2, '治疗药水', 5)",
+        'UPDATE beibaowupinbiao SET quantity = 9 WHERE row_id = 1',
+        "INSERT INTO beibaowupinbiao (row_id, item_name, quantity) VALUES (2, '治疗药水', 5)",
       ],
-      tableName: 'inventory',
+      tableName: 'beibaowupinbiao',
       reason: 'system',
     }]);
   });
 
-  it('严格单表日志模式下拒绝无法归属到单表的 SQL', async () => {
+  it('目标表可识别的 WITH UPDATE 记录为 sql_sheet_batch', async () => {
     const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
     const result = await applySqlEditsToTableDataSnapshot_ACU(
-      'CREATE TABLE temp_table (row_id INTEGER PRIMARY KEY);',
+      "WITH selected AS (SELECT 1 AS row_id) UPDATE inventory SET quantity = 9 WHERE row_id IN (SELECT row_id FROM selected);",
       inputSnapshot,
       'auto_standard',
       { targetSheetKeys: ['sheet_0'], requireSheetScopedOperations: true, allowSingleTargetFallback: false },
     );
 
+    expect(result.success).toBe(true);
+    expect(result.workingData?.sheet_0.content[1]).toEqual(['1', '铁剑', '9']);
+    expect(result.operations).toEqual([{
+      kind: 'sql_sheet_batch',
+      sheetKey: 'sheet_0',
+      statements: ['WITH selected AS (SELECT 1 AS row_id) UPDATE beibaowupinbiao SET quantity = 9 WHERE row_id IN (SELECT row_id FROM selected)'],
+      tableName: 'beibaowupinbiao',
+      reason: 'system',
+    }]);
+  });
+
+  it('拒绝 INSERT SELECT，避免将不可确定的 row_id 写入 V2 日志', async () => {
+    const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+    inputSnapshot.sheet_1 = {
+      uid: 'quest_log',
+      name: '任务表',
+      sourceData: { ddl: 'CREATE TABLE quest_log (row_id INTEGER PRIMARY KEY, item_name TEXT NOT NULL, quantity INTEGER DEFAULT 1);' },
+      content: [['row_id', 'item_name', 'quantity'], ['2', '支线任务', '1']],
+      updateConfig: {},
+      exportConfig: {},
+      orderNo: 1,
+    };
+
+    const result = await applySqlEditsToTableDataSnapshot_ACU(
+      'INSERT INTO inventory SELECT row_id, item_name, quantity FROM quest_log;',
+      inputSnapshot,
+      'auto_standard',
+      { targetSheetKeys: ['sheet_0'], requireSheetScopedOperations: true, allowSingleTargetFallback: true },
+    );
+
     expect(result.success).toBe(false);
-    expect(result.error).toContain('SQL 语句无法归属到单表日志');
+    expect(result.error).toContain('不支持 INSERT SELECT');
+    expect(inputSnapshot.sheet_0.content).toEqual([['row_id', 'item_name', 'quantity'], ['1', '铁剑', '3']]);
+  });
+
+  it('为同一批 INSERT 按当前最大 row_id 连续分配，并持久化具体身份', async () => {
+    const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+    inputSnapshot.sheet_0.content.push(['3', '盾牌', '1']);
+    const result = await applySqlEditsToTableDataSnapshot_ACU(
+      "INSERT INTO inventory (item_name, quantity) VALUES ('药水', 5), ('卷轴', 2);",
+      inputSnapshot,
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.workingData?.sheet_0.content.slice(1).map((row: any[]) => row[0])).toEqual(['1', '3', '4', '5']);
+    expect((result.operations?.[0] as any).statements).toEqual([
+      "INSERT INTO beibaowupinbiao (row_id, item_name, quantity) VALUES (4, '药水', 5), (5, '卷轴', 2)",
+    ]);
+  });
+
+  it('静默忽略 AI 显式 row_id，并按系统保留序列重新分配', () => {
+    const result = materializeSystemRowIdsForSqlInserts_ACU([
+      "INSERT INTO beibaowupinbiao (row_id, item_name, quantity) VALUES (999, '药水', 5)",
+      "INSERT INTO beibaowupinbiao (item_name, row_id, quantity) VALUES ('卷轴', 888, 2), ('盾牌', 777, 1)",
+      "INSERT INTO beibaowupinbiao (item_name, quantity, \"ROW_ID\") VALUES ('钥匙', 1, 666)",
+    ], snapshotTableData);
+
+    expect(result).toEqual([
+      "INSERT INTO beibaowupinbiao (row_id, item_name, quantity) VALUES (2, '药水', 5)",
+      "INSERT INTO beibaowupinbiao (row_id, item_name, quantity) VALUES (3, '卷轴', 2), (4, '盾牌', 1)",
+      "INSERT INTO beibaowupinbiao (row_id, item_name, quantity) VALUES (5, '钥匙', 1)",
+    ]);
+    expect(result.join('\n')).not.toContain('999');
+    expect(result.join('\n')).not.toContain('888');
+    expect(result.join('\n')).not.toContain('777');
+    expect(result.join('\n')).not.toContain('666');
+  });
+
+  it('普通表保留 INSERT OR REPLACE 原生语义，并将实际 SQL 写入单表 operation', async () => {
+    const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+    inputSnapshot.sheet_0.sourceData.ddl = 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT NOT NULL, quantity INTEGER DEFAULT 1);';
+    inputSnapshot.sheet_0.content = [
+      ['row_id', 'item_name', 'quantity'],
+      ['1', '旧物品', '1'],
+      ['2', '旧卷轴', '2'],
+    ];
+    const sql = "INSERT OR REPLACE INTO inventory (row_id, item_name, quantity) VALUES (1, '新物品', 9), (2, '新卷轴', 8);";
+
+    expect(materializeSystemRowIdsForSqlInserts_ACU([sql], inputSnapshot)).toEqual([sql]);
+    expect(() => assertNoHiddenPhysicalColumnMutations_ACU([sql], inputSnapshot)).not.toThrow();
+
+    const result = await applySqlEditsToTableDataSnapshot_ACU(
+      sql,
+      inputSnapshot,
+      'auto_standard',
+      { targetSheetKeys: ['sheet_0'], requireSheetScopedOperations: true, allowSingleTargetFallback: true },
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.workingData?.sheet_0.content).toEqual([
+      ['row_id', 'item_name', 'quantity'],
+      ['1', '新物品', '9'],
+      ['2', '新卷轴', '8'],
+    ]);
+    expect(result.operations).toEqual([{
+      kind: 'sql_sheet_batch', sheetKey: 'sheet_0', statements: [sql.replace('inventory', 'beibaowupinbiao').replace(/;$/, '')],
+      tableName: 'beibaowupinbiao', reason: 'system',
+    }]);
+  });
+
+  it('REPLACE INTO 执行后返回 modifiedKeys 并生成单表 operation', async () => {
+    const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+    inputSnapshot.sheet_1 = {
+      uid: 'quest_log',
+      name: '任务表',
+      sourceData: { ddl: 'CREATE TABLE quest_log (row_id INTEGER PRIMARY KEY, value TEXT);' },
+      content: [['row_id', 'value'], ['1', '旧任务']],
+    };
+    inputSnapshot.sheet_0.content = [
+      ['row_id', 'item_name', 'quantity'],
+      ['1', '旧物品', '1'],
+    ];
+    const sql = "REPLACE INTO inventory (row_id, item_name, quantity) VALUES (1, 'INSERT INTO quest_log', 9);";
+
+    const result = await applySqlEditsToTableDataSnapshot_ACU(sql, inputSnapshot);
+
+    expect(result.success).toBe(true);
+    expect(result.modifiedKeys).toEqual(['sheet_0']);
+    expect(result.workingData?.sheet_0.content).toEqual([
+      ['row_id', 'item_name', 'quantity'],
+      ['1', 'INSERT INTO quest_log', '9'],
+    ]);
+    expect(result.workingData?.sheet_1.content).toEqual([['row_id', 'value'], ['1', '旧任务']]);
+    expect(result.operations).toEqual([{
+      kind: 'sql_sheet_batch',
+      sheetKey: 'sheet_0',
+      statements: ["REPLACE INTO beibaowupinbiao (row_id, item_name, quantity) VALUES (1, 'INSERT INTO quest_log', 9)"],
+      tableName: 'beibaowupinbiao',
+      reason: 'system',
+    }]);
+  });
+
+  it.each([
+    "INSERT OR REPLACE INTO inventory (item_name, quantity) VALUES ('药水', 1)",
+    "INSERT OR REPLACE INTO inventory (row_id, item_name, quantity) VALUES (3, '药水', 1)",
+    "INSERT OR REPLACE INTO inventory (row_id, item_name, quantity) VALUES (1 + 0, '药水', 1)",
+    "REPLACE INTO inventory (row_id, item_name, quantity) VALUES (1, '药水', 1)",
+  ])('REPLACE 语句不再受固定槽位契约限制：%s', sql => {
+    const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+    expect(materializeSystemRowIdsForSqlInserts_ACU([sql], inputSnapshot)).toEqual([sql]);
+    expect(() => assertNoHiddenPhysicalColumnMutations_ACU([sql], inputSnapshot)).not.toThrow();
+  });
+
+  it('普通稳定身份表允许 INSERT OR REPLACE', () => {
+    const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+    const sql = "INSERT OR REPLACE INTO inventory (row_id, item_name, quantity) VALUES (1, '药水', 1)";
+
+    expect(materializeSystemRowIdsForSqlInserts_ACU([sql], inputSnapshot)).toEqual([sql]);
+    expect(() => assertNoHiddenPhysicalColumnMutations_ACU([sql], inputSnapshot)).not.toThrow();
+  });
+
+  it('显式 row_id 是唯一列时拒绝无业务内容的 INSERT', () => {
+    expect(() => materializeSystemRowIdsForSqlInserts_ACU(
+      ['INSERT INTO beibaowupinbiao (row_id) VALUES (999)'],
+      snapshotTableData,
+    )).toThrow('剔除 row_id 后没有业务列');
+  });
+
+  it('无列清单 INSERT 仍然 fail closed', () => {
+    expect(() => materializeSystemRowIdsForSqlInserts_ACU(
+      ["INSERT INTO beibaowupinbiao VALUES (2, '药水', 5)"],
+      snapshotTableData,
+    )).toThrow('必须显式列出业务列');
+  });
+});
+
+describe('assertNoHiddenPhysicalColumnMutations_ACU', () => {
+  const tableData: any = {
+    sheet_0: {
+      uid: 'inventory',
+      name: '背包物品表',
+      sourceData: {
+        ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT, legacy_note TEXT, quantity INTEGER);',
+        hiddenPhysicalColumns: ['legacy_note'],
+      },
+      content: [
+        ['row_id', '名称', '旧备注', '数量'],
+        ['1', '铁剑', '历史秘密', '3'],
+      ],
+    },
+  };
+
+  it('拒绝 UPDATE、INSERT 和 WHERE 引用隐藏物理列', () => {
+    expect(() => assertNoHiddenPhysicalColumnMutations_ACU([
+      "UPDATE inventory SET legacy_note = '改写' WHERE row_id = 1",
+    ], tableData)).toThrow('不允许引用隐藏物理列');
+    expect(() => assertNoHiddenPhysicalColumnMutations_ACU([
+      "INSERT INTO inventory (row_id, item_name, legacy_note, quantity) VALUES (2, '药水', '秘密', 1)",
+    ], tableData)).toThrow('不允许引用隐藏物理列');
+    expect(() => assertNoHiddenPhysicalColumnMutations_ACU([
+      "UPDATE inventory SET quantity = 4 WHERE legacy_note = '历史秘密'",
+    ], tableData)).toThrow('不允许引用隐藏物理列');
+  });
+
+  it('存在隐藏列时拒绝省略 INSERT 列清单，避免按完整物理顺序写穿', () => {
+    expect(() => assertNoHiddenPhysicalColumnMutations_ACU([
+      "INSERT INTO inventory VALUES (2, '药水', '秘密', 1)",
+    ], tableData)).toThrow('必须显式列出可见目标列');
+  });
+
+  it('允许只引用可见列，并忽略字符串与注释中的隐藏列文本', () => {
+    expect(() => assertNoHiddenPhysicalColumnMutations_ACU([
+      "UPDATE inventory SET quantity = quantity + 1, item_name = 'legacy_note' /* legacy_note */ WHERE row_id = 1",
+      "INSERT INTO inventory (row_id, item_name, quantity) VALUES (2, '药水', 1)",
+    ], tableData)).not.toThrow();
+  });
+
+  it.each([
+    'UPDATE main.inventory SET legacy_note = \'改写\' WHERE row_id = 1',
+    'UPDATE "main"."inventory" SET "legacy_note" = \'改写\' WHERE row_id = 1',
+    'UPDATE `main`.`inventory` SET `legacy_note` = \'改写\' WHERE row_id = 1',
+    'UPDATE [main].[inventory] SET [legacy_note] = \'改写\' WHERE row_id = 1',
+    "INSERT INTO main.inventory (row_id, item_name, legacy_note, quantity) VALUES (2, '药水', '秘密', 1)",
+    "DELETE FROM main.inventory WHERE legacy_note = '历史秘密'",
+  ])('拒绝 schema-qualified 或 quoted target 对隐藏列的引用：%s', statement => {
+    expect(() => assertNoHiddenPhysicalColumnMutations_ACU([statement], tableData))
+      .toThrow('不允许引用隐藏物理列');
+  });
+
+  it.each([
+    'REPLACE INTO inventory (item_name, quantity) VALUES (\'药水\', 1)',
+    'INSERT OR REPLACE INTO inventory (item_name, quantity) VALUES (\'药水\', 1)',
+    'WITH payload AS (SELECT 1) REPLACE INTO inventory (item_name, quantity) VALUES (\'药水\', 1)',
+  ])('允许 REPLACE 数据变更语句：%s', statement => {
+    expect(() => assertNoHiddenPhysicalColumnMutations_ACU([statement], tableData)).not.toThrow();
+  });
+
+  it.each([
+    'ALTER TABLE inventory DROP COLUMN legacy_note',
+    'CREATE TABLE another_table (id INTEGER)',
+    'DROP TABLE inventory',
+    'BEGIN',
+    'COMMIT',
+  ])('对 AI SQL 的非 mutation 语句 fail closed：%s', statement => {
+    expect(() => assertNoHiddenPhysicalColumnMutations_ACU([statement], tableData))
+      .toThrow('SQLite 填表仅允许 INSERT、REPLACE、UPDATE、DELETE 数据变更语句');
+  });
+
+  it('拒绝多语句中位于后续语句的隐藏列引用', () => {
+    expect(() => assertNoHiddenPhysicalColumnMutations_ACU([
+      "UPDATE inventory SET quantity = 4 WHERE row_id = 1",
+      "UPDATE inventory SET legacy_note = '历史秘密' WHERE row_id = 1",
+    ], tableData)).toThrow('不允许引用隐藏物理列');
   });
 });
 
@@ -364,8 +705,8 @@ describe('buildSqlSheetBatchOperations_ACU', () => {
     ], tableData, { reason: 'system' });
 
     expect(result.operations).toEqual([
-      { kind: 'sql_sheet_batch', sheetKey: 'sheet_0', statements: ["INSERT INTO inventory VALUES (1, 'a')", "UPDATE inventory SET value = 'b' WHERE row_id = 1"], tableName: 'inventory', reason: 'system' },
-      { kind: 'sql_sheet_batch', sheetKey: 'sheet_1', statements: ["INSERT INTO quest_log VALUES (1, 'q')"], tableName: 'quest_log', reason: 'system' },
+      { kind: 'sql_sheet_batch', sheetKey: 'sheet_0', statements: ["INSERT INTO inventory VALUES (1, 'a')", "UPDATE inventory SET value = 'b' WHERE row_id = 1"], tableName: 'beibaobiao', reason: 'system' },
+      { kind: 'sql_sheet_batch', sheetKey: 'sheet_1', statements: ["INSERT INTO quest_log VALUES (1, 'q')"], tableName: 'renwubiao', reason: 'system' },
     ]);
     expect(result.unknownStatements).toEqual([]);
     expect(result.ambiguousStatements).toEqual([]);
@@ -378,8 +719,20 @@ describe('buildSqlSheetBatchOperations_ACU', () => {
       { fallbackTargetSheetKeys: ['sheet_0'], allowSingleTargetFallback: true, reason: 'system' },
     );
 
-    expect(result.operations).toEqual([{ kind: 'sql_sheet_batch', sheetKey: 'sheet_0', statements: ['CREATE TABLE temp_table (row_id INTEGER PRIMARY KEY)'], reason: 'system' }]);
+    expect(result.operations).toEqual([{ kind: 'sql_sheet_batch', sheetKey: 'sheet_0', statements: ['CREATE TABLE temp_table (row_id INTEGER PRIMARY KEY)'], tableName: 'beibaobiao', reason: 'system' }]);
     expect(result.unknownStatements).toEqual(['CREATE TABLE temp_table (row_id INTEGER PRIMARY KEY)']);
+  });
+
+  it('未归属语句在不允许单表 fallback 时保留为兼容 sql_batch', () => {
+    const result = buildSqlSheetBatchOperations_ACU(
+      ['UPDATE untracked_table SET value = 1'],
+      tableData,
+      { keepLegacyForUnclassified: true, reason: 'system' },
+    );
+
+    expect(result.operations).toEqual([{ kind: 'sql_batch', statements: ['UPDATE untracked_table SET value = 1'] }]);
+    expect(result.unknownStatements).toEqual(['UPDATE untracked_table SET value = 1']);
+    expect(result.ambiguousStatements).toEqual([]);
   });
 });
 
@@ -400,7 +753,7 @@ describe('SqlTableService', () => {
     mate: { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } },
     sheet_0: {
       uid: 'inventory',
-      name: '背包物品表',
+      name: 'inventory',
       sourceData: { note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '', ddl: TEST_DDL },
       content: [
         ['row_id', 'item_name', 'quantity'],
@@ -416,6 +769,9 @@ describe('SqlTableService', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCurrentJsonTableData = null;
+    mockPublishGlobalNameMapper.mockReturnValue(true);
+    mockReleaseGlobalNameMapper.mockReturnValue(true);
+    mockPublishGlobalNameMapperEmptySchema.mockReturnValue(true);
     // 重置 mock 返回值，防止测试之间的状态泄漏
     mockGetEffectiveSeedRows.mockReturnValue([]);
     mockGetCurrentChatTemplateScopeState.mockReturnValue(null);
@@ -459,6 +815,20 @@ describe('SqlTableService', () => {
       expect(result.source).toBe('empty');
     });
 
+    it('无数据且无可解析模板时标记空 schema，不留下未绑定的 mapper', async () => {
+      mockMergeAll.mockResolvedValue(null);
+
+      const result = await service.loadFromChat();
+
+      // runtime 已就绪但没有任何表。必须显式标记空 schema，
+      // 否则同步读门禁会把正常的新聊天误报成 mapper 意外丢失。
+      expect(result.source).toBe('empty');
+      expect(service.isReady()).toBe(true);
+      expect(mockPublishGlobalNameMapperEmptySchema).toHaveBeenCalledTimes(1);
+      expect(mockPublishGlobalNameMapper).not.toHaveBeenCalled();
+    });
+
+
     it('首个用户消息后、首个真实 AI 回复前将模板 seedRows 写入运行时 SQLite，支持首次 SQL 读取', async () => {
       mockShouldUseInitialSeedRows.mockReturnValue(true);
       mockMergeAll.mockResolvedValue(null);
@@ -467,7 +837,7 @@ describe('SqlTableService', () => {
         mate: { type: 'acu', version: 1 },
         sheet_0: {
           uid: 'inventory',
-          name: '背包物品表',
+          name: 'inventory',
           sourceData: { note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '', ddl: TEST_DDL },
           content: [
             ['row_id', 'item_name', 'quantity'],
@@ -488,6 +858,7 @@ describe('SqlTableService', () => {
       expect(queryResult.rowCount).toBe(2);
       expect(queryResult.values[0]).toContain('铁剑');
     });
+
 
     it('仅有基底状态数据时也写入运行时 SQLite，但不保留内部标记', async () => {
       const baseStateData = JSON.parse(JSON.stringify(testTableData));
@@ -542,7 +913,7 @@ describe('SqlTableService', () => {
 
       expect(result).toEqual({ loaded: true, source: 'merged' });
       expect(service.isReady()).toBe(true);
-      expect(service.executeQuery('SELECT code_index, chronicle_text FROM chronicle WHERE row_id = 1').values).toEqual([
+      expect(service.executeQuery('SELECT code_index, chronicle_text FROM jiyaobiao WHERE row_id = 1').values).toEqual([
         ['AM0001', '完整纪要正文'],
       ]);
       expect(canonicalData.sheet_0.content[1]).toEqual(['1', '完整纪要正文', 'AM0001']);
@@ -563,17 +934,50 @@ describe('SqlTableService', () => {
       expect(invalidData.sheet_0.content[1]).toEqual(['1', '铁剑', '3', '不能丢失']);
     });
 
-    it('strict hydrate 失败时清理部分 runtime，且不修改调用方快照', async () => {
+    it('runtime load 遇到非法显式 DDL 时使用 fallback，且不修改调用方原始 DDL', async () => {
       const invalidData = JSON.parse(JSON.stringify(testTableData));
       invalidData.sheet_0.sourceData.ddl = 'CREATE TABLE broken (';
 
       const result = await service.loadFromData(invalidData);
 
-      expect(result.loaded).toBe(false);
-      expect(result.error).toContain('sqlite_hydrate_failed');
-      expect(service.isReady()).toBe(false);
-      expect(() => service.executeQuery('SELECT 1')).toThrow('SQLite 引擎未初始化');
+      expect(result).toEqual({ loaded: true, source: 'merged' });
+      expect(service.isReady()).toBe(true);
+      expect(service.executeQuery('SELECT item_name, quantity FROM inventory ORDER BY row_id').values).toEqual([
+        ['铁剑', '3'], ['治疗药水', '5'],
+      ]);
       expect(invalidData.sheet_0.sourceData.ddl).toBe('CREATE TABLE broken (');
+    });
+
+    it('loadFromData 重置 runtime 时先使旧 mapper 失效，再按新 schema 重建', async () => {
+      const canonicalData = JSON.parse(JSON.stringify(testTableData));
+
+      await service.loadFromData(canonicalData);
+
+      expect(mockReleaseGlobalNameMapper).toHaveBeenCalledBefore(mockPublishGlobalNameMapper);
+      expect(mockPublishGlobalNameMapper).toHaveBeenLastCalledWith(expect.any(Map), expect.anything());
+    });
+
+    it('映射发布被更新 runtime 拒绝时，hydrate 必须失败而不是宣称就绪', async () => {
+      mockPublishGlobalNameMapper.mockReturnValue(false);
+      const canonicalData = JSON.parse(JSON.stringify(testTableData));
+
+      const result = await service.loadFromData(canonicalData);
+
+      expect(result.loaded).toBe(false);
+      expect(result.error).toContain('name_mapper_publish_rejected');
+      // 没有可信映射时中文表名/列名会被原样下发给 SQLite，绝不能对外 ready。
+      expect(service.isReady()).toBe(false);
+    });
+
+    it('空 schema 标记被拒绝时同样不得宣称就绪', async () => {
+      mockPublishGlobalNameMapperEmptySchema.mockReturnValue(false);
+      mockMergeAll.mockResolvedValue(null);
+
+      const result = await service.loadFromData(null);
+
+      expect(result.loaded).toBe(false);
+      expect(result.error).toContain('name_mapper_publish_rejected');
+      expect(service.isReady()).toBe(false);
     });
 
     it('加载后可以执行查询', async () => {
@@ -617,26 +1021,120 @@ describe('SqlTableService', () => {
       expect(result.appliedEdits).toBe(2);
     });
 
+    it('部分运行时快照补建其它模板表后，applyEdits 会在 provider 边界重绑定 DDL 表名', async () => {
+      const partialData = JSON.parse(JSON.stringify(testTableData));
+      const templateData = {
+        ...JSON.parse(JSON.stringify(testTableData)),
+        sheet_1: {
+          uid: 'story_chronicle',
+          name: 'storychronicle',
+          sourceData: {
+            ddl: 'CREATE TABLE story_chronicle (row_id INTEGER PRIMARY KEY, title TEXT NOT NULL);',
+          },
+          content: [['row_id', 'title']],
+          updateConfig: {},
+          exportConfig: {},
+          orderNo: 1,
+        },
+      };
+      mockGetCurrentChatTemplateScopeState.mockReturnValue({
+        mode: 'chat_override',
+        templateStr: JSON.stringify(templateData),
+      });
+      await service.loadFromData(partialData);
+
+      const result = service.applyEdits("INSERT INTO story_chronicle (row_id, title) VALUES (1, '归家之拥');");
+
+      expect(result.success).toBe(true);
+      expect(result.modifiedKeys).toContain('sheet_1');
+      expect(service.executeQuery('SELECT title FROM storychronicle WHERE row_id = 1').values).toEqual([['归家之拥']]);
+    });
+
+    it('批量提交中已有表与模板新表混合写入时，每条语句都在 provider 边界完成重绑定', async () => {
+      const partialData = JSON.parse(JSON.stringify(testTableData));
+      const templateData = {
+        ...JSON.parse(JSON.stringify(testTableData)),
+        sheet_1: {
+          uid: 'story_chronicle',
+          name: 'storychronicle',
+          sourceData: {
+            ddl: 'CREATE TABLE story_chronicle (row_id INTEGER PRIMARY KEY, title TEXT NOT NULL);',
+          },
+          content: [['row_id', 'title']],
+          updateConfig: {},
+          exportConfig: {},
+          orderNo: 1,
+        },
+      };
+      mockGetCurrentChatTemplateScopeState.mockReturnValue({
+        mode: 'chat_override',
+        templateStr: JSON.stringify(templateData),
+      });
+      await service.loadFromData(partialData);
+
+      const result = service.applyEditsBatch([
+        "INSERT INTO inventory VALUES (3, '魔法书', 1);",
+        "INSERT INTO story_chronicle (row_id, title) VALUES (1, '归家之拥');",
+      ]);
+
+      expect(result.success).toBe(true);
+      expect(result.appliedEdits).toBe(2);
+      expect(result.modifiedKeys).toEqual(expect.arrayContaining(['sheet_0', 'sheet_1']));
+      expect(service.executeQuery('SELECT item_name FROM inventory WHERE row_id = 3').values).toEqual([['魔法书']]);
+      expect(service.executeQuery('SELECT title FROM storychronicle WHERE row_id = 1').values).toEqual([['归家之拥']]);
+    });
+
+    it('部分运行时快照补建其它模板表后，executeMutation 同样重绑定 DDL 表名', async () => {
+      const partialData = JSON.parse(JSON.stringify(testTableData));
+      const templateData = {
+        ...JSON.parse(JSON.stringify(testTableData)),
+        sheet_1: {
+          uid: 'history_summary',
+          name: 'historysummary',
+          sourceData: {
+            ddl: 'CREATE TABLE lishijiyaobiao (row_id INTEGER PRIMARY KEY, summary TEXT NOT NULL);',
+          },
+          content: [['row_id', 'summary']],
+          updateConfig: {},
+          exportConfig: {},
+          orderNo: 1,
+        },
+      };
+      mockGetCurrentChatTemplateScopeState.mockReturnValue({
+        mode: 'chat_override',
+        templateStr: JSON.stringify(templateData),
+      });
+      await service.loadFromData(partialData);
+
+      const result = service.executeMutation(
+        "INSERT INTO lishijiyaobiao (row_id, summary) VALUES (?, ?)",
+        [1, '玄关重逢'],
+      );
+
+      expect(result).toEqual({ changes: 1, errors: [] });
+      expect(service.executeQuery('SELECT summary FROM historysummary WHERE row_id = 1').values).toEqual([['玄关重逢']]);
+    });
+
     it('同一组 SQL 修改多张表时，后续表失败会回滚前面表的写入', async () => {
       const weaponDDL = `CREATE TABLE weapon_log (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);`;
       const questDDL = `CREATE TABLE quest_log (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);`;
       const data = {
         mate: { type: 'acu', version: 1 },
-        sheet_0: { uid: 'inventory', name: '背包', sourceData: { ddl: TEST_DDL }, content: [['row_id', 'item_name', 'quantity'], ['1', '铁剑', '3']], updateConfig: {}, exportConfig: {}, orderNo: 0 },
-        sheet_1: { uid: 'weapon_log', name: '武器记录', sourceData: { ddl: weaponDDL }, content: [['row_id', 'value']], updateConfig: {}, exportConfig: {}, orderNo: 1 },
-        sheet_2: { uid: 'quest_log', name: '任务记录', sourceData: { ddl: questDDL }, content: [['row_id', 'value']], updateConfig: {}, exportConfig: {}, orderNo: 2 },
+        sheet_0: { uid: 'inventory', name: 'inventory', sourceData: { ddl: TEST_DDL }, content: [['row_id', 'item_name', 'quantity'], ['1', '铁剑', '3']], updateConfig: {}, exportConfig: {}, orderNo: 0 },
+        sheet_1: { uid: 'weapon_log', name: 'weaponlog', sourceData: { ddl: weaponDDL }, content: [['row_id', 'value']], updateConfig: {}, exportConfig: {}, orderNo: 1 },
+        sheet_2: { uid: 'quest_log', name: 'questlog', sourceData: { ddl: questDDL }, content: [['row_id', 'value']], updateConfig: {}, exportConfig: {}, orderNo: 2 },
       };
       mockMergeAll.mockResolvedValue(JSON.parse(JSON.stringify(data)));
       await service.loadFromChat();
 
       expect(() => service.applyEdits([
-        "INSERT INTO weapon_log VALUES (1, 'A表已写');",
-        "INSERT INTO quest_log VALUES (1, 'B表已写');",
+        "INSERT INTO weaponlog VALUES (1, 'A表已写');",
+        "INSERT INTO questlog VALUES (1, 'B表已写');",
         "INSERT INTO inventory (missing_col) VALUES ('C表报错');",
       ].join('\n'))).toThrow();
 
-      expect(service.executeQuery('SELECT COUNT(*) FROM weapon_log').values[0][0]).toBe(0);
-      expect(service.executeQuery('SELECT COUNT(*) FROM quest_log').values[0][0]).toBe(0);
+      expect(service.executeQuery('SELECT COUNT(*) FROM weaponlog').values[0][0]).toBe(0);
+      expect(service.executeQuery('SELECT COUNT(*) FROM questlog').values[0][0]).toBe(0);
     });
 
     it('空字符串返回成功（无操作）', () => {
@@ -749,6 +1247,120 @@ describe('SqlTableService', () => {
     });
   });
 
+  describe('applyEditsWithSystemRowIds', () => {
+    beforeEach(async () => {
+      mockMergeAll.mockResolvedValue(JSON.parse(JSON.stringify(testTableData)));
+      await service.loadFromChat();
+      service.applyEdits('DELETE FROM inventory;');
+      mockGetEffectiveSeedRows.mockReturnValue([
+        ['1', '铁剑', '3'],
+      ]);
+    });
+
+    it('空表补种与 AI row_id 分配在同一批次内避开冲突', () => {
+      const result = service.applyEditsWithSystemRowIds([
+        "INSERT INTO inventory (row_id, item_name, quantity) VALUES (999, '魔法书', 1);",
+        "INSERT INTO inventory (row_id, item_name, quantity) VALUES (888, '卷轴', 2);",
+      ]);
+
+      expect(result.success).toBe(true);
+      expect(result.appliedEdits).toBe(2);
+      expect(result.materializedSqlTexts).toHaveLength(2);
+      expect(result.materializedSqlTexts[0]).toContain("VALUES (2, '魔法书', 1)");
+      expect(result.materializedSqlTexts[0]).not.toContain('999');
+      expect(result.materializedSqlTexts[1]).toContain("VALUES (3, '卷轴', 2)");
+      expect(result.materializedSqlTexts[1]).not.toContain('888');
+
+      const queryResult = service.executeQuery('SELECT row_id, item_name FROM inventory ORDER BY row_id');
+      expect(queryResult.values).toEqual([
+        [1, '铁剑'],
+        [2, '魔法书'],
+        [3, '卷轴'],
+      ]);
+      expect(result.tableData.sheet_0.content).toEqual([
+        ['row_id', 'item_name', 'quantity'],
+        ['1', '铁剑', '3'],
+        ['2', '魔法书', '1'],
+        ['3', '卷轴', '2'],
+      ]);
+    });
+
+    it('AI 等待期间切换聊天模板后，提交仍使用请求前捕获的建表与别名快照', () => {
+      const originalChat = [{ mes: 'chat-a' }];
+      const switchedChat = [{ mes: 'chat-b' }];
+      const originalTemplate = {
+        mate: { type: 'acu', version: 1 },
+        sheet_memory: {
+          uid: 'memory_summary',
+          name: '记忆概要表',
+          sourceData: {
+            ddl: 'CREATE TABLE memory_summary (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);',
+          },
+          content: [['row_id', 'value']],
+          updateConfig: {},
+          exportConfig: {},
+          orderNo: 1,
+        },
+      } as any;
+      const switchedTemplate = {
+        mate: { type: 'acu', version: 1 },
+        sheet_other: {
+          uid: 'other_table',
+          name: '其他表',
+          sourceData: {
+            ddl: 'CREATE TABLE other_table (row_id INTEGER PRIMARY KEY, value TEXT NOT NULL);',
+          },
+          content: [['row_id', 'value']],
+          updateConfig: {},
+          exportConfig: {},
+          orderNo: 1,
+        },
+      } as any;
+      mockGetCurrentChatTemplateScopeState.mockImplementation(({ chat }: any = {}) => ({
+        mode: 'chat_override',
+        templateStr: JSON.stringify(chat === originalChat ? originalTemplate : switchedTemplate),
+      }));
+
+      const capturedScope = captureSqlTableApplyScope_ACU({ chat: originalChat, isolationKey: 'scope-a' });
+      // 模拟 AI await 期间全局聊天已切到 chat-b。若提交仍走隐式全局 fallback，
+      // memory_summary 不会建表，下面的 INSERT 会以 no such table 失败。
+      mockGetCurrentChatTemplateScopeState.mockImplementation(() => ({
+        mode: 'chat_override',
+        templateStr: JSON.stringify(switchedTemplate),
+      }));
+
+      const result = service.applyEditsWithSystemRowIds([
+        "INSERT INTO memory_summary (value) VALUES ('请求前模板仍生效');",
+      ], 'auto_standard', capturedScope);
+
+      expect(result.success).toBe(true);
+      expect(result.materializedSqlTexts[0]).toContain('jiyigaiyaobiao');
+      expect(service.executeQuery('SELECT value FROM jiyigaiyaobiao').values).toContainEqual(['请求前模板仍生效']);
+      expect(() => service.executeQuery('SELECT * FROM qitabiao')).toThrow();
+      expect(mockGetCurrentChatTemplateScopeState).toHaveBeenCalledWith({ chat: originalChat, isolationKey: 'scope-a' });
+      expect(switchedChat).toEqual([{ mes: 'chat-b' }]);
+    });
+
+    it('提交前 finalize 严格导出失败时回滚补种与 AI SQL', () => {
+      const syncBridge = (service as any).syncBridge;
+      const originalExport = syncBridge.exportToTableData.bind(syncBridge);
+      const exportSpy = vi.spyOn(syncBridge, 'exportToTableData');
+      exportSpy
+        .mockImplementationOnce((mate: any) => originalExport(mate))
+        .mockImplementationOnce(() => { throw new Error('export boom'); });
+
+      expect(() => service.applyEditsWithSystemRowIds([
+        "INSERT INTO inventory (row_id, item_name, quantity) VALUES (999, '不应写入', 1);",
+      ])).toThrow(SqlRuntimeSnapshotError_ACU);
+
+      exportSpy.mockRestore();
+      expect(service.executeQuery('SELECT COUNT(*) AS cnt FROM inventory').values[0][0]).toBe(0);
+      expect(service.getCurrentData()?.sheet_0.content).toEqual([
+        ['row_id', 'item_name', 'quantity'],
+      ]);
+    });
+  });
+
   // ═══════════════════════════════════════════════════════════════
   // executeQuery
   // ═══════════════════════════════════════════════════════════════
@@ -822,7 +1434,7 @@ describe('SqlTableService', () => {
         mate: { type: 'acu', version: 1 },
         sheet_0: {
           uid: 'inventory',
-          name: '背包物品表',
+          name: 'inventory',
           sourceData: { note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '', ddl: TEST_DDL },
           content: [['row_id', 'item_name', 'quantity']],
           updateConfig: {},
@@ -839,6 +1451,32 @@ describe('SqlTableService', () => {
       // 建表后 executeQuery 应正常工作
       const queryResult = service.executeQuery('SELECT * FROM inventory');
       expect(queryResult.rowCount).toBe(1);
+    });
+
+    it('新开卡首次写入遇到非法 DDL 时使用 runtime fallback，且不改写模板原文', async () => {
+      mockMergeAll.mockResolvedValue(null);
+      await service.loadFromChat();
+
+      const invalidDdl = 'CREATE TABLE inventory ( INVALID SYNTAX;';
+      const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+      vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
+        mate: { type: 'acu', version: 1 },
+        sheet_0: {
+          uid: 'inventory',
+          name: 'inventory',
+          sourceData: { note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '', ddl: invalidDdl },
+          content: [['row_id', '物品名称', '数量']],
+          updateConfig: {},
+          exportConfig: {},
+          orderNo: 0,
+        },
+      } as any);
+
+      const result = service.applyEdits("INSERT INTO inventory (row_id, wu_pin_ming_cheng, shu_liang) VALUES (1, '铁剑', '3');");
+
+      expect(result.success).toBe(true);
+      expect(service.executeQuery('SELECT wu_pin_ming_cheng, shu_liang FROM inventory').values).toEqual([['铁剑', '3']]);
+      expect(vi.mocked(parseTableTemplateJson_ACU).mock.results.at(-1)?.value.sheet_0.sourceData.ddl).toBe(invalidDdl);
     });
   });
 
@@ -863,7 +1501,7 @@ describe('SqlTableService', () => {
         mate: { type: 'acu', version: 1 },
         sheet_0: {
           uid: 'inventory',
-          name: '背包物品表',
+          name: 'inventory',
           sourceData: { note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '', ddl: TEST_DDL_WITH_SEED },
           content: [['row_id', 'item_name', 'quantity']], // 只有表头
           updateConfig: {},
@@ -900,7 +1538,7 @@ describe('SqlTableService', () => {
         mate: { type: 'acu', version: 1 },
         sheet_0: {
           uid: 'inventory',
-          name: '背包物品表',
+          name: 'inventory',
           sourceData: { note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '', ddl: TEST_DDL_WITH_SEED },
           content: [['row_id', 'item_name', 'quantity']],
           updateConfig: {},
@@ -932,7 +1570,7 @@ describe('SqlTableService', () => {
         mate: { type: 'acu', version: 1 },
         sheet_0: {
           uid: 'inventory',
-          name: '背包物品表',
+          name: 'inventory',
           sourceData: { note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '', ddl: TEST_DDL_WITH_SEED },
           content: [['row_id', 'item_name', 'quantity']],
           updateConfig: {},
@@ -969,7 +1607,7 @@ describe('SqlTableService', () => {
         mate: { type: 'acu', version: 1 },
         sheet_0: {
           uid: 'inventory',
-          name: '背包物品表',
+          name: 'inventory',
           sourceData: { note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '', ddl: TEST_DDL },
           content: [['row_id', 'item_name', 'quantity']],
           updateConfig: {},
@@ -1018,7 +1656,7 @@ describe('SqlTableService', () => {
           mate: { type: 'acu', version: 1 },
           sheet_0: {
             uid: 'chat_table',
-            name: '聊天专属表',
+            name: 'chattable',
             sourceData: { note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '', ddl: CHAT_TEMPLATE_DDL },
             content: [['row_id', 'name']],
             updateConfig: {},
@@ -1045,11 +1683,11 @@ describe('SqlTableService', () => {
       } as any);
 
       // applyEdits 触发建表
-      const result = service.applyEdits("INSERT INTO chat_table VALUES (1, '测试');");
+      const result = service.applyEdits("INSERT INTO chattable VALUES (1, '测试');");
       expect(result.success).toBe(true);
 
       // 验证 chat_table 被建出来了
-      const chatQuery = service.executeQuery('SELECT * FROM chat_table');
+      const chatQuery = service.executeQuery('SELECT * FROM chattable');
       expect(chatQuery.rowCount).toBe(1);
 
       // 验证 global_table 没有被建出来
@@ -1086,7 +1724,7 @@ describe('SqlTableService', () => {
           mate: { type: 'acu', version: 1 },
           sheet_0: {
             uid: 'chat_table',
-            name: '聊天专属表',
+            name: 'chattable',
             sourceData: { ddl: newDDL },
             content: [['row_id', '状态']],
             updateConfig: {},
@@ -1097,10 +1735,10 @@ describe('SqlTableService', () => {
         presetName: '聊天预设',
       });
 
-      const result = service.executeMutation("INSERT INTO chat_table VALUES (1, 'new');");
+      const result = service.executeMutation("INSERT INTO chattable VALUES (1, 'new');");
 
       expect(result.errors).toEqual([]);
-      expect(service.executeQuery('SELECT status FROM chat_table').values[0][0]).toBe('new');
+      expect(service.executeQuery('SELECT status FROM chattable').values[0][0]).toBe('new');
     });
 
     it('inherit_global 模式下 fallback 到全局模板', async () => {
@@ -1116,7 +1754,7 @@ describe('SqlTableService', () => {
         mate: { type: 'acu', version: 1 },
         sheet_0: {
           uid: 'inventory',
-          name: '背包物品表',
+          name: 'inventory',
           sourceData: { note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '', ddl: TEST_DDL },
           content: [['row_id', 'item_name', 'quantity']],
           updateConfig: {},
@@ -1150,7 +1788,7 @@ describe('SqlTableService', () => {
           mate: { type: 'acu', version: 1 },
           sheet_0: {
             uid: 'inventory',
-            name: '背包物品表',
+            name: 'inventory',
             sourceData: { note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '', ddl: TEST_DDL },
             content: [['row_id', 'item_name', 'quantity']],
             updateConfig: {},
@@ -1304,6 +1942,7 @@ describe('SqlTableService', () => {
       await service.loadFromChat();
       service.clearRuntimeData();
       expect(service.isReady()).toBe(false);
+      expect(mockReleaseGlobalNameMapper).toHaveBeenCalled();
       expect(service.getCurrentData()).toBeNull();
       expect(() => service.executeQuery('SELECT 1')).toThrow('SQLite 引擎未初始化');
       const replaced = await service.replaceAllData(JSON.parse(JSON.stringify(testTableData)));
@@ -1339,6 +1978,7 @@ describe('SqlTableService', () => {
       await service.loadFromChat();
       service.dispose();
       expect(() => service.executeQuery('SELECT 1')).toThrow();
+      expect(mockReleaseGlobalNameMapper).toHaveBeenCalled();
     });
 
     it('多次 dispose 不抛出', async () => {

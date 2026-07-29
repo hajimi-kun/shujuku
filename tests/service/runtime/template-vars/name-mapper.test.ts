@@ -11,7 +11,19 @@ vi.mock('../../../../src/shared/utils', () => ({
   logError_ACU: vi.fn(),
 }));
 
-import { NameMapper } from '../../../../src/service/runtime/template-vars/name-mapper';
+import {
+  NameMapper,
+  createNameMapperOwnerToken_ACU,
+  disposeGlobalNameMapper,
+  ensureGlobalNameMapperForDDLs_ACU,
+  getGlobalNameMapperOwnershipSnapshot_ACU,
+  getGlobalNameMapperStatus_ACU,
+  getNameMapper,
+  isGlobalNameMapperCurrentForDDLs_ACU,
+  publishGlobalNameMapperEmptySchema_ACU,
+  publishGlobalNameMapperForDDLs_ACU,
+  releaseGlobalNameMapperForOwner_ACU,
+} from '../../../../src/service/runtime/template-vars/name-mapper';
 
 // ═══════════════════════════════════════════════════════════════
 // 测试用 DDL
@@ -63,6 +75,19 @@ describe('NameMapper', () => {
       ddlMap.set('inventory', INVENTORY_DDL);
       const m = NameMapper.fromDDLs(ddlMap);
       expect(m.tableCount).toBe(1);
+    });
+
+    it('以 runtime physical name map key 而非 DDL 内旧表名建立映射', () => {
+      const m = NameMapper.fromDDLs(new Map([
+        ['jiyaobiao', `CREATE TABLE chronicle ( -- 纪要表
+  row_id INTEGER PRIMARY KEY, -- 行号
+  content TEXT -- 内容
+);`],
+      ]));
+
+      expect(m.resolveTableName('纪要表')).toBe('jiyaobiao');
+      expect(m.resolveColumnName('jiyaobiao', '内容')).toBe('content');
+      expect(m.getAllTableNames()).toEqual(['jiyaobiao']);
     });
   });
 
@@ -207,3 +232,171 @@ describe('NameMapper', () => {
     });
   });
 });
+
+describe('全局 NameMapper 绑定状态', () => {
+  beforeEach(() => {
+    disposeGlobalNameMapper();
+  });
+
+  it('dispose 后为 unbound，且 getNameMapper 懒建实例不会让其变就绪', () => {
+    expect(getGlobalNameMapperStatus_ACU()).toEqual({ ready: false, tableCount: 0, binding: 'unbound' });
+
+    // 懒建的空实例只用于透传，不代表已绑定 runtime schema。
+    getNameMapper();
+    expect(getGlobalNameMapperStatus_ACU().ready).toBe(false);
+    expect(getGlobalNameMapperStatus_ACU().binding).toBe('unbound');
+  });
+
+  it('标记空 schema 后与 unbound 可区分，但仍不视为就绪', () => {
+    publishGlobalNameMapperEmptySchema_ACU(createNameMapperOwnerToken_ACU('test'));
+    expect(getGlobalNameMapperStatus_ACU()).toEqual({ ready: false, tableCount: 0, binding: 'empty_schema' });
+  });
+
+  it('绑定有效 DDL 后进入 bound 并报告表数量', () => {
+    const ddlMap = new Map<string, string>([
+      ['inventory', INVENTORY_DDL],
+      ['characters', CHARACTERS_DDL],
+    ]);
+    ensureGlobalNameMapperForDDLs_ACU(ddlMap);
+
+    expect(getGlobalNameMapperStatus_ACU()).toEqual({ ready: true, tableCount: 2, binding: 'bound' });
+    expect(isGlobalNameMapperCurrentForDDLs_ACU(ddlMap)).toBe(true);
+  });
+
+  it('空 DDL 集合构建出的 mapper 记为 empty_schema，不冒充就绪', () => {
+    ensureGlobalNameMapperForDDLs_ACU(new Map());
+    expect(getGlobalNameMapperStatus_ACU().binding).toBe('empty_schema');
+    expect(getGlobalNameMapperStatus_ACU().ready).toBe(false);
+  });
+
+  it('empty_schema 之后拿到真实 DDL 会重建为 bound', () => {
+    const owner = createNameMapperOwnerToken_ACU('test');
+    publishGlobalNameMapperEmptySchema_ACU(owner);
+    const ddlMap = new Map<string, string>([['inventory', INVENTORY_DDL]]);
+
+    // owned 状态只能由持有凭证的 runtime 自己升级为 bound。
+    publishGlobalNameMapperForDDLs_ACU(ddlMap, owner);
+
+    expect(getGlobalNameMapperStatus_ACU().binding).toBe('bound');
+    expect(getNameMapper().resolveTableName('背包物品表')).toBe('inventory');
+  });
+});
+
+describe('全局 NameMapper 发布所有权', () => {
+  const ddlMapA = new Map<string, string>([['inventory', INVENTORY_DDL]]);
+  const ddlMapB = new Map<string, string>([['characters', CHARACTERS_DDL]]);
+
+  beforeEach(() => {
+    disposeGlobalNameMapper();
+  });
+
+  it('更新的发布者可以接管，旧发布者的释放变成 no-op', () => {
+    const ownerA = createNameMapperOwnerToken_ACU('runtime-a');
+    const ownerB = createNameMapperOwnerToken_ACU('runtime-b');
+
+    expect(publishGlobalNameMapperForDDLs_ACU(ddlMapA, ownerA)).toBe(true);
+    expect(publishGlobalNameMapperForDDLs_ACU(ddlMapB, ownerB)).toBe(true);
+    expect(getGlobalNameMapperOwnershipSnapshot_ACU().ownerLabel).toBe('runtime-b');
+
+    // 旧实例的迟到清理绝不能破坏新实例已经发布的映射。
+    expect(releaseGlobalNameMapperForOwner_ACU(ownerA)).toBe(false);
+    expect(getGlobalNameMapperStatus_ACU().binding).toBe('bound');
+    expect(getNameMapper().resolveTableName('重要人物表')).toBe('characters');
+
+    expect(releaseGlobalNameMapperForOwner_ACU(ownerB)).toBe(true);
+    expect(getGlobalNameMapperStatus_ACU().binding).toBe('unbound');
+  });
+
+  it('更旧的发布者不得覆盖更新发布者的映射', () => {
+    const staleOwner = createNameMapperOwnerToken_ACU('stale');
+    const currentOwner = createNameMapperOwnerToken_ACU('current');
+
+    expect(publishGlobalNameMapperForDDLs_ACU(ddlMapB, currentOwner)).toBe(true);
+    expect(publishGlobalNameMapperForDDLs_ACU(ddlMapA, staleOwner)).toBe(false);
+
+    expect(getGlobalNameMapperOwnershipSnapshot_ACU().ownerLabel).toBe('current');
+    expect(getNameMapper().resolveTableName('重要人物表')).toBe('characters');
+    expect(isGlobalNameMapperCurrentForDDLs_ACU(ddlMapB)).toBe(true);
+  });
+
+  it('empty_schema 发布同样受所有权保护', () => {
+    const ownerA = createNameMapperOwnerToken_ACU('runtime-a');
+    const ownerB = createNameMapperOwnerToken_ACU('runtime-b');
+
+    publishGlobalNameMapperForDDLs_ACU(ddlMapA, ownerA);
+    expect(publishGlobalNameMapperEmptySchema_ACU(ownerB)).toBe(true);
+    expect(getGlobalNameMapperStatus_ACU().binding).toBe('empty_schema');
+
+    expect(releaseGlobalNameMapperForOwner_ACU(ownerA)).toBe(false);
+    expect(getGlobalNameMapperStatus_ACU().binding).toBe('empty_schema');
+  });
+
+  it('同一发布者可重复发布并按新 schema 切换绑定', () => {
+    const owner = createNameMapperOwnerToken_ACU('runtime');
+
+    publishGlobalNameMapperForDDLs_ACU(ddlMapA, owner);
+    expect(getNameMapper().resolveTableName('背包物品表')).toBe('inventory');
+
+    publishGlobalNameMapperForDDLs_ACU(ddlMapB, owner);
+    expect(getNameMapper().resolveTableName('重要人物表')).toBe('characters');
+    expect(isGlobalNameMapperCurrentForDDLs_ACU(ddlMapA)).toBe(false);
+  });
+
+  it('ensureGlobalNameMapperForDDLs_ACU 不得改写仍被 runtime 持有的映射', () => {
+    const owner = createNameMapperOwnerToken_ACU('runtime');
+    publishGlobalNameMapperForDDLs_ACU(ddlMapA, owner);
+
+    ensureGlobalNameMapperForDDLs_ACU(ddlMapB);
+
+    // owner 说是 A、内容却来自别处，会让 A 的释放清掉不属于它的映射。
+    expect(isGlobalNameMapperCurrentForDDLs_ACU(ddlMapA)).toBe(true);
+    expect(isGlobalNameMapperCurrentForDDLs_ACU(ddlMapB)).toBe(false);
+    expect(getNameMapper().resolveTableName('背包物品表')).toBe('inventory');
+    expect(releaseGlobalNameMapperForOwner_ACU(owner)).toBe(true);
+  });
+
+  it('无 runtime 持有时，ensureGlobalNameMapperForDDLs_ACU 仍可刷新绑定', () => {
+    expect(getGlobalNameMapperStatus_ACU().binding).toBe('unbound');
+
+    ensureGlobalNameMapperForDDLs_ACU(ddlMapB);
+
+    expect(getGlobalNameMapperStatus_ACU().binding).toBe('bound');
+    expect(getGlobalNameMapperOwnershipSnapshot_ACU().ownerId).toBeNull();
+    expect(getNameMapper().resolveTableName('重要人物表')).toBe('characters');
+  });
+
+  it('伪造的凭证不能抢占发布权，也不能释放真实发布者的映射', () => {
+    const realOwner = createNameMapperOwnerToken_ACU('runtime');
+    publishGlobalNameMapperForDDLs_ACU(ddlMapA, realOwner);
+
+    // 反射复制真实凭证上的品牌 Symbol，并刻意抬高 id：
+    // 仅检查属性形状的实现会被这种伪造穿透。
+    const brandSymbols = Object.getOwnPropertySymbols(realOwner);
+    expect(brandSymbols.length).toBeGreaterThan(0);
+    const forged = { id: Number.MAX_SAFE_INTEGER, label: 'forged' } as unknown as typeof realOwner;
+    for (const symbol of brandSymbols) (forged as any)[symbol] = (realOwner as any)[symbol];
+
+    expect(publishGlobalNameMapperForDDLs_ACU(ddlMapB, forged)).toBe(false);
+    expect(releaseGlobalNameMapperForOwner_ACU(forged)).toBe(false);
+    expect(isGlobalNameMapperCurrentForDDLs_ACU(ddlMapA)).toBe(true);
+    expect(getGlobalNameMapperOwnershipSnapshot_ACU().ownerLabel).toBe('runtime');
+  });
+
+  it('owned empty_schema 也不得由无所有权入口改写为 bound', () => {
+    const owner = createNameMapperOwnerToken_ACU('runtime');
+    publishGlobalNameMapperEmptySchema_ACU(owner);
+    const ownerBefore = getGlobalNameMapperOwnershipSnapshot_ACU();
+
+    ensureGlobalNameMapperForDDLs_ACU(ddlMapA);
+
+    // owner 说内容由 A 发布、内容却来自 CRUD 输入，会让 A 的释放清掉别人的映射。
+    expect(getGlobalNameMapperOwnershipSnapshot_ACU()).toEqual(ownerBefore);
+    expect(getGlobalNameMapperStatus_ACU().binding).toBe('empty_schema');
+
+    // 活跃 runtime 用自己的凭证发布，才能从空 schema 进入 bound。
+    expect(publishGlobalNameMapperForDDLs_ACU(ddlMapA, owner)).toBe(true);
+    expect(getGlobalNameMapperStatus_ACU().binding).toBe('bound');
+    expect(getGlobalNameMapperOwnershipSnapshot_ACU().ownerId).toBe(ownerBefore.ownerId);
+  });
+});
+

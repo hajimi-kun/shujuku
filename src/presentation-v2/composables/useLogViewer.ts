@@ -18,6 +18,7 @@ import {
 } from '../../shared/log-buffer';
 import { acuCancelAnimationFrame, acuRequestAnimationFrame } from '../bootstrap/host-env';
 import { getAcuHostDocument } from '../bootstrap/host-document';
+import { useDevOptions } from './useDevOptions';
 import { useToastStore } from '../stores/toast-store';
 
 export type LogLevelFilter = LogLevel | 'all';
@@ -49,6 +50,7 @@ function downloadJson(filename: string, data: unknown): void {
 
 export function useLogViewer() {
   const toast = useToastStore();
+  const { warnLogEnabled, setWarnLogEnabled } = useDevOptions();
   const logs = ref<LogEntry[]>([]);
   const knownTags = ref<string[]>([]);
   const totalCount = ref(0);
@@ -86,6 +88,7 @@ export function useLogViewer() {
     return '实时更新中';
   });
   const debugLabel = computed(() => (debugLogEnabled.value ? 'Debug 采集中' : 'Debug 未采集'));
+  const warnLabel = computed(() => (warnLogEnabled.value ? 'Warn 采集中' : 'Warn 未采集'));
 
   function refresh(): void {
     logs.value = getAllLogs();
@@ -127,6 +130,13 @@ export function useLogViewer() {
     message.value = null;
     if (enabled) toast.info('已开始采集 Debug 日志；排查完成后建议关闭。');
     else toast.success('已停止采集 Debug 日志。');
+  }
+
+  function setWarnCollection(enabled: boolean): void {
+    setWarnLogEnabled(enabled);
+    message.value = null;
+    if (enabled) toast.info('已开始采集 Warn 日志；排查完成后建议关闭。');
+    else toast.success('已停止采集 Warn 日志。');
   }
 
   function exportFiltered(): void {
@@ -175,16 +185,19 @@ export function useLogViewer() {
     paused,
     autoScroll,
     debugLogEnabled,
+    warnLogEnabled,
     message,
     totalCount,
     filteredCount,
     pendingCount,
     statusLabel,
     debugLabel,
+    warnLabel,
     refresh,
     setPaused,
     clearAll,
     setDebugCollection,
+    setWarnCollection,
     exportFiltered,
   };
 }

@@ -84,3 +84,8 @@ export function validateReadOnlySql_ACU(sql: unknown): ReadOnlySqlValidationResu
   if (/^(?:SELECT\b|WITH\b)/i.test(normalized)) return { valid: true };
   return { valid: false, reason: 'statement_not_read_only' };
 }
+
+/** Shared read-path classifier. Callers that need a diagnostic should use validateReadOnlySql_ACU directly. */
+export function isReadOnlySqlStatement_ACU(sql: unknown): boolean {
+  return validateReadOnlySql_ACU(sql).valid;
+}

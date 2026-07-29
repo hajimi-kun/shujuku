@@ -9,7 +9,7 @@ export const chronicleSheet = {
     initNode: "故事初始化时，插入一条新记录用于记录初始化剧情。",
     deleteNode: "禁止删除。",
     updateNode: "禁止操作。",
-    insertNode: "每轮交互结束后插入一条新记录。\n时间跨度格式必须为 YYYY-MM-DD HH:MM ~ YYYY-MM-DD HH:MM。\nSQL示例: INSERT INTO chronicle (row_id, time_span, location, chronicle_text, summary, code_index) VALUES ((SELECT MAX(row_id)+1 FROM chronicle), '2024-03-15 14:00 ~ 2024-03-15 15:00', '王城·中央广场', '本轮纪要内容...', '一句话概括', 'AM0002');",
+    insertNode: "每轮交互结束后插入一条新记录。\n时间跨度格式必须为 YYYY-MM-DD HH:MM ~ YYYY-MM-DD HH:MM。\nSQL示例: INSERT INTO chronicle (time_span, location, chronicle_text, summary, code_index) VALUES ('2024-03-15 14:00 ~ 2024-03-15 15:00', '王城·中央广场', '本轮纪要内容...', '一句话概括', 'AM0002');",
     ddl: `CREATE TABLE chronicle ( -- 纪要表
   row_id INTEGER PRIMARY KEY, -- 行号
   time_span TEXT NOT NULL CHECK(time_span GLOB '????-??-?? ??:?? ~ ????-??-?? ??:??'), -- 时间跨度

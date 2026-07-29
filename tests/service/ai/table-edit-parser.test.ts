@@ -41,6 +41,18 @@ vi.mock('../../../src/service/table/table-storage-strategy', () => ({
 }));
 
 vi.mock('../../../src/service/template/chat-scope', () => ({
+  ensureStableRowIdsForSeedRows_ACU: (rows: any[]) => {
+    let nextId = 1;
+    const used = new Set(rows.map(row => String(row?.[0] ?? '').trim()).filter(Boolean));
+    return rows.map(row => {
+      const copy = Array.isArray(row) ? [...row] : [];
+      if (String(copy[0] ?? '').trim()) return copy;
+      while (used.has(String(nextId))) nextId += 1;
+      copy[0] = String(nextId);
+      used.add(copy[0]);
+      return copy;
+    });
+  },
   getEffectiveSeedRowsForSheet_ACU: vi.fn(() => []),
   getSortedSheetKeys_ACU: vi.fn((data: any) => data ? Object.keys(data).filter((k: string) => k.startsWith('sheet_')) : []),
 }));
@@ -376,7 +388,7 @@ describe('parseAndApplyTableEdits_ACU — DSL 分支', () => {
     expect(content.length).toBe(4); // 表头 + 原2行 + 新1行
   });
 
-  it('删除中间行后插入使用最小未占用 row_id，并保留 0 和 false 单元格', () => {
+  it('删除中间行后插入使用最大 row_id 加一，并保留 0 和 false 单元格', () => {
     mockCurrentJsonTableData.sheet_0.content = [
       ['row_id', 'item_name', 'quantity'],
       ['1', '铁剑', '3'],
@@ -394,7 +406,7 @@ describe('parseAndApplyTableEdits_ACU — DSL 分支', () => {
       ['row_id', 'item_name', 'quantity'],
       ['1', '铁剑', '3'],
       ['3', '盾牌', '1'],
-      ['2', 0, false],
+      ['4', 0, false],
     ]);
   });
 
@@ -570,5 +582,26 @@ describe('parseAndApplyTableEditsToData_ACU', () => {
       ['2', '卷轴', true],
     ]);
     expect(replayData.sheet_0.content).toEqual(parserData.sheet_0.content);
+  });
+
+  it('物化新 seedRows 时为缺失 row_id 分配稳定身份，而不把空身份交给 V2 persist', () => {
+    const data = {
+      sheet_0: {
+        uid: 'sheet_0', name: '带空身份预置行的表', updateConfig: {}, exportConfig: {}, sourceData: {}, orderNo: 0,
+        content: [['row_id', 'item_name']],
+        seedRows: [['', '铁剑'], [null, '药水'], ['fixed', '护符']],
+      },
+    } as any;
+
+    const result = parseAndApplyTableEditsToData_ACU('<tableEdit>updateRow(0, 0, {"0": "钢剑"})</tableEdit>', data, 'standard');
+
+    expect(result).toMatchObject({ success: true, appliedEdits: 1 });
+    expect(data.sheet_0.content).toEqual([
+      ['row_id', 'item_name'],
+      ['1', '钢剑'],
+      ['2', '药水'],
+      ['fixed', '护符'],
+    ]);
+    expect(data.sheet_0.seedRows).toEqual([['', '铁剑'], [null, '药水'], ['fixed', '护符']]);
   });
 });

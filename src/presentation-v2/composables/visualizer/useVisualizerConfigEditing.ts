@@ -1,5 +1,11 @@
 import { computed } from 'vue';
-import { validateDDLTextAgainstHeaders_ACU, parseDDLColumnNames, updateDDLColumnComment } from '../../../shared/ddl-utils';
+import {
+  getSheetColumnProjection_ACU,
+  validateDDLTextAgainstHeaders_ACU,
+  parseDDLColumnNames,
+  removeDDLColumnAtIndex_ACU,
+  updateDDLColumnComment,
+} from '../../../shared/ddl-utils';
 import { isSummaryOrOutlineTable_ACU } from '../../../shared/utils';
 import { settings_ACU } from '../../../service/runtime/state-manager';
 import {
@@ -21,6 +27,7 @@ import {
   normalizeLorebookPosition_ACU,
   normalizePlacementConfig_ACU,
 } from '../../../service/worldbook/injection-engine';
+import { assertVisualizerDataOpsEditable_ACU } from '../../../service/visualizer/visualizer-data-ops';
 import { useToastStore } from '../../stores/toast-store';
 import { useVisualizerStore } from '../../stores/visualizer-store';
 
@@ -94,6 +101,13 @@ export function useVisualizerConfigEditing() {
       ? currentSheet.value.content[0]
       : [];
     return headerRow.slice(1).map((item: any, index: number) => stringValue(item || `字段 ${index + 1}`));
+  });
+  const visibleColumnEntries = computed(() => {
+    const sheet = currentSheet.value;
+    if (!sheet) return [];
+    return getSheetColumnProjection_ACU(sheet).visibleColumns
+      .filter(column => column.sourceIndex > 0)
+      .map(column => ({ header: column.header, columnIndex: column.sourceIndex - 1 }));
   });
 
   const exportConfig = computed(() =>
@@ -170,6 +184,7 @@ export function useVisualizerConfigEditing() {
   function withSheet(mutator: (sheet: any) => void): void {
     const sheet = currentSheet.value;
     if (!sheet) return;
+    assertVisualizerDataOpsEditable_ACU(visualizer);
     mutator(sheet);
     markDirty();
   }
@@ -206,7 +221,7 @@ export function useVisualizerConfigEditing() {
       const headerIndex = Math.trunc(index) + 1;
       if (headerIndex < 1) return;
       content[0][headerIndex] = stringValue(value);
-      if (isSqliteMode() && sheet.sourceData?.ddl) {
+      if (String(sheet.sourceData?.ddl || '').trim()) {
         const ddlColumns = parseDDLColumnNames(sheet.sourceData.ddl);
         const ddlColumn = ddlColumns[headerIndex];
         if (ddlColumn && ddlColumn.toLowerCase() !== 'row_id') {
@@ -229,11 +244,35 @@ export function useVisualizerConfigEditing() {
   }
 
   function deleteColumn(index: number): void {
-    withSheet(sheet => {
-      const content = ensureSheetContent(sheet);
-      const targetIndex = Math.trunc(index) + 1;
-      if (targetIndex < 1 || targetIndex >= content[0].length) return;
-      content.forEach((row: any) => {
+    const sheet = currentSheet.value;
+    if (!sheet) return;
+    assertVisualizerDataOpsEditable_ACU(visualizer);
+    const content = ensureSheetContent(sheet);
+    const targetIndex = Math.trunc(index) + 1;
+    if (targetIndex < 1 || targetIndex >= content[0].length) return;
+
+    let nextDDL: string | null = null;
+    if (String(sheet.sourceData?.ddl || '').trim()) {
+      const currentValidation = validateDDLTextAgainstHeaders_ACU(sheet.sourceData.ddl, content[0]);
+      if (!currentValidation.valid) {
+        toastStore.error(`删除列已拒绝：当前 DDL 与表头不一致：${currentValidation.message}`, { muteable: false });
+        return;
+      }
+      try {
+        nextDDL = removeDDLColumnAtIndex_ACU(sheet.sourceData.ddl, targetIndex);
+      } catch (error: any) {
+        toastStore.error(`删除列已拒绝：${error?.message || String(error)}`, { muteable: false });
+        return;
+      }
+    }
+
+    withSheet(current => {
+      const currentContent = ensureSheetContent(current);
+      if (nextDDL !== null) {
+        if (!current.sourceData || typeof current.sourceData !== 'object') current.sourceData = {};
+        current.sourceData.ddl = nextDDL;
+      }
+      currentContent.forEach((row: any) => {
         if (Array.isArray(row)) row.splice(targetIndex, 1);
       });
     });
@@ -263,15 +302,14 @@ export function useVisualizerConfigEditing() {
     const key = visualizer.currentSheetKey;
     const info = specialIndex.value;
     if (!key || !info.enabled) return;
-    const lock = visualizer.getLockDraft(key);
-    lock.specialIndexLocked = enabled === true;
-    if (lock.specialIndexLocked && currentSheet.value && info.index >= 0) {
+    visualizer.applyLockChangesToDraft([{ sheetKey: key, specialIndexLocked: enabled === true }]);
+    if (enabled === true && currentSheet.value && info.index >= 0) {
       applySummaryIndexSequenceToTable_ACU(currentSheet.value, info.index);
     }
-    markDirty();
   }
 
   function setTableApiPreset(value: string): void {
+    assertVisualizerDataOpsEditable_ACU(visualizer);
     const sheetName = stringValue(currentSheet.value?.name).trim();
     if (!sheetName) return;
     if (!settings_ACU.tableApiPresetOverridesByName || typeof settings_ACU.tableApiPresetOverridesByName !== 'object') {
@@ -354,6 +392,7 @@ export function useVisualizerConfigEditing() {
 
   function updateGlobalPlacement(key: GlobalPlacementKey, field: keyof VisualizerPlacementDraft, value: string | number): void {
     if (!visualizer.tempData) return;
+    assertVisualizerDataOpsEditable_ACU(visualizer);
     const cfg = getGlobalInjectionConfigFromData_ACU(visualizer.tempData, { ensureWriteBack: true });
     const current = getGlobalPlacement(key);
     const next = {
@@ -374,6 +413,7 @@ export function useVisualizerConfigEditing() {
     isSQLite,
     currentSheet,
     headers,
+    visibleColumnEntries,
     exportConfig,
     fixedConfigEnabled,
     importantPersonsFixedIndexEnabled,

@@ -1,11 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockOpenVisualizer, mockHandleTxtImportAndSplit, mockImportTxtTextAndSplitCore, mockInjectImportedSelectedCore, mockDeleteImportedEntriesCore } = vi.hoisted(() => ({
+const { mockOpenVisualizer, mockHandleTxtImportAndSplit, mockImportTxtTextAndSplitCore, mockInjectImportedSelectedCore, mockDeleteImportedEntriesCore, mockPrepareV2Recovery, mockCommitV2Recovery } = vi.hoisted(() => ({
   mockOpenVisualizer: vi.fn(),
   mockHandleTxtImportAndSplit: vi.fn(),
   mockImportTxtTextAndSplitCore: vi.fn(),
   mockInjectImportedSelectedCore: vi.fn(),
   mockDeleteImportedEntriesCore: vi.fn(),
+  mockPrepareV2Recovery: vi.fn(),
+  mockCommitV2Recovery: vi.fn(),
 }));
 
 vi.mock('../../src/presentation/triggers/data-admin-ui', () => ({
@@ -50,6 +52,11 @@ vi.mock('../../src/presentation/pages/visualizer', () => ({
   openNewVisualizer_ACU: mockOpenVisualizer,
 }));
 
+vi.mock('../../src/service/table/table-v2-recovery-service', () => ({
+  prepareV2Recovery_ACU: mockPrepareV2Recovery,
+  commitPreparedV2Recovery_ACU: mockCommitV2Recovery,
+}));
+
 import { createDataAdminApi } from '../../src/presentation/bootstrap/api-groups/data-admin-api';
 
 describe('createDataAdminApi', () => {
@@ -60,6 +67,8 @@ describe('createDataAdminApi', () => {
     mockImportTxtTextAndSplitCore.mockResolvedValue({ success: true, chunksCount: 1, splitSize: 10000 });
     mockInjectImportedSelectedCore.mockResolvedValue({ success: true, processedChunks: 1 });
     mockDeleteImportedEntriesCore.mockResolvedValue(2);
+    mockPrepareV2Recovery.mockReturnValue({ status: 'unrecoverable_no_base', isolationKey: '', requiresConfirmation: false, message: 'no base' });
+    mockCommitV2Recovery.mockResolvedValue({ status: 'committed', planId: 'plan-1' });
   });
 
   it('暴露 openVisualizer 并调用 visualizer 入口', async () => {
@@ -189,5 +198,26 @@ describe('createDataAdminApi', () => {
     const result = await api.clearImportedLorebookEntries({ targetWorldbook: 'BookA' });
 
     expect(result).toEqual({ success: false, error: 'delete failed' });
+  });
+
+  it('暴露 V2 恢复诊断与严格确认提交入口', async () => {
+    const api = createDataAdminApi({} as any);
+
+    await expect(api.prepareV2Recovery()).resolves.toMatchObject({ status: 'unrecoverable_no_base' });
+    await expect(api.commitV2Recovery(' plan-1 ', { confirmOrphanDataReplace: true })).resolves.toEqual({ status: 'committed', planId: 'plan-1' });
+
+    expect(mockPrepareV2Recovery).toHaveBeenCalledTimes(1);
+    expect(mockCommitV2Recovery).toHaveBeenCalledWith('plan-1', { confirmOrphanDataReplace: true });
+  });
+
+  it('V2 恢复 API 拒绝空 planId、非对象选项及非严格布尔确认', async () => {
+    const api = createDataAdminApi({} as any);
+
+    await expect(api.commitV2Recovery(' ', { confirmOrphanDataReplace: true })).resolves.toMatchObject({ success: false, error: expect.stringContaining('planId') });
+    await expect(api.commitV2Recovery('plan-1', 'yes')).resolves.toMatchObject({ success: false, error: expect.stringContaining('选项') });
+    await api.commitV2Recovery('plan-1', { confirmOrphanDataReplace: 'yes' });
+
+    expect(mockCommitV2Recovery).toHaveBeenCalledTimes(1);
+    expect(mockCommitV2Recovery).toHaveBeenLastCalledWith('plan-1', { confirmOrphanDataReplace: false });
   });
 });

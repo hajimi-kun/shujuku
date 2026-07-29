@@ -10,8 +10,10 @@
 
 import type {
   ITableStorageProvider,
+  SqlTableApplyScope_ACU,
   SqlQueryResult,
   SqlMutationResult,
+  ApplyEditsWithRowIdMaterializationResult_ACU,
   ApplyEditsResult,
   SqlQueryExecutionOptions_ACU,
 } from '../../shared/table-storage-provider';
@@ -25,12 +27,23 @@ import {
 } from '../runtime/state-manager';
 import { mergeAllIndependentTables_ACU } from '../runtime/helpers-data-merge';
 import { logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU, stripSeedRowsFromTemplate_ACU } from '../../shared/utils';
-import { buildGlobalNameMapper, disposeGlobalNameMapper } from '../runtime/template-vars/name-mapper';
-import { parseDDLTableName, generateDDL, generateInserts } from '../../data/sqlite/schema-mapper';
+import {
+  createNameMapperOwnerToken_ACU,
+  publishGlobalNameMapperEmptySchema_ACU,
+  publishGlobalNameMapperForDDLs_ACU,
+  releaseGlobalNameMapperForOwner_ACU,
+  type NameMapperOwnerToken_ACU,
+} from '../runtime/template-vars/name-mapper';
+import { parseDDLTableName, generateDDL, generateInserts, resolveEffectiveDDL } from '../../data/sqlite/schema-mapper';
 import { normalizeSqlStructure, normalizeStatementValues } from '../../data/sqlite/sql-normalizer';
 import { ensureStableRowIdsForSheetContent_ACU, getEffectiveSeedRowsForSheet_ACU, getCurrentChatTemplateScopeState_ACU, sanitizeTemplateSnapshotForChat_ACU, shouldUseInitialSeedRows_ACU } from '../template/chat-scope';
 import { getTemplatePreset_ACU } from '../template/template-preset-service';
 import { safeJsonParse_ACU } from '../../shared/json-helpers';
+import { assertNoPhysicalTableNameCollision_ACU, getPhysicalTableNameForSheet_ACU, PhysicalTableNameCollisionError_ACU, resolvePhysicalTableNames_ACU } from '../../shared/sheet-identity';
+import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
+import { rebindSqlMutationTableReferences_ACU } from '../../shared/sql-mutation-table-rebind';
+import { buildSheetTableAliasMap_ACU } from '../../shared/sql-read-resolver';
+import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../shared/stable-row-id-allocator';
 
 export interface SnapshotSqlApplyResult_ACU extends ApplyEditsResult {
   workingData?: TableDataObject_ACU;
@@ -86,6 +99,557 @@ export function normalizeSqlStatementsForRuntimeLog_ACU(sqlStatements: string): 
     .filter(Boolean);
 }
 
+interface SqlMutationIdentifierToken_ACU {
+  start: number;
+  end: number;
+  value: string;
+  quote: '"' | '`' | '[' | null;
+  depth: number;
+  commaBefore: boolean;
+}
+
+function isSqlMutationIdentifierStart_ACU(char: string): boolean {
+  if (char.length !== 1) return false;
+  const code = char.charCodeAt(0);
+  return char === '_' || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+}
+
+function isSqlMutationIdentifierPart_ACU(char: string): boolean {
+  if (char.length !== 1) return false;
+  const code = char.charCodeAt(0);
+  return isSqlMutationIdentifierStart_ACU(char) || char === '$' || (code >= 48 && code <= 57);
+}
+
+/** Tokenizes identifiers while deliberately skipping SQL strings and comments. */
+function tokenizeSqlMutationIdentifiers_ACU(statement: string): SqlMutationIdentifierToken_ACU[] {
+  const tokens: SqlMutationIdentifierToken_ACU[] = [];
+  let index = 0;
+  let depth = 0;
+  const commaBeforeDepths = new Set<number>();
+  while (index < statement.length) {
+    const char = statement[index];
+    const next = statement[index + 1];
+    if (char === '-' && next === '-') {
+      index += 2;
+      while (index < statement.length && statement[index] !== '\n' && statement[index] !== '\r') index += 1;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      index += 2;
+      while (index < statement.length && !(statement[index] === '*' && statement[index + 1] === '/')) index += 1;
+      if (index >= statement.length) throw new Error('SQL 块注释未闭合，无法安全重绑定表名。');
+      index += 2;
+      continue;
+    }
+    if (char === "'") {
+      index += 1;
+      while (index < statement.length) {
+        if (statement[index] !== "'") {
+          index += 1;
+        } else if (statement[index + 1] === "'") {
+          index += 2;
+        } else {
+          index += 1;
+          break;
+        }
+      }
+      if (index > statement.length || statement[index - 1] !== "'") throw new Error('SQL 字符串未闭合，无法安全重绑定表名。');
+      continue;
+    }
+    if (char === ',') {
+      commaBeforeDepths.add(depth);
+      index += 1;
+      continue;
+    }
+    if (char === '(') {
+      commaBeforeDepths.delete(depth);
+      depth += 1;
+      index += 1;
+      continue;
+    }
+    if (char === ')') {
+      depth = Math.max(0, depth - 1);
+      index += 1;
+      continue;
+    }
+    if (char === '"' || char === '`' || char === '[') {
+      const closing = char === '[' ? ']' : char;
+      const start = index;
+      let value = '';
+      index += 1;
+      let closed = false;
+      while (index < statement.length) {
+        if (statement[index] !== closing) {
+          value += statement[index++];
+        } else if (statement[index + 1] === closing) {
+          value += closing;
+          index += 2;
+        } else {
+          index += 1;
+          closed = true;
+          break;
+        }
+      }
+      if (!closed) throw new Error('SQL 引号标识符未闭合，无法安全重绑定表名。');
+      tokens.push({ start, end: index, value, quote: char, depth, commaBefore: commaBeforeDepths.delete(depth) });
+      continue;
+    }
+    if (isSqlMutationIdentifierStart_ACU(char)) {
+      const start = index;
+      index += 1;
+      while (index < statement.length && isSqlMutationIdentifierPart_ACU(statement[index])) index += 1;
+      tokens.push({ start, end: index, value: statement.slice(start, index), quote: null, depth, commaBefore: commaBeforeDepths.delete(depth) });
+      continue;
+    }
+    index += 1;
+  }
+  return tokens;
+}
+
+function isSqlMutationKeyword_ACU(token: SqlMutationIdentifierToken_ACU | undefined, keyword: string): boolean {
+  return !!token && token.quote === null && token.value.toUpperCase() === keyword;
+}
+
+function getSqlMutationActionIndex_ACU(tokens: SqlMutationIdentifierToken_ACU[]): number {
+  const first = tokens[0];
+  if (!first) throw new Error('SQL 语句为空或缺少可验证的写入动作。');
+  if (!isSqlMutationKeyword_ACU(first, 'WITH')) return 0;
+  const actionIndex = tokens.findIndex((token, index) => index > 0 && token.depth === 0 && (
+    isSqlMutationKeyword_ACU(token, 'INSERT')
+    || isSqlMutationKeyword_ACU(token, 'REPLACE')
+    || isSqlMutationKeyword_ACU(token, 'UPDATE')
+    || isSqlMutationKeyword_ACU(token, 'DELETE')
+  ));
+  if (actionIndex < 0) throw new Error('WITH SQL 缺少可验证的写入语句。');
+  return actionIndex;
+}
+
+function getQualifiedSqlIdentifierTail_ACU(
+  statement: string,
+  tokens: SqlMutationIdentifierToken_ACU[],
+  startIndex: number,
+): SqlMutationIdentifierToken_ACU | undefined {
+  let token = tokens[startIndex];
+  if (!token) return undefined;
+  let index = startIndex;
+  while (tokens[index + 1]
+    && tokens[index + 1].depth === token.depth
+    && /^\s*\.\s*$/.test(statement.slice(token.end, tokens[index + 1].start))) {
+    index += 1;
+    token = tokens[index];
+  }
+  return token;
+}
+
+function getSqlMutationTargetToken_ACU(statement: string, tokens: SqlMutationIdentifierToken_ACU[]): SqlMutationIdentifierToken_ACU {
+  const actionIndex = getSqlMutationActionIndex_ACU(tokens);
+  const action = tokens[actionIndex];
+  if (isSqlMutationKeyword_ACU(action, 'INSERT') || isSqlMutationKeyword_ACU(action, 'REPLACE')) {
+    let index = actionIndex + 1;
+    if (isSqlMutationKeyword_ACU(action, 'INSERT') && isSqlMutationKeyword_ACU(tokens[index], 'OR')) {
+      const action = tokens[index + 1];
+      if (!action || action.quote !== null || !new Set(['ROLLBACK', 'ABORT', 'REPLACE', 'FAIL', 'IGNORE']).has(action.value.toUpperCase())) {
+        throw new Error('INSERT OR 子句非法，无法安全重绑定表名。');
+      }
+      index += 2;
+    }
+    const target = getQualifiedSqlIdentifierTail_ACU(statement, tokens, index + 1);
+    if (!isSqlMutationKeyword_ACU(tokens[index], 'INTO') || !target) {
+      throw new Error('INSERT/REPLACE SQL 缺少可验证的目标表。');
+    }
+    return target;
+  }
+  if (isSqlMutationKeyword_ACU(action, 'UPDATE')) {
+    let index = actionIndex + 1;
+    if (isSqlMutationKeyword_ACU(tokens[index], 'OR')) {
+      const action = tokens[index + 1];
+      if (!action || action.quote !== null || !new Set(['ROLLBACK', 'ABORT', 'REPLACE', 'FAIL', 'IGNORE']).has(action.value.toUpperCase())) {
+        throw new Error('UPDATE OR 子句非法，无法安全重绑定表名。');
+      }
+      index += 2;
+    }
+    const target = getQualifiedSqlIdentifierTail_ACU(statement, tokens, index);
+    if (!target) throw new Error('UPDATE SQL 缺少可验证的目标表。');
+    return target;
+  }
+  if (isSqlMutationKeyword_ACU(action, 'DELETE')) {
+    const target = getQualifiedSqlIdentifierTail_ACU(statement, tokens, actionIndex + 2);
+    if (!isSqlMutationKeyword_ACU(tokens[actionIndex + 1], 'FROM') || !target) throw new Error('DELETE SQL 缺少可验证的目标表。');
+    return target;
+  }
+  throw new Error(`SQLite 填表仅允许 INSERT、REPLACE、UPDATE、DELETE 数据变更语句，收到：${action?.value || 'empty'}。禁止输出 CREATE、ALTER、DROP、事务或查询语句。`);
+}
+
+function collectSqlMutationTableReferenceTokens_ACU(
+  statement: string,
+  tokens: SqlMutationIdentifierToken_ACU[],
+  mutationTarget: SqlMutationIdentifierToken_ACU,
+): SqlMutationIdentifierToken_ACU[] {
+  const fromClauseTerminators = new Set([
+    'WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW', 'RETURNING', 'VALUES', 'SET',
+  ]);
+  const references = new Map<number, SqlMutationIdentifierToken_ACU>([[mutationTarget.start, mutationTarget]]);
+  const cteNames = new Set<string>();
+  for (let index = 0; index + 2 < tokens.length; index += 1) {
+    if (isSqlMutationKeyword_ACU(tokens[index], 'WITH') && isSqlMutationKeyword_ACU(tokens[index + 2], 'AS')) {
+      cteNames.add(tokens[index + 1].value.toLowerCase());
+    }
+  }
+  const activeFromDepths = new Set<number>();
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    const keyword = token.quote === null ? token.value.toUpperCase() : '';
+    if (fromClauseTerminators.has(keyword)) activeFromDepths.delete(token.depth);
+    if (keyword === 'FROM') activeFromDepths.add(token.depth);
+
+    if (keyword === 'FROM' || keyword === 'JOIN') {
+      const reference = getQualifiedSqlIdentifierTail_ACU(statement, tokens, index + 1);
+      if (reference && reference.depth === token.depth && !cteNames.has(reference.value.toLowerCase())) {
+        references.set(reference.start, reference);
+      }
+      continue;
+    }
+    if (token.commaBefore && activeFromDepths.has(token.depth) && !cteNames.has(token.value.toLowerCase())) {
+      references.set(token.start, token);
+    }
+  }
+  return [...references.values()];
+}
+
+function applySqlMutationIdentifierReplacements_ACU(
+  statement: string,
+  replacements: Array<{ token: SqlMutationIdentifierToken_ACU; physicalName: string }>,
+): string {
+  let result = statement;
+  for (const { token, physicalName } of [...replacements].sort((a, b) => b.token.start - a.token.start)) {
+    result = `${result.slice(0, token.start)}${formatSqlMutationIdentifier_ACU(physicalName, token.quote)}${result.slice(token.end)}`;
+  }
+  return result;
+}
+
+function formatSqlMutationIdentifier_ACU(value: string, quote: SqlMutationIdentifierToken_ACU['quote']): string {
+  if (quote === '"') return `"${value.replace(/"/g, '""')}"`;
+  if (quote === '`') return `\`${value.replace(/`/g, '``')}\``;
+  if (quote === '[') return `[${value.replace(/]/g, ']]')}]`;
+  return value;
+}
+
+/**
+ * Rebinds mutation table identifiers from unique DDL/runtime aliases to their
+ * authoritative runtime physical names for SQL generation.
+ *
+ * 别名来源必须与建表来源一致。建表走 _ensureTablesFromTemplate（模板权威），
+ * 而 tableData 常是运行时/聊天合并快照：新卡首次填表时快照里还没有该表，
+ * 只用快照建别名会漏掉 DDL 旧名，导致 rebind 原样放行并撞上 no such table。
+ * 因此额外接收 supplementalData（通常为当前聊天模板）参与别名解析。
+ */
+export function rebindSqlMutationTableIdentifiers_ACU(
+  statements: string[],
+  tableData: TableDataObject_ACU,
+  supplementalData?: TableDataObject_ACU | Record<string, unknown> | null,
+): string[] {
+  // 建表权威是模板（_ensureTablesFromTemplate），运行时快照在新卡首次填表时还没有该表。
+  // 未显式传入补充源时默认取当前聊天模板，保证别名覆盖与实际建表一致。
+  const templateSource = supplementalData === undefined
+    ? resolveCurrentChatTemplateForAliases_ACU()
+    : supplementalData;
+  // Generation keeps its narrower DDL/physical-name contract, while conflict
+  // arbitration is shared with the read path to prevent semantic drift.
+  const { aliases } = buildSheetTableAliasMap_ACU(
+    [templateSource, tableData],
+    { includeExtendedAliases: false, skipInvalidSources: true },
+  );
+  return rebindSqlMutationTableReferences_ACU(statements, aliases);
+}
+
+/**
+ * 解析当前聊天生效模板，仅用于 rebind 别名补充。
+ * 解析失败时返回 null：别名补充是增强项，绝不能因此让 rebind 整体失败。
+ */
+function resolveCurrentChatTemplateForAliases_ACU(): TableDataObject_ACU | null {
+  try {
+    const scopeState = getCurrentChatTemplateScopeState_ACU();
+    let templateStr: string | null = null;
+    if (scopeState?.mode === 'chat_override' && scopeState.templateStr) {
+      templateStr = scopeState.templateStr;
+    } else if (scopeState?.mode === 'preset_link' && scopeState.presetName) {
+      templateStr = getTemplatePreset_ACU(scopeState.presetName)?.templateStr || null;
+    }
+    if (templateStr) {
+      const parsed = safeJsonParse_ACU(templateStr, null);
+      if (parsed && typeof parsed === 'object') {
+        return stripSeedRowsFromTemplate_ACU(JSON.parse(JSON.stringify(parsed))) as TableDataObject_ACU;
+      }
+    }
+    return parseTableTemplateJson_ACU({ stripSeedRows: true }) as TableDataObject_ACU | null;
+  } catch (e: any) {
+    logWarn_ACU(`[SqlTableService] rebind 别名模板解析失败，仅用运行时快照: ${e?.message || e}`);
+    return null;
+  }
+}
+
+function resolveChatTemplateData_ACU(
+  options: { chat?: any[]; isolationKey?: string; stripSeedRows?: boolean } = {},
+): TableDataObject_ACU | null {
+  const stripSeedRows = options.stripSeedRows !== false;
+  const scopeState = getCurrentChatTemplateScopeState_ACU({
+    ...(options.chat ? { chat: options.chat } : {}),
+    ...(options.isolationKey !== undefined ? { isolationKey: options.isolationKey } : {}),
+  });
+  let templateStr: string | null = null;
+  if (scopeState?.mode === 'chat_override' && scopeState.templateStr) {
+    templateStr = scopeState.templateStr;
+  } else if (scopeState?.mode === 'preset_link' && scopeState.presetName) {
+    templateStr = getTemplatePreset_ACU(scopeState.presetName)?.templateStr || null;
+  }
+  if (templateStr) {
+    const parsed = safeJsonParse_ACU(templateStr, null);
+    if (parsed && typeof parsed === 'object') {
+      const cloned = JSON.parse(JSON.stringify(parsed));
+      return (stripSeedRows ? stripSeedRowsFromTemplate_ACU(cloned) : cloned) as TableDataObject_ACU;
+    }
+  }
+  const globalTemplate = parseTableTemplateJson_ACU({ stripSeedRows });
+  return globalTemplate && typeof globalTemplate === 'object'
+    ? JSON.parse(JSON.stringify(globalTemplate)) as TableDataObject_ACU
+    : null;
+}
+
+/** 在 AI 请求前捕获建表与别名解析所需的不可变模板快照。 */
+export function captureSqlTableApplyScope_ACU(options: {
+  chat: any[];
+  isolationKey: string;
+}): SqlTableApplyScope_ACU {
+  const templateData = resolveChatTemplateData_ACU({ ...options, stripSeedRows: true });
+  const templateDataWithRows = resolveChatTemplateData_ACU({ ...options, stripSeedRows: false });
+  if (!templateData || !templateDataWithRows) {
+    throw new Error(`[SqlTableService] 无法捕获提交模板上下文 (isolationKey=${options.isolationKey || 'default'})。`);
+  }
+  assertNoPhysicalTableNameCollision_ACU(templateData);
+  return {
+    isolationKey: options.isolationKey,
+    templateData,
+    templateDataWithRows,
+  };
+}
+
+function splitTopLevelSqlList_ACU(value: string, context: string): string[] {
+  const items: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let quote: "'" | '"' | null = null;
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (quote) {
+      if (char === quote) {
+        if (value[index + 1] === quote) index += 1;
+        else quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+    } else if (char === '(') {
+      depth += 1;
+    } else if (char === ')') {
+      depth -= 1;
+      if (depth < 0) throw new Error(`${context} 的括号不匹配。`);
+    } else if (char === ',' && depth === 0) {
+      const item = value.slice(start, index).trim();
+      if (!item) throw new Error(`${context} 包含空项。`);
+      items.push(item);
+      start = index + 1;
+    }
+  }
+  if (quote || depth !== 0) throw new Error(`${context} 的字符串或括号未闭合。`);
+  const item = value.slice(start).trim();
+  if (!item) throw new Error(`${context} 包含空项。`);
+  items.push(item);
+  return items;
+}
+
+function findSqlClosingParen_ACU(value: string, openingIndex: number, context: string): number {
+  let depth = 0;
+  let quote: "'" | '"' | null = null;
+  for (let index = openingIndex; index < value.length; index += 1) {
+    const char = value[index];
+    if (quote) {
+      if (char === quote) {
+        if (value[index + 1] === quote) index += 1;
+        else quote = null;
+      }
+      continue;
+    }
+    if (char === "'" || char === '"') quote = char;
+    else if (char === '(') depth += 1;
+    else if (char === ')') {
+      depth -= 1;
+      if (depth === 0) return index;
+      if (depth < 0) break;
+    }
+  }
+  throw new Error(`${context} 的括号未闭合。`);
+}
+
+function buildRowIdReservationsByRuntimeTable_ACU(
+  tableData: TableDataObject_ACU,
+  additionalReservations?: Map<string, Set<string>>,
+): Map<string, Set<string>> {
+  const reservations = new Map<string, Set<string>>();
+  for (const [sheetKey, value] of Object.entries(tableData || {})) {
+    if (!sheetKey.startsWith('sheet_')) continue;
+    const content = (value as any)?.content;
+    reservations.set(getPhysicalTableNameForSheet_ACU(tableData, sheetKey).toLowerCase(), createStableRowIdReservation_ACU(
+      Array.isArray(content) ? content.slice(1) : [],
+    ));
+  }
+  for (const [tableName, rowIds] of additionalReservations || []) {
+    const reservation = reservations.get(tableName.toLowerCase()) || new Set<string>();
+    for (const rowId of rowIds) reservation.add(rowId);
+    reservations.set(tableName.toLowerCase(), reservation);
+  }
+  return reservations;
+}
+
+export class SqlRowIdMaterializationError_ACU extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SqlRowIdMaterializationError_ACU';
+  }
+}
+
+export class SqlRuntimeSnapshotError_ACU extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SqlRuntimeSnapshotError_ACU';
+  }
+}
+
+/**
+ * Makes ordinary AI-authored INSERT statements self-describing before execution and V2 logging.
+ * SQLite REPLACE forms retain their native semantics and are persisted unchanged.
+ */
+export function materializeSystemRowIdsForSqlInserts_ACU(
+  statements: string[],
+  tableData: TableDataObject_ACU,
+  additionalReservations?: Map<string, Set<string>>,
+): string[] {
+  const reservations = buildRowIdReservationsByRuntimeTable_ACU(tableData, additionalReservations);
+  return statements.map((statement, statementIndex) => {
+    const tokens = tokenizeSqlMutationIdentifiers_ACU(statement);
+    const actionIndex = getSqlMutationActionIndex_ACU(tokens);
+    const action = tokens[actionIndex];
+    if (isSqlMutationKeyword_ACU(action, 'REPLACE')) return statement;
+    if (!isSqlMutationKeyword_ACU(action, 'INSERT')) return statement;
+    if (isSqlMutationKeyword_ACU(tokens[actionIndex + 1], 'OR') && isSqlMutationKeyword_ACU(tokens[actionIndex + 2], 'REPLACE')) return statement;
+    if (actionIndex !== 0 || isSqlMutationKeyword_ACU(tokens[actionIndex + 1], 'OR')) {
+      throw new Error(`AI INSERT 第 ${statementIndex + 1} 条不支持 WITH 或 INSERT OR 语法；请使用标准 INSERT INTO ... (列名) VALUES (...).`);
+    }
+    const target = getSqlMutationTargetToken_ACU(statement, tokens);
+    const reservation = reservations.get(target.value.toLowerCase());
+    if (!reservation) {
+      throw new Error(`AI INSERT 第 ${statementIndex + 1} 条无法识别目标表：${target.value}。`);
+    }
+    const suffix = statement.slice(target.end).trim();
+    if (!suffix.startsWith('(')) {
+      if (/^SELECT\b/i.test(suffix)) {
+        throw new Error(`AI INSERT 第 ${statementIndex + 1} 条不支持 INSERT SELECT；请改为显式业务列的 VALUES 插入。`);
+      }
+      throw new Error(`AI INSERT 第 ${statementIndex + 1} 条必须显式列出业务列，系统才能分配 row_id。`);
+    }
+    const columnsEnd = findSqlClosingParen_ACU(suffix, 0, `AI INSERT 第 ${statementIndex + 1} 条列清单`);
+    const inputColumns = splitTopLevelSqlList_ACU(suffix.slice(1, columnsEnd), `AI INSERT 第 ${statementIndex + 1} 条列清单`);
+    const normalizedColumns = inputColumns.map(column => column.trim().replace(/^["`\[]|["`\]]$/g, '').toLowerCase());
+    if (normalizedColumns.some(column => !/^[a-z_][a-z0-9_$]*$/i.test(column))) {
+      throw new Error(`AI INSERT 第 ${statementIndex + 1} 条的列名无法安全解析。`);
+    }
+    if (new Set(normalizedColumns).size !== normalizedColumns.length) {
+      throw new Error(`AI INSERT 第 ${statementIndex + 1} 条的列名重复。`);
+    }
+    const suppliedRowIdIndex = normalizedColumns.indexOf('row_id');
+    const businessColumns = inputColumns.filter((_, index) => index !== suppliedRowIdIndex);
+    if (businessColumns.length === 0) {
+      throw new Error(`AI INSERT 第 ${statementIndex + 1} 条剔除 row_id 后没有业务列，无法执行插入。`);
+    }
+    const valuesText = suffix.slice(columnsEnd + 1).trim();
+    if (!/^VALUES\b/i.test(valuesText)) {
+      throw new Error(`AI INSERT 第 ${statementIndex + 1} 条只支持 VALUES 插入；不支持 INSERT SELECT。`);
+    }
+    const tupleText = valuesText.slice('VALUES'.length).trim();
+    const tuples = splitTopLevelSqlList_ACU(tupleText, `AI INSERT 第 ${statementIndex + 1} 条 VALUES`);
+    const materializedTuples = tuples.map((tuple, tupleIndex) => {
+      if (!tuple.startsWith('(') || findSqlClosingParen_ACU(tuple, 0, `AI INSERT 第 ${statementIndex + 1} 条第 ${tupleIndex + 1} 个 VALUES`) !== tuple.length - 1) {
+        throw new Error(`AI INSERT 第 ${statementIndex + 1} 条只支持括号包裹的 VALUES 行。`);
+      }
+      const values = splitTopLevelSqlList_ACU(tuple.slice(1, -1), `AI INSERT 第 ${statementIndex + 1} 条第 ${tupleIndex + 1} 个 VALUES`);
+      if (values.length !== inputColumns.length) {
+        throw new Error(`AI INSERT 第 ${statementIndex + 1} 条第 ${tupleIndex + 1} 行的值数量与列数量不一致。`);
+      }
+      const businessValues = values.filter((_, index) => index !== suppliedRowIdIndex);
+      return `(${allocateStableRowId_ACU(reservation)}, ${businessValues.join(', ')})`;
+    });
+    return `${statement.slice(0, target.end)} (row_id, ${businessColumns.join(', ')}) VALUES ${materializedTuples.join(', ')}`;
+  });
+}
+
+/**
+ * Rejects AI-authored INSERT/UPDATE assignments that target hidden physical
+ * columns. It deliberately reuses the mutation tokenizer so strings and
+ * comments cannot masquerade as identifiers.
+ */
+export function assertNoHiddenPhysicalColumnMutations_ACU(
+  statements: string[],
+  tableData: Record<string, any>,
+): void {
+  const physicalNames = resolvePhysicalTableNames_ACU(tableData as TableDataObject_ACU);
+  const sheetsByAlias = new Map<string, { sheetKey: string; sheet: any } | null>();
+  for (const [sheetKey, physicalName] of physicalNames) {
+    const sheet = tableData[sheetKey] as any;
+    for (const alias of [parseDDLTableName(sheet?.sourceData?.ddl || ''), physicalName]) {
+      const normalized = String(alias || '').trim().toLowerCase();
+      if (!normalized) continue;
+      const existing = sheetsByAlias.get(normalized);
+      if (existing && existing.sheetKey !== sheetKey) sheetsByAlias.set(normalized, null);
+      else if (existing !== null) sheetsByAlias.set(normalized, { sheetKey, sheet });
+    }
+  }
+
+  for (const statement of statements) {
+    const tokens = tokenizeSqlMutationIdentifiers_ACU(statement);
+    const actionIndex = getSqlMutationActionIndex_ACU(tokens);
+    const action = tokens[actionIndex];
+    const actionKeyword = action?.quote === null ? action.value.toUpperCase() : '';
+    if (!new Set(['INSERT', 'REPLACE', 'UPDATE', 'DELETE']).has(actionKeyword)) {
+      throw new Error(`SQLite 填表仅允许 INSERT、REPLACE、UPDATE、DELETE 数据变更语句，收到：${action?.value || 'empty'}。禁止输出 CREATE、ALTER、DROP、事务或查询语句。`);
+    }
+    const target = getSqlMutationTargetToken_ACU(statement, tokens);
+    const resolved = sheetsByAlias.get(target.value.toLowerCase());
+    if (resolved === undefined) continue;
+    if (resolved === null) throw new Error(`无法唯一解析隐藏列保护的 SQL 目标表：${target.value}。`);
+    const hidden = new Set(getSheetColumnProjection_ACU(resolved.sheet).hiddenPhysicalColumns.map(name => name.toLowerCase()));
+    if (hidden.size === 0) continue;
+
+    const hiddenReferences = tokens.filter(token => token !== target && hidden.has(token.value.toLowerCase()));
+    if (hiddenReferences.length > 0) {
+      throw new Error(`SQL mutation 不允许引用隐藏物理列：${[...new Set(hiddenReferences.map(token => token.value))].join('、')}。`);
+    }
+
+    const isInsert = actionKeyword === 'INSERT' || actionKeyword === 'REPLACE';
+    if (isInsert) {
+      const targetIndex = tokens.indexOf(target);
+      const clauseIndex = tokens.findIndex((token, index) => index > targetIndex
+        && token.depth === target.depth
+        && token.quote === null
+        && new Set(['VALUES', 'SELECT', 'DEFAULT']).has(token.value.toUpperCase()));
+      const beforeClause = clauseIndex === -1 ? tokens.slice(targetIndex + 1) : tokens.slice(targetIndex + 1, clauseIndex);
+      const columnTokens = beforeClause.filter(token => token.depth === target.depth + 1);
+      if (columnTokens.length === 0) {
+        throw new Error(`存在隐藏物理列时，INSERT/REPLACE 必须显式列出可见目标列：${target.value}。`);
+      }
+    }
+  }
+}
+
 export function mapSqlTableNamesToSheetKeys_ACU(tableData: TableDataObject_ACU | null | undefined, tableNames: string[]): string[] {
   if (!tableData || !Array.isArray(tableNames) || tableNames.length === 0) return [];
   const matchedKeys = new Set<string>();
@@ -95,10 +659,12 @@ export function mapSqlTableNamesToSheetKeys_ACU(tableData: TableDataObject_ACU |
     const tableNameFromUid = typeof sheet?.uid === 'string' ? sheet.uid.trim() : '';
     const tableNameFromName = typeof sheet?.name === 'string' ? sheet.name.trim() : '';
     const tableNameFromDDL = typeof sheet?.sourceData?.ddl === 'string' ? parseDDLTableName(sheet.sourceData.ddl) : '';
+    const runtimeTableName = getPhysicalTableNameForSheet_ACU(tableData, sheetKey);
     if (
       (tableNameFromUid && tableNames.includes(tableNameFromUid))
       || (tableNameFromName && tableNames.includes(tableNameFromName))
       || (tableNameFromDDL && tableNames.includes(tableNameFromDDL))
+      || tableNames.includes(runtimeTableName)
     ) {
       matchedKeys.add(sheetKey);
     }
@@ -112,10 +678,11 @@ function appendSqlSheetBatchOperation_ACU(
   statement: string,
   param: TableSqlBindValueV2_ACU[] | undefined,
   reason: 'manual_crud' | 'import' | 'system',
-  tableName?: string,
+  tableName: string,
 ): void {
   const last = operations[operations.length - 1] as any;
   if (last?.kind === 'sql_sheet_batch' && last.sheetKey === sheetKey) {
+    if (last.tableName !== tableName) throw new Error(`sql_sheet_batch 合并时发现 runtime 表名不一致：${sheetKey}。`);
     last.statements.push(statement);
     if (param !== undefined || Array.isArray(last.params)) {
       if (!Array.isArray(last.params)) last.params = [];
@@ -128,7 +695,7 @@ function appendSqlSheetBatchOperation_ACU(
     sheetKey,
     statements: [statement],
     ...(param !== undefined ? { params: [param] } : {}),
-    ...(tableName ? { tableName } : {}),
+    tableName,
     reason,
   });
 }
@@ -176,15 +743,16 @@ export function buildSqlSheetBatchOperations_ACU(
     const tableNames = extractTableNamesFromStatements([statement]);
     const sheetKeys = mapSqlTableNamesToSheetKeys_ACU(tableData, tableNames);
     if (sheetKeys.length === 1) {
-      classifiedSheetKeys.add(sheetKeys[0]);
-      appendSqlSheetBatchOperation_ACU(operations, sheetKeys[0], statement, param, reason, tableNames[0]);
+      const sheetKey = sheetKeys[0];
+      classifiedSheetKeys.add(sheetKey);
+      appendSqlSheetBatchOperation_ACU(operations, sheetKey, statement, param, reason, getPhysicalTableNameForSheet_ACU(tableData, sheetKey));
       return;
     }
     if (sheetKeys.length === 0 && allowFallback) {
       const sheetKey = fallbackTargetSheetKeys[0];
       classifiedSheetKeys.add(sheetKey);
       unknownStatements.push(statement);
-      appendSqlSheetBatchOperation_ACU(operations, sheetKey, statement, param, reason);
+      appendSqlSheetBatchOperation_ACU(operations, sheetKey, statement, param, reason, getPhysicalTableNameForSheet_ACU(tableData, sheetKey));
       return;
     }
     if (sheetKeys.length > 1) {
@@ -209,14 +777,31 @@ export class SqlTableService implements ITableStorageProvider {
   private syncBridge: SyncBridge;
   private _initialized = false;
   private _existingTableSet?: Set<string>;
+  /**
+   * 本实例的全局 NameMapper 发布凭证。
+   *
+   * 切聊/重载会出现「新实例已发布映射 → 旧实例才 dispose」的置换顺序，
+   * 因此清理必须按所有权判定，否则旧实例会把新 runtime 的映射清成 unbound。
+   */
+  private readonly nameMapperOwner_ACU: NameMapperOwnerToken_ACU;
 
   constructor() {
     this.engine = new SqliteEngine();
     this.syncBridge = new SyncBridge(this.engine);
+    this.nameMapperOwner_ACU = createNameMapperOwnerToken_ACU('sql-table-service');
   }
 
   isReady(): boolean {
     return this._initialized && this.engine.isReady;
+  }
+
+  /**
+   * 以本实例身份按给定 canonical 快照刷新映射。
+   * 外部 CRUD 与回滚路径不持有发布凭证，必须经活跃 provider 刷新，
+   * 否则会出现「owner 是本实例、内容却由无所有权入口改写」的脱节。
+   */
+  refreshNameMapperForData_ACU(data: TableDataObject_ACU): boolean {
+    return this._buildNameMapper(data);
   }
 
   createRuntimeSnapshot(): Uint8Array | null {
@@ -226,13 +811,26 @@ export class SqlTableService implements ITableStorageProvider {
 
   async restoreRuntimeSnapshot(snapshot: unknown): Promise<void> {
     if (!(snapshot instanceof Uint8Array)) throw new Error('SQLite 运行时快照无效，无法恢复。');
+    // 失败时要撤回本实例写入的共享 canonical 视图，避免半成功状态污染其他读者。
+    const previousJsonView = currentJsonTableData_ACU as TableDataObject_ACU | null;
+    releaseGlobalNameMapperForOwner_ACU(this.nameMapperOwner_ACU);
     await this.engine.loadFromBinary(snapshot);
-    this._initialized = true;
     this._existingTableSet = undefined;
-    this._syncToJson();
-    if (currentJsonTableData_ACU) {
-      this._buildNameMapper(currentJsonTableData_ACU as TableDataObject_ACU);
+    // 映射必须基于「刚从恢复后 engine 成功导出」的视图构建。
+    // 导出失败时残留的旧 JSON 与新 engine 不同源，绝不能拿它发布映射。
+    // ownView 只能取自本次真实写入的返回值：读取全局值会把其他实例在
+    // loadFromBinary 等待期间发布的视图误认成本实例的写入。
+    const restoredView = this._syncToJson();
+    if (!restoredView) {
+      this._initialized = false;
+      throw new Error('sqlite_snapshot_restore_failed: 快照恢复后无法导出 canonical 视图。');
     }
+    if (!this._buildNameMapper(restoredView)) {
+      this._initialized = false;
+      this._revertOwnJsonView_ACU(restoredView, previousJsonView);
+      throw new Error('name_mapper_publish_rejected: 快照恢复后未能发布中英文名映射。');
+    }
+    this._initialized = true;
   }
 
   /**
@@ -268,6 +866,21 @@ export class SqlTableService implements ITableStorageProvider {
     const mergedData = data ? JSON.parse(JSON.stringify(data)) as TableDataObject_ACU : null;
     this._resetRuntimeForLoad_ACU();
 
+    // 启动自检（fail-loud）：拼音物理名冲突必须在建表前拦截，给出可读的改名指引，
+    // 而不是等到 hydrate 时被 generic catch 吞成 sqlite_hydrate_failed。
+    if (mergedData) {
+      try {
+        assertNoPhysicalTableNameCollision_ACU(mergedData);
+      } catch (e: any) {
+        if (e instanceof PhysicalTableNameCollisionError_ACU) {
+          this._resetRuntimeForLoad_ACU();
+          logError_ACU(`[SqlTableService] ${e.message}`);
+          return { loaded: false, source: 'empty', error: `physical_table_name_collision: ${e.message}` };
+        }
+        throw e;
+      }
+    }
+
     try {
       await this.engine.init();
     } catch (e: any) {
@@ -292,9 +905,12 @@ export class SqlTableService implements ITableStorageProvider {
         const runtimeSeedSource = mergedData;
         const runtimeSeedData = this._buildInitialRuntimeTableData_ACU(runtimeSeedSource);
         if (runtimeSeedData) {
-          this.syncBridge.loadFromTableData(runtimeSeedData, { strict: true });
+          this.syncBridge.loadFromTableData(runtimeSeedData, { strict: true, allowRuntimeDdlFallback: true });
+          this._validateRuntimeSchema_ACU(runtimeSeedData);
           _set_currentJsonTableData_ACU(runtimeSeedData);
-          this._buildNameMapper(runtimeSeedData);
+          if (!this._buildNameMapper(runtimeSeedData)) {
+            throw new Error('name_mapper_publish_rejected: 未能发布当前 runtime 的中英文名映射。');
+          }
           this._initialized = true;
           this._existingTableSet = undefined;
           const hasSeedRows = Object.keys(runtimeSeedData)
@@ -305,14 +921,22 @@ export class SqlTableService implements ITableStorageProvider {
         }
 
         logDebug_ACU('[SqlTableService] 没有找到表格数据，引擎已就绪，等待第一次填表时从模板建表');
+        // runtime 没有任何表可映射。显式标记空 schema，避免同步读门禁把它
+        // 误判成「mapper 意外丢失」并按异常反复告警。
+        if (!publishGlobalNameMapperEmptySchema_ACU(this.nameMapperOwner_ACU)) {
+          throw new Error('name_mapper_publish_rejected: 未能发布空 schema 标记。');
+        }
         this._initialized = true;
         this._existingTableSet = undefined;
         return { loaded: false, source: 'empty' };
       }
 
-      this.syncBridge.loadFromTableData(mergedData as TableDataObject_ACU, { strict: true });
+      this.syncBridge.loadFromTableData(mergedData as TableDataObject_ACU, { strict: true, allowRuntimeDdlFallback: true });
+      this._validateRuntimeSchema_ACU(mergedData as TableDataObject_ACU);
       _set_currentJsonTableData_ACU(mergedData as TableDataObject_ACU);
-      this._buildNameMapper(mergedData as TableDataObject_ACU);
+      if (!this._buildNameMapper(mergedData as TableDataObject_ACU)) {
+        throw new Error('name_mapper_publish_rejected: 未能发布当前 runtime 的中英文名映射。');
+      }
       this._initialized = true;
       this._existingTableSet = undefined;
       logDebug_ACU('[SqlTableService] SQLite 数据库加载完成');
@@ -341,15 +965,22 @@ export class SqlTableService implements ITableStorageProvider {
   }
 
   async replaceAllData(data: TableDataObject_ACU): Promise<ApplyEditsResult> {
+    // 替换失败不得把本实例数据永久留在共享 canonical 视图里。
+    const previousJsonView = currentJsonTableData_ACU as TableDataObject_ACU | null;
+    let ownJsonView: TableDataObject_ACU | null = null;
     try {
       const cloned = JSON.parse(JSON.stringify(data || {})) as TableDataObject_ACU;
+      releaseGlobalNameMapperForOwner_ACU(this.nameMapperOwner_ACU);
       this.engine.dispose();
       this.engine = new SqliteEngine();
       this.syncBridge = new SyncBridge(this.engine);
       await this.engine.init();
       this.syncBridge.loadFromTableData(cloned, { strict: true });
       _set_currentJsonTableData_ACU(cloned);
-      this._buildNameMapper(cloned);
+      ownJsonView = cloned;
+      if (!this._buildNameMapper(cloned)) {
+        throw new Error('name_mapper_publish_rejected: 未能发布替换后 runtime 的中英文名映射。');
+      }
       this._initialized = true;
       this._existingTableSet = undefined;
       const modifiedKeys = Object.keys(cloned).filter(key => key.startsWith('sheet_'));
@@ -357,6 +988,11 @@ export class SqlTableService implements ITableStorageProvider {
       return { success: true, modifiedKeys, appliedEdits: modifiedKeys.length };
     } catch (e: any) {
       const message = e?.message || String(e);
+      // 替换失败后本实例没有可信 runtime；不得保留旧的 initialized 标志冒充可用。
+      this._initialized = false;
+      this._existingTableSet = undefined;
+      this._revertOwnJsonView_ACU(ownJsonView, previousJsonView);
+      releaseGlobalNameMapperForOwner_ACU(this.nameMapperOwner_ACU);
       logError_ACU(`[SqlTableService] 运行时全量替换失败: ${message}`);
       return { success: false, modifiedKeys: [], appliedEdits: 0, error: message };
     }
@@ -369,7 +1005,7 @@ export class SqlTableService implements ITableStorageProvider {
     this._initialized = false;
     this._existingTableSet = undefined;
     _set_currentJsonTableData_ACU(null);
-    disposeGlobalNameMapper();
+    releaseGlobalNameMapperForOwner_ACU(this.nameMapperOwner_ACU);
   }
 
   /**
@@ -413,9 +1049,13 @@ export class SqlTableService implements ITableStorageProvider {
     const userParams: ((string | number | null)[] | undefined)[] = [];
     (Array.isArray(sqlTexts) ? sqlTexts : []).forEach((sqlText, index) => {
       const normalizedStatements = normalizeSqlStatementsForRuntimeLog_ACU(sqlText);
-      normalizedStatements.forEach(statement => {
+      const runtimeStatements = rebindSqlMutationTableIdentifiers_ACU(
+        normalizedStatements,
+        (currentJsonTableData_ACU || { mate: DEFAULT_MATE_ACU }) as TableDataObject_ACU,
+      );
+      runtimeStatements.forEach(statement => {
         userStatements.push(statement);
-        userParams.push(normalizedStatements.length === 1 ? paramsList?.[index] : undefined);
+        userParams.push(runtimeStatements.length === 1 ? paramsList?.[index] : undefined);
       });
     });
     if (userStatements.length === 0) {
@@ -446,6 +1086,78 @@ export class SqlTableService implements ITableStorageProvider {
     } catch (e: any) {
       const errMsg = e?.message || String(e);
       logError_ACU(`[SqlTableService] SQL 批量执行失败: ${errMsg}`);
+      throw e;
+    }
+  }
+
+  applyEditsWithSystemRowIds(
+    sqlTexts: string[],
+    _updateMode?: string,
+    scope?: SqlTableApplyScope_ACU,
+  ): ApplyEditsWithRowIdMaterializationResult_ACU {
+    this._ensureInitialized();
+    this._ensureTablesFromTemplate(scope);
+
+    const normalizedGroups = (Array.isArray(sqlTexts) ? sqlTexts : []).map(sqlText => {
+      const normalizedStatements = normalizeSqlStatementsForRuntimeLog_ACU(sqlText);
+      return rebindSqlMutationTableIdentifiers_ACU(
+        normalizedStatements,
+        (currentJsonTableData_ACU || { mate: DEFAULT_MATE_ACU }) as TableDataObject_ACU,
+        scope?.templateData,
+      );
+    });
+    const userStatements = normalizedGroups.flat();
+    if (userStatements.length === 0) {
+      return {
+        success: true,
+        modifiedKeys: [],
+        appliedEdits: 0,
+        materializedSqlTexts: normalizedGroups.map(() => ''),
+        tableData: this._exportCurrentDataStrict(),
+      };
+    }
+
+    const reseedPlan = this._collectReseedPlanForEmptyTables(scope);
+    const runtimeData = this._exportCurrentDataStrict();
+    let materializedStatements: string[];
+    try {
+      materializedStatements = materializeSystemRowIdsForSqlInserts_ACU(
+        userStatements,
+        runtimeData,
+        reseedPlan.rowIdsByTable,
+      );
+    } catch (error: any) {
+      throw new SqlRowIdMaterializationError_ACU(error?.message || String(error));
+    }
+
+    const materializedSqlTexts: string[] = [];
+    let cursor = 0;
+    for (const group of normalizedGroups) {
+      materializedSqlTexts.push(materializedStatements.slice(cursor, cursor + group.length).join(';\n'));
+      cursor += group.length;
+    }
+
+    const statements = [...reseedPlan.inserts, ...materializedStatements];
+    try {
+      const result = this.engine.runBatchWithFinalize(
+        statements,
+        statements.map((): undefined => undefined),
+        () => this._exportCurrentDataStrict(),
+      );
+      const tableData = result.finalizeResult!;
+      _set_currentJsonTableData_ACU(tableData);
+      const modifiedTables = extractTableNamesFromStatements(statements);
+      const modifiedKeys = this._tableNamesToSheetKeys(modifiedTables);
+      logDebug_ACU(`[SqlTableService] 系统 row_id 批量执行成功: ${statements.length} 条语句, ${result.totalChanges} 行受影响`);
+      return {
+        success: true,
+        modifiedKeys,
+        appliedEdits: materializedStatements.length,
+        materializedSqlTexts,
+        tableData,
+      };
+    } catch (e: any) {
+      logError_ACU(`[SqlTableService] 系统 row_id 批量执行失败: ${e?.message || String(e)}`);
       throw e;
     }
   }
@@ -488,7 +1200,11 @@ export class SqlTableService implements ITableStorageProvider {
 
       // 对 SQL 做规范化：结构字符兼容化 + 受约束字段值规范化
       const normalizedSql = normalizeStatementValues(normalizeSqlStructure(sql));
-      const result = this.engine.run(normalizedSql, params);
+      const runtimeSql = rebindSqlMutationTableIdentifiers_ACU(
+        [normalizedSql],
+        (currentJsonTableData_ACU || { mate: DEFAULT_MATE_ACU }) as TableDataObject_ACU,
+      )[0];
+      const result = this.engine.run(runtimeSql, params);
       this._syncToJson();
       return { changes: result.changes, errors: [] };
     } catch (e: any) {
@@ -503,7 +1219,9 @@ export class SqlTableService implements ITableStorageProvider {
    */
   dispose(): void {
     this.engine.dispose();
-    disposeGlobalNameMapper();
+    // 本实例可能已被更新的 runtime 置换。只释放自己发布的映射，
+    // 否则会把新 runtime 刚发布的 schema 映射清成 unbound。
+    releaseGlobalNameMapperForOwner_ACU(this.nameMapperOwner_ACU);
     this._initialized = false;
     this._existingTableSet = undefined;
     logDebug_ACU('[SqlTableService] SQLite 引擎已销毁');
@@ -513,8 +1231,27 @@ export class SqlTableService implements ITableStorageProvider {
   // 内部方法
   // ═══════════════════════════════════════════════════════════════
 
+  /**
+   * 撤回本实例写入共享 canonical 视图的内容。
+   *
+   * 只有当共享视图仍是本实例写入的那一份时才回退：等待期间其他实例可能已经
+   * 合法发布了新视图，无条件写回旧值会把它们的更新覆盖掉。
+   */
+  private _revertOwnJsonView_ACU(
+    ownView: TableDataObject_ACU | null,
+    previousView: TableDataObject_ACU | null,
+  ): void {
+    if (!ownView || currentJsonTableData_ACU !== ownView) return;
+    _set_currentJsonTableData_ACU(previousView);
+  }
+
+
   /** 重置本实例的 SQLite runtime；不触碰调用方持有的 canonical JSON 快照。 */
   private _resetRuntimeForLoad_ACU(): void {
+    // 新 runtime 在成功 hydrate 前没有可证明匹配的 schema；保留旧 mapper
+    // 会让并发/重载后的外部 CRUD 把展示列解析到上一份 SQLite schema。
+    // 只撤销本实例发布的映射：其他实例的映射由其自身生命周期负责。
+    releaseGlobalNameMapperForOwner_ACU(this.nameMapperOwner_ACU);
     this.engine.dispose();
     this.engine = new SqliteEngine();
     this.syncBridge = new SyncBridge(this.engine);
@@ -581,19 +1318,37 @@ export class SqlTableService implements ITableStorageProvider {
    * @returns 需要前置执行的 INSERT 语句数组（可能为空）
    */
   private _collectReseedInsertsForEmptyTables(): string[] {
+    return this._collectReseedPlanForEmptyTables().inserts;
+  }
+
+  private _exportCurrentDataStrict(): TableDataObject_ACU {
+    try {
+      const mate = (currentJsonTableData_ACU?.mate as Mate_ACU) || DEFAULT_MATE_ACU;
+      return this.syncBridge.exportToTableData(mate, { strict: true });
+    } catch (error: any) {
+      throw new SqlRuntimeSnapshotError_ACU(error?.message || String(error));
+    }
+  }
+
+  private _collectReseedPlanForEmptyTables(scope?: SqlTableApplyScope_ACU): {
+    inserts: string[];
+    rowIdsByTable: Map<string, Set<string>>;
+  } {
     const inserts: string[] = [];
-    if (!currentJsonTableData_ACU) return inserts;
+    const rowIdsByTable = new Map<string, Set<string>>();
+    if (!currentJsonTableData_ACU) return { inserts, rowIdsByTable };
+    const identitySource = scope?.templateData || currentJsonTableData_ACU;
+    const seedSource = scope?.templateDataWithRows;
 
     const sheetKeys = Object.keys(currentJsonTableData_ACU).filter(k => k.startsWith('sheet_'));
-    if (sheetKeys.length === 0) return inserts;
+    if (sheetKeys.length === 0) return { inserts, rowIdsByTable };
 
     for (const sheetKey of sheetKeys) {
       try {
         const sheet = (currentJsonTableData_ACU as any)[sheetKey];
         if (!sheet?.sourceData?.ddl) continue;
 
-        const tableName = parseDDLTableName(sheet.sourceData.ddl);
-        if (!tableName) continue;
+        const tableName = getPhysicalTableNameForSheet_ACU((identitySource as any)?.[sheetKey] ? identitySource : currentJsonTableData_ACU, sheetKey);
 
         const existingTables = this._existingTableSet ??= new Set(this.engine.getTableNames());
         // 检查表是否存在且为空
@@ -603,8 +1358,11 @@ export class SqlTableService implements ITableStorageProvider {
         const cnt = countResult?.values?.[0]?.[0];
         if (cnt !== 0) continue; // 非空表，跳过
 
-        // 获取 seedRows
-        const seedRows = getEffectiveSeedRowsForSheet_ACU(sheetKey, { allowTemplateFallback: true });
+        // AI 提交链显式携带请求前模板时，补种也必须来自同一快照，不能在 await 后重新读取当前模板。
+        const capturedRows = (seedSource as any)?.[sheetKey]?.content;
+        const seedRows = Array.isArray(capturedRows) && capturedRows.length > 1
+          ? capturedRows.slice(1)
+          : getEffectiveSeedRowsForSheet_ACU(sheetKey, { allowTemplateFallback: true });
         if (!Array.isArray(seedRows) || seedRows.length === 0) continue;
 
         // 构造临时 Sheet 对象用于 generateInserts
@@ -626,6 +1384,10 @@ export class SqlTableService implements ITableStorageProvider {
 
         const sheetInserts = generateInserts(tempSheet as any, tableName);
         if (sheetInserts.length > 0) {
+          rowIdsByTable.set(
+            tableName.toLowerCase(),
+            createStableRowIdReservation_ACU(stableContent.slice(1)),
+          );
           inserts.push(...sheetInserts);
           logDebug_ACU(`[SqlTableService] 空表 ${sheetKey} (${tableName}) 补回 ${sheetInserts.length} 行 seedRows`);
         }
@@ -638,39 +1400,75 @@ export class SqlTableService implements ITableStorageProvider {
     if (inserts.length > 0) {
       logDebug_ACU(`[SqlTableService] 共收集 ${inserts.length} 条 seedRows reseed INSERT 语句`);
     }
-    return inserts;
+    return { inserts, rowIdsByTable };
   }
 
-  /** 从 TableDataObject 中提取所有 DDL，构建全局 NameMapper */
-  private _buildNameMapper(data: TableDataObject_ACU): void {
+  /**
+   * hydrate 成功不等于 runtime 可用：必须确认当前数据对应的物理表和有效列都已真正落入 SQLite。
+   * 这里不修复、不建表；缺表/缺列说明 hydrate 或模板契约已损坏，应在发布 ready 前 fail-closed。
+   */
+  private _validateRuntimeSchema_ACU(data: TableDataObject_ACU): void {
+    const actualTables = new Set(this.engine.getTableNames());
+    for (const key of Object.keys(data).filter(key => key.startsWith('sheet_'))) {
+      const sheet = (data as any)[key];
+      if (!sheet || typeof sheet !== 'object') continue;
+      const runtimeTableName = getPhysicalTableNameForSheet_ACU(data, key);
+      if (!actualTables.has(runtimeTableName)) {
+        throw new Error(`schema_missing_table: ${key} (${runtimeTableName}) 未在 SQLite runtime 中创建。`);
+      }
+      const effectiveDDL = resolveEffectiveDDL(sheet, sheet.uid || key, runtimeTableName);
+      const actualColumns = new Set(this.engine.getTableInfo(runtimeTableName).map(column => column.name));
+      for (const mapping of effectiveDDL.columnMap.mappings) {
+        if (!actualColumns.has(mapping.sqlName)) {
+          throw new Error(`schema_missing_column: ${key} (${runtimeTableName}).${mapping.sqlName} 未在 SQLite runtime 中创建。`);
+        }
+      }
+    }
+  }
+
+  /**
+   * 从 TableDataObject 中提取所有 DDL，以本实例身份发布全局 NameMapper。
+   *
+   * @returns 是否已发布可信映射。false 表示本实例不得对外宣称 ready：
+   * 没有可信映射时中文表名/列名会被原样下发给 SQLite。
+   */
+  private _buildNameMapper(data: TableDataObject_ACU): boolean {
     try {
       const ddlMap = new Map<string, string>();
       for (const [key, value] of Object.entries(data)) {
         if (!key.startsWith('sheet_')) continue;
         const sheet = value as any;
-        const ddl = sheet?.sourceData?.ddl;
-        if (!ddl) continue;
-        const tableName = parseDDLTableName(ddl);
-        if (tableName) {
-          ddlMap.set(tableName, ddl);
-        }
+        if (!sheet || typeof sheet !== 'object') continue;
+        // NameMapper 必须和 SQLite 实际采用的 schema 一致。直接读取 sourceData.ddl
+        // 会在 fallback_invalid 场景留下无法映射运行时物理列名的陈旧映射。
+        const runtimeTableName = getPhysicalTableNameForSheet_ACU(data, key);
+        const effectiveDDL = resolveEffectiveDDL(sheet, sheet.uid || key, runtimeTableName).effectiveDDL;
+        ddlMap.set(runtimeTableName, effectiveDDL);
       }
-      if (ddlMap.size > 0) {
-        buildGlobalNameMapper(ddlMap);
-      }
+      return publishGlobalNameMapperForDDLs_ACU(ddlMap, this.nameMapperOwner_ACU);
     } catch (e: any) {
       logWarn_ACU(`[SqlTableService] 构建 NameMapper 失败: ${e?.message}`);
+      return false;
     }
   }
 
-  /** 同步 SQLite → JSON 视图 */
-  private _syncToJson(): void {
+  /**
+   * 同步 SQLite → JSON 视图。
+   *
+   * @returns 本次实际写入共享视图的对象；导出失败时返回 null。
+   * 多数调用点把它当尽力而为的视图刷新，但快照恢复必须据此判断能否发布映射，
+   * 并据此确认「共享视图是否由本次调用写入」。不能改为读取全局值反推所有权：
+   * 等待期间其他实例可能已经发布了自己的视图。
+   */
+  private _syncToJson(): TableDataObject_ACU | null {
     try {
       const mate = (currentJsonTableData_ACU?.mate as Mate_ACU) || { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } };
       const exportedData = this.syncBridge.exportToTableData(mate);
       _set_currentJsonTableData_ACU(exportedData);
+      return exportedData;
     } catch (e: any) {
       logError_ACU(`[SqlTableService] syncToJson 失败: ${e?.message}`);
+      return null;
     }
   }
 
@@ -681,14 +1479,8 @@ export class SqlTableService implements ITableStorageProvider {
     for (const [key, value] of Object.entries(currentJsonTableData_ACU)) {
       if (!key.startsWith('sheet_')) continue;
       const sheet = value as any;
-      // 从 DDL 中解析表名进行匹配
-      const ddl = sheet?.sourceData?.ddl;
-      if (ddl) {
-        const match = ddl.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)/i);
-        if (match && tableNames.includes(match[1])) {
-          keys.push(key);
-        }
-      }
+      const runtimeTableName = getPhysicalTableNameForSheet_ACU(currentJsonTableData_ACU, key);
+      if (tableNames.includes(runtimeTableName)) keys.push(key);
     }
     return keys;
   }
@@ -722,16 +1514,19 @@ export class SqlTableService implements ITableStorageProvider {
    * 1. currentJsonTableData_ACU 中的 sourceData.ddl（可能来自指导表，包含用户在可视化编辑器中的修改）
    * 2. 当前聊天模板中的 sourceData.ddl（fallback）
    */
-  private _ensureTablesFromTemplate(): void {
+  private _ensureTablesFromTemplate(scope?: SqlTableApplyScope_ACU): void {
     const existingTables = new Set(this.engine.getTableNames());
 
     // [修复] 优先从当前聊天模板预设获取模板，而不是依赖全局变量 TABLE_TEMPLATE_ACU
     // 这样确保建表时只使用当前聊天模板预设的内容，不会混入全局模板的表
-    const templateData = this._resolveCurrentChatTemplate();
+    const templateData = scope?.templateData || this._resolveCurrentChatTemplate();
     if (!templateData) {
       if (existingTables.size > 0) return;
       throw new Error('[SqlTableService] 模板解析失败，无法建表。请检查模板格式。');
     }
+
+    // 建表前自检：模板内拼音物理名冲突直接 fail-loud，避免建表途中报晦涩的 SQL 错误。
+    assertNoPhysicalTableNameCollision_ACU(templateData);
 
     // 收集当前聊天模板中所有表的 sheetKey 和表名，找出 SQLite 中缺失的
     const sheetKeys = Object.keys(templateData).filter(k => k.startsWith('sheet_'));
@@ -742,15 +1537,21 @@ export class SqlTableService implements ITableStorageProvider {
       const liveSheet = (currentJsonTableData_ACU as any)?.[key];
       const sheet = (templateData[key] as any) || liveSheet;
       if (!sheet) continue;
-      const ddl = generateDDL(sheet);
-      const tableName = parseDDLTableName(ddl);
-      if (tableName && !existingTables.has(tableName)) {
+      const runtimeTableName = getPhysicalTableNameForSheet_ACU(templateData, key);
+      if (!existingTables.has(runtimeTableName)) {
         missingSheets[key] = sheet;
       }
     }
 
     // 所有表都已存在，无需建表
-    if (Object.keys(missingSheets).length === 0) return;
+    if (Object.keys(missingSheets).length === 0) {
+      // 不能因物理表已存在就跳过映射同步：删楼回滚/模板切换可重建
+      // SQLite runtime，却不会制造缺表；此时外部 CRUD 仍需当前 schema 的列映射。
+      if (!this._buildNameMapper(currentJsonTableData_ACU || templateData)) {
+        throw new Error('name_mapper_publish_rejected: 未能发布当前 schema 的中英文名映射，已阻止后续写入。');
+      }
+      return;
+    }
 
     logDebug_ACU(`[SqlTableService] 发现 ${Object.keys(missingSheets).length} 张缺失表，按需建表: ${Object.keys(missingSheets).join(', ')}`);
 
@@ -758,23 +1559,38 @@ export class SqlTableService implements ITableStorageProvider {
     // [修复] 同时为缺失表注入 seedRows（初始数据），使建表后 SQLite 中包含初版快照
     // 设计文档 Q9 确认：seedRows 是初版快照，应写入 SQLite 作为真实数据
     const partialData: TableDataObject_ACU = { mate: templateData.mate };
+    // 建表用的 templateData 已被 stripSeedRows 剥掉数据行，需要一份保留数据行的模板，
+    // 用来还原「模板自带数据」的表。作者在模板里写了数据就代表要保留这个格式，
+    // 不能只在「首次填表」时才生效（shouldUseInitialSeedRows_ACU 的限定）。
+    const templateWithRows = scope?.templateDataWithRows || this._resolveCurrentChatTemplate(false);
     for (const [key, sheet] of Object.entries(missingSheets)) {
       const sheetCopy = JSON.parse(JSON.stringify(sheet));
 
-      // 如果 sheet 的 content 只有表头（stripSeedRows 后的空壳），尝试注入 seedRows
-      if (Array.isArray(sheetCopy.content) && sheetCopy.content.length <= 1) {
-        const seedRows = getEffectiveSeedRowsForSheet_ACU(key, { allowTemplateFallback: true });
+      // content 只有表头时补数据：模板作者自带的数据行优先，其次才是 guide/seedRows。
+      // templateData 已被 stripSeedRows 剥掉数据行，所以必须回到未 strip 的模板取。
+      const templateRows = (templateWithRows as any)?.[key]?.content;
+      const authoredRows = Array.isArray(templateRows) && templateRows.length > 1
+        ? templateRows.slice(1)
+        : [];
+      const needsRows = !Array.isArray(sheetCopy.content) || sheetCopy.content.length <= 1;
+      if (needsRows) {
+        const seedRows = authoredRows.length > 0
+          ? authoredRows
+          : getEffectiveSeedRowsForSheet_ACU(key, { allowTemplateFallback: true });
         if (Array.isArray(seedRows) && seedRows.length > 0) {
           // seedRows 是不含表头的纯数据行，拼接到表头后面
           sheetCopy.content = [sheetCopy.content[0] || [], ...seedRows];
           sheetCopy.content = ensureStableRowIdsForSheetContent_ACU(sheetCopy.content);
           logDebug_ACU(`[SqlTableService] 表 ${key} (${sheetCopy.name}) 注入 ${seedRows.length} 行 seedRows 作为初版快照`);
         }
+      } else {
+        // content 已带数据行（未被 strip 的路径）：确保 row_id 稳定后直接使用。
+        sheetCopy.content = ensureStableRowIdsForSheetContent_ACU(sheetCopy.content);
       }
 
       (partialData as any)[key] = sheetCopy;
     }
-    this.syncBridge.loadFromTableData(partialData, { strict: true });
+    this.syncBridge.loadFromTableData(partialData, { strict: true, allowRuntimeDdlFallback: true });
 
     // 合并新建的表到当前 JSON 视图
     if (currentJsonTableData_ACU) {
@@ -784,7 +1600,9 @@ export class SqlTableService implements ITableStorageProvider {
     } else {
       _set_currentJsonTableData_ACU(templateData);
     }
-    this._buildNameMapper(currentJsonTableData_ACU || templateData);
+    if (!this._buildNameMapper(currentJsonTableData_ACU || templateData)) {
+      throw new Error('name_mapper_publish_rejected: 建表后未能发布中英文名映射，已阻止后续写入。');
+    }
 
     logDebug_ACU(`[SqlTableService] 按需建表完成，当前共 ${this.engine.getTableNames().length} 张表`);
   }
@@ -852,28 +1670,21 @@ export async function applyParameterizedSqlMutationToTableDataSnapshot_ACU(
   try {
     const normalizedSql = normalizeStatementValues(normalizeSqlStructure(sql));
     const snapshotCopy = JSON.parse(JSON.stringify(tableData || {})) as TableDataObject_ACU;
+    const runtimeSql = rebindSqlMutationTableIdentifiers_ACU([normalizedSql], snapshotCopy)[0];
     await engine.init();
     syncBridge.loadFromTableData(snapshotCopy, { strict: true });
-    const result = engine.run(normalizedSql, params);
-    const workingData = syncBridge.exportToTableData(resolveSnapshotMate_ACU(snapshotCopy));
-    const modifiedTableNames = extractTableNamesFromStatements([normalizedSql]);
+    const result = engine.run(runtimeSql, params);
+    const workingData = syncBridge.exportToTableData(resolveSnapshotMate_ACU(snapshotCopy), { strict: true });
+    const modifiedTableNames = extractTableNamesFromStatements([runtimeSql]);
     const modifiedKeys = mapSqlTableNamesToSheetKeys_ACU(workingData, modifiedTableNames);
     const normalizedParams = Array.isArray(params) && params.length > 0 ? params.map(value => value ?? null) : undefined;
-    const operationBuild = buildSqlSheetBatchOperations_ACU([normalizedSql], workingData, {
+    const operationBuild = buildSqlSheetBatchOperations_ACU([runtimeSql], workingData, {
       params: normalizedParams ? [normalizedParams] : undefined,
       fallbackTargetSheetKeys: operationOptions.targetSheetKeys,
       allowSingleTargetFallback: operationOptions.allowSingleTargetFallback === true,
-      keepLegacyForUnclassified: operationOptions.keepLegacyForUnclassified === true || operationOptions.requireSheetScopedOperations !== true,
+      keepLegacyForUnclassified: true,
       reason: 'system',
     });
-
-    if (operationOptions.requireSheetScopedOperations === true && (
-      operationBuild.operations.some(operation => operation.kind === 'sql_batch')
-      || operationBuild.unknownStatements.length > 0
-      || operationBuild.ambiguousStatements.length > 0
-    )) {
-      return { success: false, modifiedKeys: [], appliedEdits: 0, changes: 0, error: 'SQL 语句无法归属到单表日志，拒绝写入不可预清理的 SQL 增量。' };
-    }
 
     logDebug_ACU(`[SqlTableService] 参数化快照 SQL 执行成功: changes=${result.changes}, modifiedKeys=${modifiedKeys.join(',')}`);
     return {
@@ -912,29 +1723,25 @@ export async function applySqlEditsToTableDataSnapshot_ACU(
       return { success: true, modifiedKeys: [], appliedEdits: 0, workingData: JSON.parse(JSON.stringify(tableData || {})) };
     }
 
-    const statements = rawStatements.map(stmt => normalizeStatementValues(normalizeSqlStructure(stmt)));
     const snapshotCopy = JSON.parse(JSON.stringify(tableData || {})) as TableDataObject_ACU;
+    const reboundStatements = rebindSqlMutationTableIdentifiers_ACU(
+      rawStatements.map(stmt => normalizeStatementValues(normalizeSqlStructure(stmt))),
+      snapshotCopy,
+    );
+    const statements = materializeSystemRowIdsForSqlInserts_ACU(reboundStatements, snapshotCopy);
     await engine.init();
     syncBridge.loadFromTableData(snapshotCopy, { strict: true });
     engine.runBatch(statements);
 
-    const workingData = syncBridge.exportToTableData(resolveSnapshotMate_ACU(snapshotCopy));
+    const workingData = syncBridge.exportToTableData(resolveSnapshotMate_ACU(snapshotCopy), { strict: true });
     const modifiedTableNames = extractTableNamesFromStatements(statements);
     const modifiedKeys = mapSqlTableNamesToSheetKeys_ACU(workingData, modifiedTableNames);
     const operationBuild = buildSqlSheetBatchOperations_ACU(statements, workingData, {
       fallbackTargetSheetKeys: operationOptions.targetSheetKeys,
       allowSingleTargetFallback: operationOptions.allowSingleTargetFallback === true,
-      keepLegacyForUnclassified: operationOptions.keepLegacyForUnclassified === true || operationOptions.requireSheetScopedOperations !== true,
+      keepLegacyForUnclassified: true,
       reason: 'system',
     });
-
-    if (operationOptions.requireSheetScopedOperations === true && (
-      operationBuild.operations.some(operation => operation.kind === 'sql_batch')
-      || operationBuild.unknownStatements.length > 0
-      || operationBuild.ambiguousStatements.length > 0
-    )) {
-      return { success: false, modifiedKeys: [], appliedEdits: 0, error: 'SQL 语句无法归属到单表日志，拒绝写入不可预清理的 SQL 增量。' };
-    }
 
 
     logDebug_ACU(`[SqlTableService] 快照 SQL 执行成功: ${statements.length} 条语句, modifiedKeys=${modifiedKeys.join(',')}`);
@@ -1004,27 +1811,27 @@ export function splitSqlStatements(sql: string): string[] {
 
 
 /**
- * 从 SQL 语句中提取表名（简单正则匹配）
- * 支持 INSERT INTO、UPDATE、DELETE FROM、ALTER TABLE
+ * 从 SQL 语句中提取实际 mutation 目标表。
+ * 复用执行边界的 tokenizer，避免字符串、注释或 schema 前缀误导归属。
  */
 export function extractTableNamesFromStatements(statements: string[]): string[] {
   const tableNames = new Set<string>();
-  const ident = '(?:`([^`]+)`|"([^"]+)"|\\[([^\\]]+)\\]|([A-Za-z_][A-Za-z0-9_]*))';
-  const patterns = [
-    new RegExp(`\\bINSERT\\s+(?:OR\\s+\\w+\\s+)?INTO\\s+${ident}`, 'i'),
-    new RegExp(`\\bUPDATE\\s+(?:OR\\s+\\w+\\s+)?${ident}`, 'i'),
-    new RegExp(`\\bDELETE\\s+FROM\\s+${ident}`, 'i'),
-    new RegExp(`\\bALTER\\s+TABLE\\s+${ident}`, 'i'),
-  ];
 
   for (const stmt of statements) {
-    for (const pattern of patterns) {
-      const match = stmt.match(pattern);
-      if (match) {
-        const tableName = match.slice(1).find(Boolean);
-        if (tableName) tableNames.add(tableName);
-        break;
+    if (typeof stmt !== 'string' || !stmt.trim()) continue;
+    try {
+      const tokens = tokenizeSqlMutationIdentifiers_ACU(stmt);
+      const first = tokens[0];
+      if (isSqlMutationKeyword_ACU(first, 'ALTER') && isSqlMutationKeyword_ACU(tokens[1], 'TABLE')) {
+        const target = getQualifiedSqlIdentifierTail_ACU(stmt, tokens, 2);
+        if (target) tableNames.add(target.value);
+        continue;
       }
+
+      const target = getSqlMutationTargetToken_ACU(stmt, tokens);
+      tableNames.add(target.value);
+    } catch {
+      // 本函数只负责归属提取；非法 SQL 由 collect/执行边界给出确定错误。
     }
   }
 

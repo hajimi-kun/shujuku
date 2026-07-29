@@ -1757,15 +1757,15 @@ $0/$1/$6/$8/$U/$C 替换 → EjsTemplate → Random/Calc 标签 → {[db...]}/{[
 **确认方案：DDL 强制以 `row_id INTEGER PRIMARY KEY` 作为第一列**
 
 - 每张表的 DDL **必须**以 `row_id INTEGER PRIMARY KEY -- 行号` 作为第一列
-- `row_id` 对应 `content[*][0]` 的 `_acu_row_id`，是 AI 做 UPDATE/DELETE 时精确定位行的主键
+- `row_id` 对应 `content[*][0]` 的 `_acu_row_id`，是 AI 做 UPDATE/DELETE 时精确定位行的主键；新 INSERT 的身份由系统分配
 - AI 看到 `row_id` 列后会自然使用 `WHERE row_id = N` 精确定位行
 - 没有主键的表不是表——这是关系型数据库的基本素养
-- 发给 AI 的数据展示也带上 `row_id` 列，AI 回复的 SQL 就能精确操作：
+- 发给 AI 的数据展示也带上 `row_id` 列，AI 回复的 SQL 可用它精确 UPDATE/DELETE；INSERT 必须显式列业务列且不得包含 `row_id`：
 
 ```sql
 UPDATE important_characters SET status = '死亡' WHERE row_id = 1;
 DELETE FROM important_characters WHERE row_id = 2;
-INSERT INTO important_characters (row_id, name, age, status) VALUES (3, '角色C', 22, '存活');
+INSERT INTO important_characters (name, age, status) VALUES ('角色C', 22, '存活');
 ```
 
 - DDL 编辑器 UI 中可以预填 `row_id INTEGER PRIMARY KEY -- 行号` 作为第一列，用户不需要手动写

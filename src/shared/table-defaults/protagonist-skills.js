@@ -9,7 +9,7 @@ export const protagonistSkillsSheet = {
     initNode: "游戏初始化时，根据设定为主角添加初始技能。",
     deleteNode: "技能因剧情被剥夺或替换时删除。\nSQL示例: DELETE FROM protagonist_skills WHERE skill_name = '被剥夺的技能';",
     updateNode: "已有技能被升级时更新其等级/阶段和效果描述。\nSQL示例: UPDATE protagonist_skills SET skill_level = 'Lv.3', effect_desc = '新效果描述' WHERE skill_name = '火球术';",
-    insertNode: "主角获得新的技能时添加。\nSQL示例: INSERT INTO protagonist_skills (row_id, skill_name, skill_type, skill_level, effect_desc) VALUES ((SELECT MAX(row_id)+1 FROM protagonist_skills), '新技能', '主动', 'Lv.1', '效果描述');",
+    insertNode: "主角获得新的技能时添加。\nSQL示例: INSERT INTO protagonist_skills (skill_name, skill_type, skill_level, effect_desc) VALUES ('新技能', '主动', 'Lv.1', '效果描述');",
     ddl: `CREATE TABLE protagonist_skills ( -- 主角技能表
   row_id INTEGER PRIMARY KEY, -- 行号
   skill_name TEXT NOT NULL UNIQUE, -- 技能名称

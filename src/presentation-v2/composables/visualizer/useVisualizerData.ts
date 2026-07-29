@@ -1,6 +1,7 @@
 import { ref } from 'vue';
 import { TABLE_ORDER_FIELD_ACU } from '../../../shared/constants';
 import { logWarn_ACU } from '../../../shared/utils';
+import { allocateStableSheetKeys_ACU, canonicalizeDisplayName_ACU } from '../../../shared/sheet-identity';
 import { generateDDL } from '../../../data/sqlite/schema-mapper';
 import {
   currentJsonTableData_ACU,
@@ -35,10 +36,6 @@ function buildOrderedKeys(data: Record<string, any>): string[] {
   const base = Array.isArray(guidedKeys) && guidedKeys.length ? guidedKeys : allKeys;
   const missing = allKeys.filter((key: string) => !base.includes(key));
   return [...base, ...missing];
-}
-
-function makeSheetKey(): string {
-  return `sheet_${Math.random().toString(36).slice(2, 11)}`;
 }
 
 function createDefaultSheet(key: string, name: string): Record<string, any> {
@@ -145,7 +142,19 @@ export function useVisualizerData() {
   function addSheet(name: string): void {
     const normalizedName = String(name || '').trim();
     if (!normalizedName) return;
-    const key = makeSheetKey();
+    const existingSheets = Object.entries(visualizer.tempData || {})
+      .filter(([key, sheet]) => key.startsWith('sheet_') && !!sheet)
+      .map(([sheetKey, sheet]: [string, any]) => ({ sheetKey, canonicalName: sheet.name }));
+    if (existingSheets.some(sheet => canonicalizeDisplayName_ACU(sheet.canonicalName) === canonicalizeDisplayName_ACU(normalizedName))) {
+      toastStore.warning(`表名「${normalizedName}」与现有表重复，已拒绝新增。`, { muteable: false });
+      return;
+    }
+    const allocation = allocateStableSheetKeys_ACU([normalizedName], { existing: existingSheets });
+    if (allocation.diagnostics.length > 0 || !allocation.keys[0]) {
+      toastStore.warning(`无法为表「${normalizedName}」生成稳定 key。`, { muteable: false });
+      return;
+    }
+    const key = allocation.keys[0];
     visualizer.addSheet(key, createDefaultSheet(key, normalizedName));
   }
 

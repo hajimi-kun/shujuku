@@ -1,7 +1,7 @@
 import type { AgentWorldbookControlSnapshot_ACU, AgentWorldbookControlSnapshotEntry_ACU } from '../../shared/models/agent-worldbook-model';
 import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
 import { allChatMessages_ACU, coreApisAreReady_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentJsonTableData_ACU, _set_allChatMessages_ACU} from '../runtime/state-manager';
-import { getLorebookEntries_ACU as gwGetLorebookEntries_ACU, setLorebookEntries_ACU as gwSetLorebookEntries_ACU, createLorebookEntries_ACU as gwCreateLorebookEntries_ACU, deleteLorebookEntries_ACU as gwDeleteLorebookEntries_ACU, listLorebooks_ACU, getWorldBooks_ACU as gwGetWorldBooks_ACU, isWorldbookApiAvailable_ACU } from '../../data/gateways/worldbook-gateway';
+import { getLorebookEntries_ACU as gwGetLorebookEntries_ACU, setLorebookEntries_ACU as gwSetLorebookEntries_ACU, createLorebookEntries_ACU as gwCreateLorebookEntries_ACU, deleteLorebookEntries_ACU as gwDeleteLorebookEntries_ACU, listLorebooks_ACU, getWorldBooks_ACU as gwGetWorldBooks_ACU, isWorldbookApiAvailable_ACU, resolveLorebookNameFromList_ACU } from '../../data/gateways/worldbook-gateway';
 import { getCharLorebooks_ACU, getChatMessages_ACU } from '../../data/gateways/character-gateway';
 import { getChatLength_ACU } from '../../data/gateways/chat-gateway';
 import { saveSettings_ACU } from '../settings/settings-service';
@@ -11,6 +11,7 @@ import { logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU } f
 import { isEntryBlocked_ACU } from '../../shared/utils';
 import { formatJsonToReadable_ACU, maybeLiftWorldbookSuppression_ACU, mergeAllIndependentTables_ACU, shouldSuppressWorldbookInjection_ACU } from '../runtime/helpers-remaining';
 import { normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
+import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
 import { persistNullRowCleanupShards_ACU, type NullRowCleanupPersistStatus_ACU } from '../table/storage-frame-v2-persist';
 import { allocConsecutiveOrderBlock_ACU, applyPlacementToEntry_ACU, buildDefaultGlobalInjectionConfig_ACU, buildUsedOrderSet_ACU, ensureExportConfigDefaults_ACU, ensureGlobalInjectionConfigDefaults_ACU, getEntryOrderNumber_ACU, getFixedPlacementDefaultsForTable_ACU, getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU, isEntryPlacementMatched_ACU, normalizeLorebookPosition_ACU, normalizePlacementConfig_ACU, updateCustomTableExports_ACU, updateImportantPersonsRelatedEntries_ACU, updateOutlineTableEntry_ACU, updateSummaryTableEntries_ACU } from './injection-engine';
 // pipeline.ts
@@ -66,30 +67,38 @@ export   async function updateReadableLorebookEntry_ACU(createIfNeeded = false, 
     }
     
     const { readableText, importantPersonsTable, summaryTable, outlineTable } = formatJsonToReadable_ACU(mergedData);
+    const hasNonEmptyVisibleCell_ACU = (table: any) => {
+        const content = table?.content;
+        if (!Array.isArray(content) || content.length <= 1) return false;
+        let visibleColumns: ReturnType<typeof getSheetColumnProjection_ACU>['visibleColumns'];
+        try {
+            visibleColumns = getSheetColumnProjection_ACU(table).visibleColumns
+                .filter(column => column.sourceIndex > 0);
+        } catch {
+            return false;
+        }
+        for (let r = 1; r < content.length; r++) {
+            const row = content[r];
+            if (!Array.isArray(row)) continue;
+            for (const column of visibleColumns) {
+                const cell = row[column.sourceIndex];
+                if (cell === null || cell === undefined) continue;
+                if (typeof cell === 'string') {
+                    if (cell.trim() !== '') return true;
+                } else if (typeof cell === 'number') {
+                    if (!Number.isNaN(cell)) return true;
+                } else {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
     const hasAnyNonEmptyCell_ACU = (data: Record<string, any> | null) => {
         if (!data) return false;
         const sheetKeys = Object.keys(data).filter(k => k.startsWith('sheet_'));
         for (const sheetKey of sheetKeys) {
-            const table = data[sheetKey];
-            const content = table?.content;
-            if (!Array.isArray(content) || content.length <= 1) continue;
-            for (let r = 1; r < content.length; r++) {
-                const row = content[r];
-                if (!Array.isArray(row)) continue;
-                for (let c = 1; c < row.length; c++) {
-                    const cell = row[c];
-                    if (cell === null || cell === undefined) continue;
-                    if (typeof cell === 'string') {
-                        if (cell.trim() !== '') return true;
-                    } else if (typeof cell === 'number') {
-                        if (!Number.isNaN(cell)) return true;
-                    } else if (typeof cell === 'boolean') {
-                        return true;
-                    } else {
-                        return true;
-                    }
-                }
-            }
+            if (hasNonEmptyVisibleCell_ACU(data[sheetKey])) return true;
         }
         return false;
     };
@@ -274,8 +283,8 @@ export   async function updateReadableLorebookEntry_ACU(createIfNeeded = false, 
             const memoryStartEntry = entries.find(e => e.comment === MEMORY_START_COMMENT);
             const memoryEndEntry = entries.find(e => e.comment === MEMORY_END_COMMENT);
 
-            // [修复] 检查总结表是否有数据（至少有一行非表头数据）
-            const hasSummaryData = summaryTable && summaryTable.content && summaryTable.content.length > 1;
+            // 对外世界书只由可见列驱动；隐藏历史数据不能制造空壳记忆条目。
+            const hasSummaryData = hasNonEmptyVisibleCell_ACU(summaryTable);
             
             if (!hasSummaryData) {
                 // [修复] 没有总结表数据时，删除已存在的 MemoryStart/MemoryEnd 条目
@@ -291,7 +300,9 @@ export   async function updateReadableLorebookEntry_ACU(createIfNeeded = false, 
                 // 有总结表数据时，正常创建或更新 MemoryStart/MemoryEnd 条目
                 // 准备总结表表头内容
                 let summaryHeaderContent = '';
-                const summaryHeaders = summaryTable.content[0].slice(1);
+                const summaryHeaders = getSheetColumnProjection_ACU(summaryTable).visibleColumns
+                    .filter(column => column.sourceIndex > 0)
+                    .map(column => column.header);
                 if (summaryHeaders.length > 0) {
                     summaryHeaderContent = `# ${summaryTable.name}\n\n| ${summaryHeaders.join(' | ')} |\n|${summaryHeaders.map(() => '---').join('|')}|`;
                 }
@@ -907,9 +918,13 @@ export async function getLorebookEntriesStrict_ACU(bookNames: string[] = [], opt
     }
   } else if (options.validationPolicy === 'validate_list') {
     try {
-      const availableBookNames = new Set(await getStrictLorebookAvailableBookNames_ACU(options.context));
-      baseResult.invalidBookNames = requestedBookNames.filter(name => !availableBookNames.has(name));
-      requestedBookNames = requestedBookNames.filter(name => availableBookNames.has(name));
+      const availableBookNames = await getStrictLorebookAvailableBookNames_ACU(options.context);
+      const resolvedNames = requestedBookNames.map(name => ({
+        requested: name,
+        resolved: resolveLorebookNameFromList_ACU(name, availableBookNames),
+      }));
+      baseResult.invalidBookNames = resolvedNames.filter(item => !item.resolved).map(item => item.requested);
+      requestedBookNames = [...new Set(resolvedNames.map(item => item.resolved).filter((name): name is string => !!name))];
       if (baseResult.invalidBookNames.length > 0) return { ...baseResult, status: 'invalid_selection' };
     } catch {
       const failureStatus = getStrictLorebookContextStatus_ACU(options.context);
@@ -945,7 +960,8 @@ export async function getLorebookEntriesStrict_ACU(bookNames: string[] = [], opt
 
 
 export   async function getLorebookEntriesByNames_ACU(bookNames: string[] = []) {
-      let uniqueNames = [...new Set((Array.isArray(bookNames) ? bookNames : []).map((name: string) => String(name || '').trim()).filter(Boolean))];
+      const uniqueNames = [...new Set((Array.isArray(bookNames) ? bookNames : []).map((name: string) => String(name || '').trim()).filter(Boolean))];
+      let readTargets = uniqueNames.map(requestedName => ({ requestedName, hostName: requestedName }));
       const entriesMap: Record<string, any[]> = {};
       const canUseTavernHelper = isWorldbookApiAvailable_ACU();
       let fallbackBooks = null;
@@ -956,18 +972,17 @@ export   async function getLorebookEntriesByNames_ACU(bookNames: string[] = []) 
           const availableBooks = await listLorebooks_ACU();
           const availableBookNames = normalizeWorldbookListNames_ACU(availableBooks);
           if (availableBookNames.length > 0) {
-              const availableBookNameSet = new Set(availableBookNames);
-              const filtered = uniqueNames.filter(name => {
-                  if (availableBookNameSet.has(name)) return true;
+              readTargets = readTargets.flatMap(target => {
+                  const resolvedName = resolveLorebookNameFromList_ACU(target.requestedName, availableBookNames);
+                  if (resolvedName) return [{ ...target, hostName: resolvedName }];
                   logDebug_ACU('[Worldbook] 世界书不在当前可用列表中，跳过读取。', {
                       phase: 'read_entries',
                       reason: 'not_in_available_list',
-                      bookName: name,
+                      bookName: target.requestedName,
                   });
-                  entriesMap[name] = []; // 为不存在的书返回空数组，保持接口一致
-                  return false;
+                  entriesMap[target.requestedName] = []; // 为不存在的书返回空数组，保持接口一致
+                  return [];
               });
-              uniqueNames = filtered;
           }
       } catch (_e) {
           // listLorebooks_ACU 失败时降级为不过滤，让下方原有的 try-catch 兜底
@@ -977,24 +992,29 @@ export   async function getLorebookEntriesByNames_ACU(bookNames: string[] = []) 
           fallbackBooks = await gwGetWorldBooks_ACU();
       }
 
-      for (const name of uniqueNames) {
+      for (const target of readTargets) {
+          const { requestedName } = target;
           try {
               let entries = [];
+              let hostName = target.hostName;
               if (canUseTavernHelper) {
-                  entries = await gwGetLorebookEntries_ACU(name);
+                  entries = await gwGetLorebookEntries_ACU(hostName);
               } else if (Array.isArray(fallbackBooks)) {
-                  const matchedBook = fallbackBooks.find((book: any) => book?.name === name);
+                  const fallbackName = resolveLorebookNameFromList_ACU(hostName, fallbackBooks);
+                  if (fallbackName) hostName = fallbackName;
+                  const matchedBook = fallbackBooks.find((book: any) => book?.name === hostName);
                   entries = (matchedBook as any)?.entries || [];
               }
-              entriesMap[name] = Array.isArray(entries) ? entries.map((entry: any) => ({ ...entry, book: name })) : [];
+              // 返回键保留调用方请求名称以兼容现有接口；条目 book 使用真实宿主名称。
+              entriesMap[requestedName] = Array.isArray(entries) ? entries.map((entry: any) => ({ ...entry, book: hostName })) : [];
           } catch {
               logWarn_ACU('[Worldbook] 获取世界书条目失败，忽略该书并继续。', {
                   phase: 'read_entries',
                   attempt: 1,
-                  bookName: name,
+                  bookName: requestedName,
                   error: { category: 'read_failed' },
               });
-              entriesMap[name] = [];
+              entriesMap[requestedName] = [];
           }
       }
       return entriesMap;
@@ -1090,6 +1110,7 @@ function buildPreTakeoverSnapshotEntryMap_ACU(
         const byUid = new Map<string, AgentWorldbookControlSnapshotEntry_ACU>();
         for (const entry of entries) {
             const uid = String(entry?.uid ?? '').trim();
+            if (entry?.takeoverStatus === 'pending') continue;
             if (uid) byUid.set(uid, entry);
         }
         if (byUid.size > 0) result.set(bookName, byUid);

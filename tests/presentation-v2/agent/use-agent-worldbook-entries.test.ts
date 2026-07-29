@@ -8,12 +8,15 @@ const mockResolveScope = vi.fn();
 const mockSaveSkill = vi.fn();
 const mockDeleteSkill = vi.fn();
 const mockSnapshot = vi.fn(() => ({ active: false, books: {} }));
+const mockRefreshSnapshot = vi.fn(async () => mockSnapshot());
 
 async function getComposable(onSkillMetaChanged?: () => Promise<unknown>) {
   vi.resetModules();
   vi.doMock('../../../src/service/worldbook/pipeline', () => ({ getLorebookEntriesByNames_ACU: mockGetEntries }));
   vi.doMock('../../../src/service/agent/agent-worldbook-config-meta', () => ({ resolveAgentWorldbookScopeBookNames_ACU: mockResolveScope }));
-  vi.doMock('../../../src/service/agent/agent-worldbook-takeover', () => ({ getPlotAgentWorldbookSnapshot_ACU: mockSnapshot }));
+  vi.doMock('../../../src/service/agent/agent-worldbook-takeover', () => ({
+    refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU: mockRefreshSnapshot,
+  }));
   vi.doMock('../../../src/service/agent/agent-worldbook-skill-meta', () => ({
     buildWorldbookSkillMetaMapForEntries_ACU: (entries: any[]) => new Map((entries || [])
       .filter((entry: any) => String(entry.comment || '').includes('SKILL'))
@@ -47,6 +50,7 @@ beforeEach(() => {
   mockSaveSkill.mockReset();
   mockDeleteSkill.mockReset();
   mockSnapshot.mockReturnValue({ active: false, books: {} });
+  mockRefreshSnapshot.mockImplementation(async () => mockSnapshot());
 });
 
 describe('useAgentWorldbookEntries', () => {
@@ -64,6 +68,7 @@ describe('useAgentWorldbookEntries', () => {
 
     expect(mockResolveScope).toHaveBeenCalledTimes(1);
     expect(mockGetEntries).toHaveBeenCalledWith(['AgentBook']);
+    expect(mockRefreshSnapshot).toHaveBeenCalledTimes(1);
     expect(c.groups.value[0].entries.map(entry => entry.uid)).toEqual([1]);
     expect(c.groups.value[0].entries[0].checked).toBe(false);
   });
@@ -92,6 +97,51 @@ describe('useAgentWorldbookEntries', () => {
     c.toggleSkillifyEntry('AgentBook', 3, true);
     c.toggleSkillifyEntry('AgentBook', 4, true);
     expect(c.getSelectedSkillifyEntries()).toEqual([]);
+  });
+
+  it('加载前刷新持久 snapshot，使 state 缺失但 meta 重建出的 disabled 条目显示为 taken_over', async () => {
+    mockResolveScope.mockResolvedValue(['AgentBook']);
+    mockRefreshSnapshot.mockResolvedValue({
+      active: true,
+      books: {
+        AgentBook: [{ uid: 7, previousEnabled: true, previousKeys: ['原关键词'], previousType: 'selective' }],
+      },
+    });
+    mockGetEntries.mockResolvedValue({ AgentBook: [
+      { uid: 7, comment: '分享后重建的接管条目 SKILL', enabled: false, type: 'selective', keys: ['原关键词'] },
+      { uid: 8, comment: '用户手动关闭 SKILL', enabled: false, type: 'selective', keys: ['手动关键词'] },
+    ] });
+    const c = await getComposable();
+
+    await c.loadEntries();
+
+    expect(mockRefreshSnapshot).toHaveBeenCalledTimes(1);
+    expect(c.groups.value[0].entries).toMatchObject([
+      { uid: 7, agentTakeoverState: 'taken_over', skillifySelectable: false },
+      { uid: 8, agentTakeoverState: 'initial_disabled', skillifySelectable: false },
+    ]);
+  });
+
+  it('snapshot 明确记录 previousEnabled=false 时仍视为已接管，且不允许 Skill 化', async () => {
+    mockResolveScope.mockResolvedValue(['AgentBook']);
+    mockRefreshSnapshot.mockResolvedValue({
+      active: true,
+      books: {
+        AgentBook: [{ uid: 9, previousEnabled: false, previousKeys: ['手动关键词'], previousType: 'selective' }],
+      },
+    });
+    mockGetEntries.mockResolvedValue({ AgentBook: [
+      { uid: 9, comment: '历史快照条目 SKILL', enabled: false, type: 'selective', keys: ['手动关键词'] },
+    ] });
+    const c = await getComposable();
+
+    await c.loadEntries();
+
+    expect(c.groups.value[0].entries[0]).toMatchObject({
+      uid: 9,
+      agentTakeoverState: 'taken_over',
+      skillifySelectable: false,
+    });
   });
 
   it('空 scope 清空列表和选择状态', async () => {

@@ -59,6 +59,12 @@ type AutoCardUpdaterSqlBatchResult = AutoCardUpdaterSqlMutationResult & {
 type AutoCardUpdaterSqlExecutionResult =
     | { type: 'query'; result: AutoCardUpdaterSqlQueryResult }
     | { type: 'mutation'; result: AutoCardUpdaterSqlMutationResult };
+type AutoCardUpdaterSqlReadError = {
+    method: 'executeSqlQuery' | 'querySql' | 'queryTableRows' | 'executeSql';
+    code: 'runtime_not_ready' | 'alias_conflict' | 'table_not_found' | 'column_not_resolved' | 'sql_error' | 'read_only_violation';
+    message: string;
+    at: number;
+};
 
 interface AutoCardUpdaterAPI {
     registerTableUpdateCallback(callback: Function): void;
@@ -176,12 +182,13 @@ interface AutoCardUpdaterAPI {
     deleteWorldbookEntrySkillMeta(bookName: any, uid: any): Promise<AutoCardUpdaterApiResult>;
     clearAgentWorldbookSkillMetas(bookNames?: string[]): Promise<AutoCardUpdaterApiResult>;
 
-    executeSqlQuery(sqlOrOptions: any, params?: any, options?: any): AutoCardUpdaterSqlQueryResult | null;
-    querySql(sqlOrOptions: any, params?: any, options?: any): AutoCardUpdaterSqlQueryResult | null;
-    queryTableRows(options: { sheetKey?: string; tableName?: string; table?: string; columns?: string[]; where?: Record<string, any>; orderBy?: any; order?: any; limit?: number; offset?: number }): AutoCardUpdaterSqlQueryResult | null;
+    executeSqlQuery?(sqlOrOptions: any, params?: any, options?: any): AutoCardUpdaterSqlQueryResult | null;
+    querySql?(sqlOrOptions: any, params?: any, options?: any): AutoCardUpdaterSqlQueryResult | null;
+    queryTableRows?(options: { sheetKey?: string; tableName?: string; table?: string; columns?: string[]; where?: Record<string, any>; orderBy?: any; order?: any; limit?: number; offset?: number }): AutoCardUpdaterSqlQueryResult | null;
     executeSqlMutation(sqlOrOptions: any, params?: any, options?: any): Promise<AutoCardUpdaterSqlMutationResult>;
     executeSqlBatch(sqlOrOptions: any, options?: any): Promise<AutoCardUpdaterSqlBatchResult>;
     executeSql(sqlOrOptions: any, params?: any, options?: any): Promise<AutoCardUpdaterSqlExecutionResult | null>;
+    getLastSqlApiError(): AutoCardUpdaterSqlReadError | null;
 }
 
 interface Window {

@@ -42,6 +42,8 @@ export interface VectorMemoryConfig_ACU {
     keywordPromptGroup: VectorMemoryKeywordPromptSegment_ACU[];
     recallCandidateLimit: number;
     recentFixedInjectCount: number;
+    summaryIndexV2WriteEnabled: boolean;
+    summaryIndexV2WriteScopeAllowlist: string[];
     summaryIndexRollingDeltaEnabled: boolean;
     summaryIndexRollingDeltaFoldThreshold: number;
 }
@@ -100,6 +102,14 @@ function normalizeKeywordPromptGroup_ACU(
     return segments.length > 0
         ? segments
         : JSON.parse(JSON.stringify(fallbackValue));
+}
+
+function normalizeSummaryIndexV2WriteScopeAllowlist_ACU(value: any): string[] {
+    if (!Array.isArray(value)) return [];
+    return Array.from(new Set(value
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter(Boolean)));
 }
 
 export function getDefaultVectorMemoryConfig_ACU(): VectorMemoryConfig_ACU {
@@ -164,6 +174,10 @@ export function normalizeVectorMemoryConfig_ACU(rawConfig: any): VectorMemoryCon
             (source as any).recentFixedInjectCount,
             (defaults as any).recentFixedInjectCount || 50,
         ),
+        summaryIndexV2WriteEnabled: typeof (source as any).summaryIndexV2WriteEnabled === 'boolean'
+            ? (source as any).summaryIndexV2WriteEnabled
+            : defaults.summaryIndexV2WriteEnabled !== false,
+        summaryIndexV2WriteScopeAllowlist: normalizeSummaryIndexV2WriteScopeAllowlist_ACU((source as any).summaryIndexV2WriteScopeAllowlist),
         summaryIndexRollingDeltaEnabled: (source as any).summaryIndexRollingDeltaEnabled === true,
         summaryIndexRollingDeltaFoldThreshold: normalizePositiveInteger_ACU(
             (source as any).summaryIndexRollingDeltaFoldThreshold,
@@ -326,6 +340,8 @@ export interface SummaryVectorIndexEffectiveConfig_ACU extends VectorMemoryConfi
     summaryIndexHybridRetrievalEnabled: boolean;
     summaryIndexBm25CandidateLimit: number;
     summaryIndexRrfK: number;
+    summaryIndexV2WriteEnabled: boolean;
+    summaryIndexV2WriteScopeAllowlist: string[];
     summaryIndexRollingDeltaEnabled: boolean;
     summaryIndexRollingDeltaFoldThreshold: number;
 }
@@ -383,6 +399,8 @@ export function getEffectiveSummaryVectorIndexConfig_ACU(configInput?: any): Sum
         summaryIndexHybridRetrievalEnabled: config.hybridRetrievalEnabled !== false,
         summaryIndexBm25CandidateLimit: bm25CandidateLimit,
         summaryIndexRrfK: rrfK,
+        summaryIndexV2WriteEnabled: config.summaryIndexV2WriteEnabled === true,
+        summaryIndexV2WriteScopeAllowlist: normalizeSummaryIndexV2WriteScopeAllowlist_ACU((config as any).summaryIndexV2WriteScopeAllowlist),
         summaryIndexRollingDeltaEnabled: (config as any).summaryIndexRollingDeltaEnabled === true,
         summaryIndexRollingDeltaFoldThreshold,
     };

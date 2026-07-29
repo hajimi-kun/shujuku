@@ -9,7 +9,7 @@ export const inventorySheet = {
     initNode: "游戏初始化时，根据剧情与设定添加主角的初始携带物品。",
     deleteNode: "物品被完全消耗、丢弃或摧毁时删除。\nSQL示例: DELETE FROM inventory WHERE item_name = '已消耗物品';\nSQL示例(批量): DELETE FROM inventory WHERE quantity <= 0;",
     updateNode: "获得已有的物品，使其数量增加时更新，已有物品状态变化时更新。\nSQL示例: UPDATE inventory SET quantity = quantity + 3 WHERE item_name = '治疗药水';\nSQL示例(多列): UPDATE inventory SET quantity = quantity - 1, description = '已损坏' WHERE item_name = '铁剑';",
-    insertNode: "主角获得背包中没有的全新物品时添加。\nSQL示例: INSERT INTO inventory (row_id, item_name, quantity, description, category) VALUES ((SELECT MAX(row_id)+1 FROM inventory), '新物品', 1, '物品描述', '杂物');",
+    insertNode: "主角获得背包中没有的全新物品时添加。\nSQL示例: INSERT INTO inventory (item_name, quantity, description, category) VALUES ('新物品', 1, '物品描述', '杂物');",
     ddl: `CREATE TABLE inventory ( -- 背包物品表
   row_id INTEGER PRIMARY KEY, -- 行号
   item_name TEXT NOT NULL UNIQUE, -- 物品名称

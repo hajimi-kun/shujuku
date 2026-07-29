@@ -10,6 +10,7 @@
 
 import type { Sheet_ACU } from '../../shared/models/table-data';
 import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
+import { mapSqlColumnIdentifiers_ACU } from '../../shared/sql-identifier-mapper';
 import { normalizeSqlStructure, normalizeConstrainedValue } from './sql-normalizer';
 
 // DDL 纯解析函数已移至 shared/ddl-utils.ts，此处 re-export 保持 data 层内部调用不变
@@ -23,11 +24,13 @@ export {
   updateDDLColumnComment,
   parseDDLColumnInfos_ACU,
   validateDDLTextAgainstHeaders_ACU,
+  rebindCreateTableName_ACU,
 } from '../../shared/ddl-utils';
 import {
   parseDDLColumnInfos_ACU,
   parseDDLTableName,
   parseDDLColumnNames,
+  rebindCreateTableName_ACU,
   validateDDLTextAgainstHeaders_ACU,
 } from '../../shared/ddl-utils';
 
@@ -44,16 +47,13 @@ import {
  * @returns CREATE TABLE 语句
  */
 export function generateDDL(sheet: Sheet_ACU, fallbackTableName?: string): string {
-  // 优先使用用户定义的 DDL
   const ddl = sheet.sourceData?.ddl?.trim();
   if (ddl) {
-    // 对 DDL 做结构字符规范化（全角兼容字符 → ASCII）
     const normalizedDdl = normalizeSqlStructure(ddl);
     logDebug_ACU(`[Schema] generateDDL: 使用用户定义 DDL, 表名=${parseDDLTableName(normalizedDdl) || 'unknown'}`);
     return normalizedDdl;
   }
 
-  // fallback：从 content[0] 表头自动生成全 TEXT 的 DDL
   const headers = sheet.content?.[0];
   if (!Array.isArray(headers) || headers.length === 0) {
     const tblName = fallbackTableName || sheet.uid || 'unknown_table';
@@ -62,6 +62,106 @@ export function generateDDL(sheet: Sheet_ACU, fallbackTableName?: string): strin
 
   const tblName = fallbackTableName || sheet.uid || 'unknown_table';
   return generateFallbackDDL(sanitizeIdentifier(tblName), headers);
+}
+
+export interface EffectiveDDLColumnMap_ACU {
+  mappings: ReadonlyArray<{ sourceIndex: number; displayName: string; sqlName: string; required: boolean }>;
+  sqlToDisplay: Map<string, string>;
+}
+
+export interface EffectiveDDLResult_ACU {
+  originalDDL: string;
+  effectiveDDL: string;
+  source: 'explicit' | 'fallback_missing' | 'fallback_invalid';
+  diagnostics: string[];
+  columnMap: EffectiveDDLColumnMap_ACU;
+}
+
+/**
+ * Resolves the DDL used by runtime SQLite without mutating sourceData.ddl.
+ * Persistence and migration callers must reject fallback_invalid explicitly;
+ * runtime callers may use its generated effectiveDDL after recording a diagnostic.
+ */
+export function resolveEffectiveDDL(
+  sheet: Sheet_ACU,
+  fallbackTableName?: string,
+  runtimeTableName?: string,
+): EffectiveDDLResult_ACU {
+  const headers = sheet.content?.[0];
+  const safeHeaders = Array.isArray(headers) && headers.length > 0
+    ? headers.map(header => String(header ?? ''))
+    : ['row_id'];
+  const originalDDL = typeof sheet.sourceData?.ddl === 'string' ? sheet.sourceData.ddl.trim() : '';
+
+  if (!originalDDL) {
+    return buildRuntimeFallbackDDL_ACU(sheet, runtimeTableName || fallbackTableName, 'fallback_missing', 'DDL 缺失，已使用运行时 fallback schema。');
+  }
+
+  const normalizedDDL = normalizeSqlStructure(originalDDL);
+  const columns = parseDDLColumnInfos_ACU(normalizedDDL);
+  const firstColumn = columns[0];
+  if (parseDDLTableName(normalizedDDL) && firstColumn?.sqlName === 'row_id'
+    && firstColumn.declaredType === 'INTEGER' && firstColumn.isPrimaryKey) {
+    const effectiveDDL = runtimeTableName
+      ? rebindCreateTableName_ACU(normalizedDDL, runtimeTableName)
+      : normalizedDDL;
+    logDebug_ACU(`[Schema] resolveEffectiveDDL: 使用用户定义 DDL, runtime表名=${parseDDLTableName(effectiveDDL) || 'unknown'}`);
+    return {
+      originalDDL,
+      effectiveDDL,
+      source: 'explicit',
+      diagnostics: [],
+      columnMap: buildExplicitColumnMap_ACU(sheet, normalizedDDL, safeHeaders),
+    };
+  }
+
+  return buildRuntimeFallbackDDL_ACU(sheet, runtimeTableName || fallbackTableName, 'fallback_invalid', '显式 DDL 缺少可用的 row_id INTEGER PRIMARY KEY 结构。');
+}
+
+export function buildRuntimeFallbackDDL_ACU(
+  sheet: Sheet_ACU,
+  fallbackTableName?: string,
+  source: 'fallback_missing' | 'fallback_invalid' = 'fallback_missing',
+  diagnostic = 'DDL 缺失，已使用运行时 fallback schema。',
+): EffectiveDDLResult_ACU {
+  const headers = Array.isArray(sheet.content?.[0]) && sheet.content[0].length > 0
+    ? sheet.content[0].map(header => String(header ?? ''))
+    : ['row_id'];
+  const fallbackTable = sanitizeIdentifier(fallbackTableName || sheet.uid || 'unknown_table');
+  return {
+    originalDDL: typeof sheet.sourceData?.ddl === 'string' ? sheet.sourceData.ddl.trim() : '',
+    effectiveDDL: generateFallbackDDL(fallbackTable, headers),
+    source,
+    diagnostics: [diagnostic],
+    columnMap: buildFallbackColumnMap_ACU(headers),
+  };
+}
+
+function buildFallbackColumnMap_ACU(headers: readonly string[]): EffectiveDDLColumnMap_ACU {
+  const { mappings } = mapSqlColumnIdentifiers_ACU(headers);
+  if (!mappings[0]?.isRowId) {
+    throw new Error('fallback schema 需要首列表头为 row_id，且所有表头必须可安全映射');
+  }
+  return {
+    mappings: mappings.map(mapping => ({ sourceIndex: mapping.index, displayName: mapping.displayName, sqlName: mapping.sqlName, required: mapping.isRowId })),
+    sqlToDisplay: new Map(mappings.map(mapping => [mapping.sqlName, mapping.displayName])),
+  };
+}
+
+function buildExplicitColumnMap_ACU(sheet: Sheet_ACU, ddl: string, headers: readonly string[]): EffectiveDDLColumnMap_ACU {
+  const insertMappings = resolveInsertColumnMappings(sheet, headers, ddl);
+  const mappings = insertMappings.map(mapping => {
+    return {
+      sourceIndex: mapping.sourceIndex,
+      displayName: headers[mapping.sourceIndex],
+      sqlName: mapping.sqlName,
+      required: mapping.required,
+    };
+  });
+  return {
+    mappings,
+    sqlToDisplay: new Map(mappings.map(mapping => [mapping.sqlName, mapping.displayName])),
+  };
 }
 
 /**
@@ -75,16 +175,17 @@ export function generateDDL(sheet: Sheet_ACU, fallbackTableName?: string): strin
  */
 export function generateFallbackDDL(tableName: string, headers: (string | null)[]): string {
   const lines: string[] = [];
-  const usedColumnNames = new Set<string>();
+  const normalizedHeaders = headers.length > 0 ? headers : ['row_id'];
+  const { mappings } = mapSqlColumnIdentifiers_ACU(normalizedHeaders);
+  if (!mappings[0]?.isRowId) {
+    throw new Error('fallback DDL 需要首列表头为 row_id，且所有表头必须唯一且非空');
+  }
 
-  for (let i = 0; i < headers.length; i++) {
-    const colName = headers[i];
-    if (colName === 'row_id') {
+  for (const mapping of mappings) {
+    if (mapping.isRowId) {
       lines.push('  row_id INTEGER PRIMARY KEY -- 行号');
-      usedColumnNames.add('row_id');
-    } else if (colName) {
-      const sqlColName = buildFallbackColumnName_ACU(colName, i, usedColumnNames);
-      lines.push(`  ${sqlColName} TEXT -- ${colName}`);
+    } else {
+      lines.push(`  ${mapping.sqlName} TEXT -- ${mapping.displayName}`);
     }
   }
 
@@ -156,11 +257,9 @@ export function generateInserts(sheet: Sheet_ACU, tableName?: string, plan?: She
       values.push(escapeValue(normalizedVal));
     }
 
-    // generateInserts 只用于把 JSON 快照灌入 SQLite。若同一快照内 row_id 重复，
-    // 应按快照合并语义让后出现的行覆盖旧行，而不是让整张表加载失败后从导出结果中消失。
-    statements.push(
-      `INSERT OR REPLACE INTO ${sanitizeIdentifier(tblName)} (${columnNames.map(sanitizeIdentifier).join(', ')}) VALUES (${values.join(', ')});`
-    );
+    // Snapshot row_id is a persistent identity. Duplicates must fail instead of
+    // overwriting an earlier row and silently losing historical data.
+    statements.push(`INSERT INTO ${sanitizeIdentifier(tblName)} (${columnNames.map(sanitizeIdentifier).join(', ')}) VALUES (${values.join(', ')});`);
   }
 
   return statements;
@@ -174,11 +273,12 @@ export interface SheetInsertPlan_ACU {
   mappings: readonly InsertColumnMapping[];
 }
 
-export function createSheetInsertPlan(sheet: Sheet_ACU): SheetInsertPlan_ACU {
+export function createSheetInsertPlan(sheet: Sheet_ACU, columnMap?: EffectiveDDLColumnMap_ACU): SheetInsertPlan_ACU {
   const headers = sheet.content?.[0];
   if (!Array.isArray(headers) || headers.length === 0) {
     throw new Error('snapshot 缺少表头，无法安全 hydrate');
   }
+  if (columnMap) return { mappings: columnMap.mappings.map(mapping => ({ ...mapping })) };
   return { mappings: resolveInsertColumnMappings(sheet, headers) };
 }
 
@@ -188,21 +288,10 @@ interface InsertColumnMapping {
   required: boolean;
 }
 
-function resolveInsertColumnMappings(sheet: Sheet_ACU, headers: (string | null)[]): InsertColumnMapping[] {
-  const ddl = sheet.sourceData?.ddl?.trim();
+function resolveInsertColumnMappings(sheet: Sheet_ACU, headers: readonly string[], ddlOverride?: string): InsertColumnMapping[] {
+  const ddl = ddlOverride || sheet.sourceData?.ddl?.trim();
   if (!ddl) {
-    const usedColumnNames = new Set<string>();
-    return headers.map((header, index) => {
-      const sqlName = header === 'row_id'
-        ? 'row_id'
-        : buildFallbackColumnName_ACU(String(header || `col_${index}`), index, usedColumnNames);
-      if (sqlName === 'row_id') usedColumnNames.add('row_id');
-      return {
-        sqlName,
-        sourceIndex: index,
-        required: index === 0 && header === 'row_id',
-      };
-    });
+    return createSheetInsertPlan(sheet, buildFallbackColumnMap_ACU(headers.map(header => String(header ?? '')))).mappings.slice();
   }
 
   const columns = parseDDLColumnInfos_ACU(ddl);
@@ -364,24 +453,4 @@ function sanitizeIdentifier(name: string): string {
   // 否则去掉非法字符
   const cleaned = name.replace(/[^a-zA-Z0-9_]/g, '_').replace(/^(\d)/, '_$1');
   return cleaned || '_unknown';
-}
-
-/**
- * 为 fallback DDL 生成稳定的 ASCII 列名。
- * 中文列名无法在不引入拼音依赖的前提下可靠转写，因此按表头索引命名，
- * 原始表头通过 DDL 注释参与严格映射，不能再让多个中文列退化成 col_unknown。
- */
-function buildFallbackColumnName_ACU(name: string, index: number, usedNames: Set<string>): string {
-  const trimmed = String(name || '').trim();
-  const asciiCandidate = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmed)
-    ? trimmed
-    : `col_${index}`;
-  let candidate = asciiCandidate;
-  let suffix = 2;
-  while (usedNames.has(candidate.toLowerCase())) {
-    candidate = `${asciiCandidate}_${suffix}`;
-    suffix += 1;
-  }
-  usedNames.add(candidate.toLowerCase());
-  return candidate;
 }

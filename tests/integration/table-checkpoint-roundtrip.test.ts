@@ -19,8 +19,8 @@ vi.mock('../../src/service/runtime/state-manager', () => ({
   settings_ACU: { storageMode: 'native' },
 }));
 vi.mock('../../src/data/storage/chat-history', () => ({
-  getChatScopedConfigContainer_ACU: () => h.scope || {},
-  getChatSheetGuideContainer_ACU: () => h.guide || {},
+  peekChatScopedConfigContainer_ACU: () => h.scope || {},
+  peekChatSheetGuideContainer_ACU: () => h.guide || {},
   setChatScopedConfigContainer_ACU: (_chat: any[], value: any) => { h.scope = value; },
   setChatSheetGuideContainer_ACU: (_chat: any[], value: any) => { h.guide = value; },
 }));

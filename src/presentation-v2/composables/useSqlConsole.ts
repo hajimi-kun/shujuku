@@ -11,6 +11,8 @@ import { ensureStorageProviderReady_ACU } from '../../service/table/table-storag
 import { isSqliteMode } from '../../service/table/storage-mode';
 import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../../service/runtime/state-manager';
 import { runSqliteRuntimeMutationCommit_ACU } from '../../service/table/table-update-commit';
+import { isReadOnlySqlStatement_ACU } from '../../service/runtime/template-vars/read-only-sql-validation';
+import { resolveCurrentRuntimeReadSql_ACU } from '../../service/runtime/read-query-resolver';
 import { useToastStore } from '../stores/toast-store';
 
 export type SqlConsoleMessageKind = 'info' | 'success' | 'warning' | 'error';
@@ -43,7 +45,7 @@ export const SQL_CONSOLE_MAX_HISTORY = 50;
 const sqlHistory = ref<SqlHistoryItem[]>([]);
 
 export function isSqlConsoleQuery(sql: string): boolean {
-  return /^\s*(SELECT|PRAGMA|EXPLAIN)/i.test(sql);
+  return isReadOnlySqlStatement_ACU(sql);
 }
 
 function emptyResult(): SqlResultState {
@@ -138,7 +140,7 @@ export function useSqlConsole() {
     try {
       const provider = await ensureStorageProviderReady_ACU();
       if (isSqlConsoleQuery(sql)) {
-        const queryResult = provider.executeQuery(sql);
+        const queryResult = provider.executeQuery(resolveCurrentRuntimeReadSql_ACU(sql).sql);
         const elapsedMs = (performance.now() - startTime).toFixed(1);
         result.value = {
           ...emptyResult(),

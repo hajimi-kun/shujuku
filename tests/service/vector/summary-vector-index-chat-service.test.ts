@@ -110,3 +110,95 @@ describe('deleteCurrentSummaryVectorIndexFromChat_ACU', () => {
     expect(cleanupUnreachable).toHaveBeenCalledWith({ scopeHints: [expectedScope] });
   });
 });
+
+describe('clearSummaryVectorIndexLayerFromChat_ACU', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  it('只删除 indexId 匹配的目标层并严格保存聊天', async () => {
+    const manifest = { indexId: 'idx-missing' } as any;
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        alpha: { summaryVectorIndexManifest: manifest, summaryVectorIndexState: { manifest } },
+        beta: { summaryVectorIndexState: { manifest: { indexId: 'idx-beta' } } },
+      },
+    }];
+    const saveStrict = vi.fn(async () => undefined);
+
+    vi.doMock('../../../src/service/chat/chat-service', () => ({
+      getChatArray_ACU: () => chat,
+      saveChatToHost_ACU: vi.fn(),
+      saveChatToHostStrict_ACU: saveStrict,
+    }));
+    vi.doMock('../../../src/service/runtime/state-manager', () => ({
+      currentChatFileIdentifier_ACU: 'chat-data',
+      currentJsonTableData_ACU: {},
+    }));
+    vi.doMock('../../../src/data/storage/vector-index-hot-cache', () => ({
+      deleteSummaryVectorHotCacheByScope_ACU: vi.fn(),
+      clearSummaryVectorFlushTasksByScope_ACU: vi.fn(),
+    }));
+    vi.doMock('../../../src/service/vector/summary-vector-index-storage-service', () => ({
+      cleanupUnreachableSummaryVectorIndexFiles_ACU: vi.fn(async () => ({ deletedPaths: [], failedDeletes: [] })),
+    }));
+
+    const { clearSummaryVectorIndexLayerFromChat_ACU } = await import('../../../src/service/vector/summary-vector-index-chat-service');
+    await expect(clearSummaryVectorIndexLayerFromChat_ACU({ messageIndex: 0, isolationKey: 'alpha', indexId: 'idx-missing' })).resolves.toBe(true);
+
+    expect(saveStrict).toHaveBeenCalledTimes(1);
+    expect(chat[0].TavernDB_ACU_IsolatedData.alpha.summaryVectorIndexState).toBeUndefined();
+    expect(chat[0].TavernDB_ACU_IsolatedData.alpha.summaryVectorIndexManifest).toBeUndefined();
+    expect(chat[0].TavernDB_ACU_IsolatedData.beta.summaryVectorIndexState.manifest.indexId).toBe('idx-beta');
+  });
+
+  it('indexId 不匹配时不删除也不保存', async () => {
+    const manifest = { indexId: 'idx-current' } as any;
+    const chat = [{ is_user: false, TavernDB_ACU_IsolatedData: { alpha: { summaryVectorIndexManifest: manifest, summaryVectorIndexState: { manifest } } } }];
+    const saveStrict = vi.fn(async () => undefined);
+
+    vi.doMock('../../../src/service/chat/chat-service', () => ({
+      getChatArray_ACU: () => chat,
+      saveChatToHost_ACU: vi.fn(),
+      saveChatToHostStrict_ACU: saveStrict,
+    }));
+    vi.doMock('../../../src/service/runtime/state-manager', () => ({ currentChatFileIdentifier_ACU: 'chat-data', currentJsonTableData_ACU: {} }));
+    vi.doMock('../../../src/data/storage/vector-index-hot-cache', () => ({ deleteSummaryVectorHotCacheByScope_ACU: vi.fn(), clearSummaryVectorFlushTasksByScope_ACU: vi.fn() }));
+    vi.doMock('../../../src/service/vector/summary-vector-index-storage-service', () => ({ cleanupUnreachableSummaryVectorIndexFiles_ACU: vi.fn(async () => ({ deletedPaths: [], failedDeletes: [] })) }));
+
+    const { clearSummaryVectorIndexLayerFromChat_ACU } = await import('../../../src/service/vector/summary-vector-index-chat-service');
+    await expect(clearSummaryVectorIndexLayerFromChat_ACU({ messageIndex: 0, isolationKey: 'alpha', indexId: 'idx-missing' })).resolves.toBe(false);
+    expect(saveStrict).not.toHaveBeenCalled();
+    expect(chat[0].TavernDB_ACU_IsolatedData.alpha.summaryVectorIndexManifest.indexId).toBe('idx-current');
+  });
+
+  it('严格保存失败时完整恢复原始 IsolatedData', async () => {
+    const manifest = { indexId: 'idx-missing' } as any;
+    const original = JSON.stringify({
+      alpha: { summaryVectorIndexManifest: manifest, summaryVectorIndexState: { manifest } },
+      beta: { marker: 'keep' },
+    });
+    const chat = [{ is_user: false, TavernDB_ACU_IsolatedData: original }];
+    const saveError = new Error('save failed');
+
+    vi.doMock('../../../src/service/chat/chat-service', () => ({
+      getChatArray_ACU: () => chat,
+      saveChatToHost_ACU: vi.fn(),
+      saveChatToHostStrict_ACU: vi.fn(async () => { throw saveError; }),
+    }));
+    vi.doMock('../../../src/service/runtime/state-manager', () => ({ currentChatFileIdentifier_ACU: 'chat-data', currentJsonTableData_ACU: {} }));
+    vi.doMock('../../../src/data/storage/vector-index-hot-cache', () => ({ deleteSummaryVectorHotCacheByScope_ACU: vi.fn(), clearSummaryVectorFlushTasksByScope_ACU: vi.fn() }));
+    vi.doMock('../../../src/service/vector/summary-vector-index-storage-service', () => ({ cleanupUnreachableSummaryVectorIndexFiles_ACU: vi.fn(async () => ({ deletedPaths: [], failedDeletes: [] })) }));
+
+    const { clearSummaryVectorIndexLayerFromChat_ACU } = await import('../../../src/service/vector/summary-vector-index-chat-service');
+    await expect(clearSummaryVectorIndexLayerFromChat_ACU({
+      messageIndex: 0,
+      isolationKey: 'alpha',
+      indexId: 'idx-missing',
+    })).rejects.toThrow('save failed');
+
+    expect(chat[0].TavernDB_ACU_IsolatedData).toBe(original);
+  });
+});

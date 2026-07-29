@@ -34,7 +34,22 @@ const serviceMock = vi.hoisted(() => ({
   saveTableLocksForSheet_ACU: vi.fn(),
   setSpecialIndexLockEnabled_ACU: vi.fn(),
   getCurrentWorldbookConfig_ACU: vi.fn(() => ({ summaryVectorIndexModeEnabled: false })),
+
   saveIndependentTableToChatHistory_ACU: vi.fn(async () => undefined),
+  replayData: null as Record<string, any> | null,
+  ensureLegacyStorageMigratedBeforeWrite_ACU: vi.fn(async () => ({ success: true, migrated: false })),
+  runTableWriteTransaction_ACU: vi.fn(async (options: any, task: any) => task({
+    runCommit: async (commitTask: any) => commitTask(),
+    baseRevision: 'test-revision',
+    writeSet: options.writeSet,
+    assertFresh: vi.fn(),
+  }, JSON.parse(JSON.stringify(options.initialData)))),
+  persistTableMutationLogBatchV2_ACU: vi.fn(async (options: any) => {
+    serviceMock.replayData = options.afterData;
+    return { saved: true, messageIndices: [0] };
+  }),
+  getLatestV2FullCheckpointMessageIndex_ACU: vi.fn(() => 0),
+  getLatestV2SheetReplayMessageIndex_ACU: vi.fn(() => -1),
   runTableUpdateCommit_ACU: vi.fn(async (options: any, apply: any) => {
     const workingData = options.initialData ? JSON.parse(JSON.stringify(options.initialData)) : runtimeMock.getCurrentData();
     const applied = await apply({ transactionContext: { runCommit: async (task: any) => task() }, workingData });
@@ -72,6 +87,7 @@ const serviceMock = vi.hoisted(() => ({
   enqueueSummaryVectorIndexFlush_ACU: vi.fn(async () => undefined),
   deleteCurrentSummaryVectorIndexFromChat_ACU: vi.fn(async () => false),
   preflightSchemaMigrations_ACU: vi.fn(async () => ({ changedSheetKeys: [], blockers: [], operations: [] })),
+  captureTableRuntimeRevisionForWriteSet_ACU: vi.fn(() => 'captured-template-revision'),
 }));
 
 const toastMock = vi.hoisted(() => ({
@@ -101,6 +117,7 @@ vi.mock('../../../src/service/settings/settings-readers', () => ({
 }));
 vi.mock('../../../src/service/table/table-service', () => ({
   saveIndependentTableToChatHistory_ACU: serviceMock.saveIndependentTableToChatHistory_ACU,
+  ensureLegacyStorageMigratedBeforeWrite_ACU: serviceMock.ensureLegacyStorageMigratedBeforeWrite_ACU,
 }));
 vi.mock('../../../src/service/table/table-update-commit', () => ({
   runTableUpdateCommit_ACU: serviceMock.runTableUpdateCommit_ACU,
@@ -108,13 +125,28 @@ vi.mock('../../../src/service/table/table-update-commit', () => ({
 vi.mock('../../../src/service/table/table-history', () => ({
   getLatestAiMessageIndexFromChat_ACU: serviceMock.getLatestAiMessageIndexFromChat_ACU,
   getLatestTableAppendMessageIndexFromChat_ACU: serviceMock.getLatestTableAppendMessageIndexFromChat_ACU,
+  getLatestV2FullCheckpointMessageIndex_ACU: serviceMock.getLatestV2FullCheckpointMessageIndex_ACU,
+  getLatestV2SheetReplayMessageIndex_ACU: serviceMock.getLatestV2SheetReplayMessageIndex_ACU,
   resolveTableHistoryStateFromChat_ACU: serviceMock.resolveTableHistoryStateFromChat_ACU,
 }));
 vi.mock('../../../src/service/table/storage-mode', () => ({
   isSqliteMode: serviceMock.isSqliteMode,
 }));
+vi.mock('../../../src/service/table/storage-frame-v2-replay', () => ({
+  validateCurrentChatTableRecoveryWithGuide_ACU: serviceMock.validateCurrentChatTableRecoveryWithGuide_ACU || vi.fn(async () => ({ success: true })),
+  loadTableStateFromFramesV2_ACU: vi.fn(async () => {
+    // Data-save now uses V2 replay as the write base before persist.
+    if (serviceMock.replayData) return JSON.parse(JSON.stringify(serviceMock.replayData));
+    return JSON.parse(JSON.stringify(runtimeMock.getCurrentData() || {}));
+  }),
+}));
 vi.mock('../../../src/service/table/storage-frame-v2-persist', () => ({
   commitCurrentFloorTemplateChanges_ACU: serviceMock.commitCurrentFloorTemplateChanges_ACU,
+  persistTableMutationLogBatchV2_ACU: serviceMock.persistTableMutationLogBatchV2_ACU,
+}));
+vi.mock('../../../src/service/table/table-write-transaction', () => ({
+  runTableWriteTransaction_ACU: serviceMock.runTableWriteTransaction_ACU,
+  captureTableRuntimeRevisionForWriteSet_ACU: serviceMock.captureTableRuntimeRevisionForWriteSet_ACU,
 }));
 vi.mock('../../../src/service/settings/settings-service', () => ({
   applyTemplateScopeForCurrentChat_ACU: serviceMock.applyTemplateScopeForCurrentChat_ACU,
@@ -179,6 +211,7 @@ describe('useVisualizerSave', () => {
     vi.clearAllMocks();
     serviceMock.preflightSchemaMigrations_ACU.mockReset();
     serviceMock.preflightSchemaMigrations_ACU.mockResolvedValue({ changedSheetKeys: [], blockers: [], operations: [] });
+    serviceMock.replayData = null;
   });
 
   it('保存数据到当前消息会提交数据增量并清理 dirty', async () => {
@@ -199,16 +232,19 @@ describe('useVisualizerSave', () => {
     expect(saved).toBe(true);
     expect(runtimeMock._set_currentJsonTableData_ACU).toHaveBeenCalledTimes(1);
     expect(runtimeMock.getCurrentData().sheet_test_vz2.content[1][2]).toBe('紧张');
-    expect(serviceMock.runTableUpdateCommit_ACU).toHaveBeenCalledWith(expect.objectContaining({
+    expect(serviceMock.runTableWriteTransaction_ACU).toHaveBeenCalledWith(expect.objectContaining({
       source: 'manual_crud',
-      reason: 'visualizer_save_native_batch',
-      targetSheetKeys: ['sheet_test_vz2'],
+      reason: 'visualizer_save_v2_replay',
+      writeSet: [expect.objectContaining({ kind: 'cell', sheetKey: 'sheet_test_vz2' })],
     }), expect.any(Function));
+    expect(serviceMock.persistTableMutationLogBatchV2_ACU).toHaveBeenCalledWith(expect.objectContaining({
+      targets: [expect.objectContaining({ changedSheetKeys: ['sheet_test_vz2'] })],
+    }));
     expect(store.dirty).toBe(false);
     expect(store.lastSavedTarget).toBe('data');
   });
 
-  it('新增行保存时分配最小未占用 row_id，并生成可重放的 row_upsert', async () => {
+  it('新增行保存时分配 highestNumericId+1 的 row_id，并生成可重放的 row_upsert', async () => {
     const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
     const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
     const store = useVisualizerStore();
@@ -229,7 +265,7 @@ describe('useVisualizerSave', () => {
     await expect(useVisualizerSave().saveToChat()).resolves.toBe(true);
 
     expect(runtimeMock.getCurrentData().sheet_test_vz2.content).toEqual([
-      ['row_id', '姓名', '状态'], ['1', 'A', '平静'], ['3', 'B', '紧张'], ['2', 'C', '就绪'],
+      ['row_id', '姓名', '状态'], ['1', 'A', '平静'], ['3', 'B', '紧张'], ['4', 'C', '就绪'],
     ]);
   });
 
@@ -290,7 +326,7 @@ describe('useVisualizerSave', () => {
       persistChatScope: false,
     }));
     expect(serviceMock.runTableUpdateCommit_ACU).not.toHaveBeenCalled();
-    expect(store.dirty).toBe(false);
+    expect(store.dirty).toBe(true);
     expect(store.lastSavedTarget).toBe('template-global');
   });
 
@@ -354,6 +390,7 @@ describe('useVisualizerSave', () => {
     expect(serviceMock.ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU).not.toHaveBeenCalled();
     expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).toHaveBeenCalledWith(expect.objectContaining({
       isolationKey: 'iso-test',
+      baseRevision: 'captured-template-revision',
       guideData: expect.any(Object),
       syncTemplateScope: true,
       templateSource: expect.objectContaining({
@@ -368,6 +405,10 @@ describe('useVisualizerSave', () => {
         })],
       })],
     }));
+    expect(serviceMock.captureTableRuntimeRevisionForWriteSet_ACU).toHaveBeenCalledWith(
+      [{ kind: 'schema', sheetKey: 'sheet_test_vz2' }],
+      { isolationKey: 'iso-test' },
+    );
     expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).toHaveBeenCalledTimes(1);
     expect(serviceMock.applyTemplateScopeForCurrentChat_ACU).toHaveBeenCalled();
     expect(runtimeMock._set_currentJsonTableData_ACU).toHaveBeenCalledWith(expect.objectContaining({
@@ -549,6 +590,109 @@ describe('useVisualizerSave', () => {
     expect(store.lastSavedTarget).toBeNull();
     expect(store.dirty).toBe(true);
     expect(store.isSaving).toBe(false);
+  });
+
+  it('删列保存经确认后以同一候选快照二次预检并仅提交一次', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    store.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_test_vz2: sheet(),
+    }, ['sheet_test_vz2']);
+    store.currentSheet.content = [['row_id', '姓名'], ['1', 'A']];
+    store.currentSheet.sourceData.ddl = `CREATE TABLE sheet_test_vz2 (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  col_1 TEXT -- 姓名
+);`;
+    const destructiveIssue = {
+      code: 'DESTRUCTIVE_COLUMN_DROP_CONFIRMATION_REQUIRED',
+      sheetKey: 'sheet_test_vz2',
+      tableName: '角色状态',
+      droppedColumns: [{ physicalName: 'col_2', displayHeader: '状态', index: 2 }],
+      affectedRowCount: 1,
+      message: '删除状态需要显式确认。',
+    };
+    const migration = {
+      kind: 'sheet_schema_migrate', contractVersion: 1, sheetKey: 'sheet_test_vz2',
+      migrationPolicy: { destructiveChangeConfirmed: true },
+    };
+    serviceMock.preflightSchemaMigrations_ACU
+      .mockResolvedValueOnce({ changedSheetKeys: ['sheet_test_vz2'], blockers: ['sheet_test_vz2: 删除状态需要显式确认。'], issues: [destructiveIssue], operations: [] })
+      .mockResolvedValueOnce({ changedSheetKeys: ['sheet_test_vz2'], blockers: [], issues: [], operations: [migration] });
+    const confirmDestructiveSchemaChange = vi.fn(async () => true);
+
+    const saved = await useVisualizerSave({ confirmDestructiveSchemaChange }).saveTemplateToCurrentChat();
+
+    expect(saved).toBe(true);
+    expect(confirmDestructiveSchemaChange).toHaveBeenCalledWith({
+      sheets: [{
+        sheetKey: 'sheet_test_vz2', tableName: '角色状态',
+        droppedColumns: [{ physicalName: 'col_2', displayHeader: '状态', index: 2 }], affectedRowCount: 1,
+      }],
+    });
+    expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenNthCalledWith(1, expect.objectContaining({ destructiveChangeConfirmed: false }));
+    expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenNthCalledWith(2, expect.objectContaining({ destructiveChangeConfirmed: true }));
+    expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).toHaveBeenCalledTimes(1);
+  });
+
+  it('取消删列保存确认时没有提交或后置副作用', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    store.loadSnapshot({ mate: { type: 'chatSheets', version: 1 }, sheet_test_vz2: sheet() }, ['sheet_test_vz2']);
+    store.currentSheet.content = [['row_id', '姓名'], ['1', 'A']];
+    store.currentSheet.sourceData.ddl = `CREATE TABLE sheet_test_vz2 (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  col_1 TEXT -- 姓名
+);`;
+    store.setDirty(true);
+    serviceMock.preflightSchemaMigrations_ACU.mockResolvedValueOnce({
+      changedSheetKeys: ['sheet_test_vz2'],
+      blockers: ['sheet_test_vz2: 删除状态需要显式确认。'],
+      issues: [{
+        code: 'DESTRUCTIVE_COLUMN_DROP_CONFIRMATION_REQUIRED', sheetKey: 'sheet_test_vz2', tableName: '角色状态',
+        droppedColumns: [{ physicalName: 'col_2', displayHeader: '状态', index: 2 }], affectedRowCount: 1, message: '删除状态需要显式确认。',
+      }],
+      operations: [],
+    });
+
+    const saved = await useVisualizerSave({ confirmDestructiveSchemaChange: vi.fn(async () => false) }).saveTemplateToCurrentChat();
+
+    expect(saved).toBe(false);
+    expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenCalledTimes(1);
+    expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).not.toHaveBeenCalled();
+    expect(serviceMock.applyTemplateScopeForCurrentChat_ACU).not.toHaveBeenCalled();
+    expect(runtimeMock._set_currentJsonTableData_ACU).not.toHaveBeenCalled();
+    expect(store.dirty).toBe(true);
+  });
+
+  it('危险确认期间草稿变化时拒绝陈旧提交', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    store.loadSnapshot({ mate: { type: 'chatSheets', version: 1 }, sheet_test_vz2: sheet() }, ['sheet_test_vz2']);
+    store.currentSheet.content = [['row_id', '姓名'], ['1', 'A']];
+    store.currentSheet.sourceData.ddl = `CREATE TABLE sheet_test_vz2 (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  col_1 TEXT -- 姓名
+);`;
+    store.setDirty(true);
+    serviceMock.preflightSchemaMigrations_ACU.mockResolvedValueOnce({
+      changedSheetKeys: ['sheet_test_vz2'], blockers: ['sheet_test_vz2: 删除状态需要显式确认。'], operations: [],
+      issues: [{ code: 'DESTRUCTIVE_COLUMN_DROP_CONFIRMATION_REQUIRED', sheetKey: 'sheet_test_vz2', tableName: '角色状态', droppedColumns: [{ physicalName: 'col_2', displayHeader: '状态', index: 2 }], affectedRowCount: 1, message: '删除状态需要显式确认。' }],
+    });
+    const confirmDestructiveSchemaChange = vi.fn(async () => {
+      store.currentSheet.name = '确认期间变更';
+      return true;
+    });
+
+    const saved = await useVisualizerSave({ confirmDestructiveSchemaChange }).saveTemplateToCurrentChat();
+
+    expect(saved).toBe(false);
+    expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenCalledTimes(1);
+    expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).not.toHaveBeenCalled();
+    expect(toastMock.warning).toHaveBeenCalledWith('模板结构在危险确认期间已变化；请重新保存。', { muteable: false });
   });
 
   it('schema migration preflight 期间模板变化时不提交陈旧 checkpoint', async () => {
@@ -784,7 +928,7 @@ describe('useVisualizerSave', () => {
       { muteable: false },
     );
     expect(store.pendingLockChanges).toEqual([]);
-    expect(store.lockDraftsDirty).toBe(false);
+    expect(store.lockDirty).toBe(false);
     expect(store.dirty).toBe(false);
     expect(store.lastSavedTarget).toBe('template-chat');
   });
@@ -813,7 +957,7 @@ describe('useVisualizerSave', () => {
     );
     expect(store.templateBaseData.sheet_test_vz2.name).toBe('锁保存失败的新表名');
     expect(store.pendingLockChanges).toEqual([]);
-    expect(store.lockDraftsDirty).toBe(true);
+    expect(store.lockDirty).toBe(true);
     expect(store.isRowLocked('sheet_test_vz2', 0)).toBe(true);
     expect(store.dirty).toBe(true);
     expect(store.lastSavedTarget).toBe('template-chat');
@@ -823,7 +967,7 @@ describe('useVisualizerSave', () => {
     expect(retrySaved).toBe(true);
     expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).toHaveBeenCalledTimes(1);
     expect(serviceMock.saveTableLocksForSheet_ACU).toHaveBeenCalledTimes(2);
-    expect(store.lockDraftsDirty).toBe(false);
+    expect(store.lockDirty).toBe(false);
     expect(store.dirty).toBe(false);
   });
 
@@ -833,24 +977,52 @@ describe('useVisualizerSave', () => {
     const store = useVisualizerStore();
     store.loadSnapshot({
       mate: { type: 'chatSheets', version: 1 },
-      sheet_keep: { ...sheet('保留表'), uid: 'sheet_keep' },
-      sheet_delete: { ...sheet('删除表'), uid: 'sheet_delete' },
-    }, ['sheet_keep', 'sheet_delete']);
-    store.tableLockDrafts.sheet_delete = { rows: [0], cols: [], cells: [], specialIndexLocked: true };
-    store.deleteSheet('sheet_delete');
+      sheet_keep: { ...sheet('保留表'), uid: 'sheet_keep', orderNo: 0 },
+      sheet_mid: { ...sheet('中间表'), uid: 'sheet_mid', orderNo: 1 },
+      sheet_tail: { ...sheet('尾表'), uid: 'sheet_tail', orderNo: 2 },
+    }, ['sheet_keep', 'sheet_mid', 'sheet_tail']);
+    store.tableLockDrafts.sheet_mid = { rows: [0], cols: [], cells: [], specialIndexLocked: true };
+    store.deleteSheet('sheet_mid');
 
     const saved = await useVisualizerSave().saveTemplateToCurrentChat();
 
     expect(saved).toBe(true);
     expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).toHaveBeenCalledTimes(1);
     const [[options]] = serviceMock.commitCurrentFloorTemplateChanges_ACU.mock.calls;
-    expect(options.deletedSheetKeys).toEqual(['sheet_delete']);
+    expect(options.deletedSheetKeys).toEqual(['sheet_mid']);
     expect(options.sheetChanges).toEqual([]);
     expect(serviceMock.purgeSheetKeysFromChatHistoryHard_ACU).not.toHaveBeenCalled();
-    expect(serviceMock.saveTableLocksForSheet_ACU).not.toHaveBeenCalledWith('sheet_delete', expect.anything());
-    expect(store.tableLockDrafts.sheet_delete).toBeUndefined();
+    expect(serviceMock.applySummaryIndexSequenceToTable_ACU).not.toHaveBeenCalled();
+    expect(serviceMock.saveTableLocksForSheet_ACU).not.toHaveBeenCalledWith('sheet_mid', expect.anything());
+    expect(store.tableLockDrafts.sheet_mid).toBeUndefined();
+    expect(store.tempData?.sheet_keep.orderNo).toBe(0);
+    expect(store.tempData?.sheet_tail.orderNo).toBe(2);
     expect(store.deletedSheetKeys).toEqual([]);
     expect(store.lastSavedTarget).toBe('template-chat');
+  });
+
+  it('模板保存路径不因删表空洞对存活表生成 orderNo meta_update，也不重写摘要索引', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    store.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_a: { ...sheet('保留表A'), uid: 'sheet_a', orderNo: 0 },
+      sheet_b: { ...sheet('总结表'), uid: 'sheet_b', orderNo: 1, content: [['row_id', '事件', '编码索引'], ['1', '旧值', 'AM0001']] },
+      sheet_c: { ...sheet('保留表C'), uid: 'sheet_c', orderNo: 2 },
+    }, ['sheet_a', 'sheet_b', 'sheet_c']);
+    store.tableLockDrafts.sheet_b = { rows: [], cols: [], cells: [], specialIndexLocked: true };
+    store.deleteSheet('sheet_b');
+
+    const saved = await useVisualizerSave().saveTemplateToCurrentChat();
+
+    expect(saved).toBe(true);
+    const [[options]] = serviceMock.commitCurrentFloorTemplateChanges_ACU.mock.calls;
+    expect(options.deletedSheetKeys).toEqual(['sheet_b']);
+    expect(options.sheetChanges).toEqual([]);
+    expect(serviceMock.applySummaryIndexSequenceToTable_ACU).not.toHaveBeenCalled();
+    expect(store.tempData?.sheet_a.orderNo).toBe(0);
+    expect(store.tempData?.sheet_c.orderNo).toBe(2);
   });
 
   it('删除最后一张摘要表后清除当前聊天摘要向量索引，而不保留陈旧索引', async () => {
@@ -957,7 +1129,7 @@ describe('useVisualizerSave', () => {
   });
 
 
-  it('保存已删除表时只把 deletedSheetKeys 传给硬删除且不把删除表写入 V2 commit', async () => {
+  it('行数据增量与整表删除同时存在时拒绝混合提交并保留草稿', async () => {
     const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
     const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
     const store = useVisualizerStore();
@@ -975,19 +1147,16 @@ describe('useVisualizerSave', () => {
 
     const saved = await useVisualizerSave().saveToChat();
 
-    expect(saved).toBe(true);
-    expect(serviceMock.purgeSheetKeysFromChatHistoryHard_ACU).toHaveBeenCalledWith(['sheet_delete']);
-    expect(serviceMock.runTableUpdateCommit_ACU).toHaveBeenCalledWith(expect.objectContaining({
-      source: 'manual_crud',
-      reason: 'visualizer_save_native_batch',
-      targetSheetKeys: ['sheet_keep'],
-      writeSet: [expect.objectContaining({ kind: 'cell', sheetKey: 'sheet_keep' })],
-    }), expect.any(Function));
-    const commitOptions = serviceMock.runTableUpdateCommit_ACU.mock.calls[0][0];
-    expect(commitOptions.targetSheetKeys).not.toContain('sheet_delete');
-    expect(commitOptions.writeSet.map((unit: any) => unit.sheetKey)).not.toContain('sheet_delete');
-    expect(runtimeMock.getCurrentData().sheet_keep.content[1][2]).toBe('保留表更新');
-    expect(store.deletedSheetKeys).toEqual([]);
+    expect(saved).toBe(false);
+    expect(toastMock.error).toHaveBeenCalledWith(
+      '行数据增量与整表删除无法原子提交；请分别保存行数据和删表操作。',
+      { muteable: false },
+    );
+    expect(serviceMock.runTableWriteTransaction_ACU).not.toHaveBeenCalled();
+    expect(serviceMock.persistTableMutationLogBatchV2_ACU).not.toHaveBeenCalled();
+    expect(serviceMock.purgeSheetKeysFromChatHistoryHard_ACU).not.toHaveBeenCalled();
+    expect(store.deletedSheetKeys).toEqual(['sheet_delete']);
+    expect(store.dirty).toBe(true);
   });
 
   it('只删除整张表且没有行级增量时仍会执行硬删除清理', async () => {
@@ -1014,5 +1183,116 @@ describe('useVisualizerSave', () => {
     expect(store.deletedSheetKeys).toEqual([]);
     expect(store.dirty).toBe(false);
     expect(store.lastSavedTarget).toBe('data');
+  });
+
+it('仅修改表格锁时保存锁草稿，不创建 V2 行级 operation log', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    store.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_test_vz2: sheet(),
+    }, ['sheet_test_vz2']);
+    store.loadLockDrafts({
+      sheet_test_vz2: { rows: [], cols: [], cells: [], specialIndexLocked: true },
+    });
+    store.toggleRowLock('sheet_test_vz2', 0);
+
+    const saved = await useVisualizerSave().saveToChat();
+
+    expect(saved).toBe(true);
+    expect(serviceMock.runTableWriteTransaction_ACU).not.toHaveBeenCalled();
+    expect(serviceMock.persistTableMutationLogBatchV2_ACU).not.toHaveBeenCalled();
+    expect(serviceMock.saveTableLocksForSheet_ACU).toHaveBeenCalledWith('sheet_test_vz2', expect.objectContaining({
+      rows: new Set([0]),
+    }));
+    expect(store.lockDirty).toBe(false);
+    expect(store.dirty).toBe(false);
+    expect(store.lastSavedTarget).toBe('data');
+  });
+
+it('已载入但未修改的锁草稿不会触发数据保存', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    store.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_test_vz2: sheet(),
+    }, ['sheet_test_vz2']);
+    store.loadLockDrafts({
+      sheet_test_vz2: { rows: [0], cols: [], cells: [], specialIndexLocked: true },
+    });
+
+    const saved = await useVisualizerSave().saveToChat();
+
+    expect(saved).toBe(false);
+    expect(serviceMock.runTableWriteTransaction_ACU).not.toHaveBeenCalled();
+    expect(serviceMock.persistTableMutationLogBatchV2_ACU).not.toHaveBeenCalled();
+    expect(serviceMock.saveTableLocksForSheet_ACU).not.toHaveBeenCalled();
+  });
+
+it('运行时 merged refresh 失败后重试只刷新，不重复持久化数据增量', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    const initialData = {
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_test_vz2: sheet(),
+    };
+    store.loadSnapshot(initialData, ['sheet_test_vz2']);
+    runtimeMock._set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(initialData)));
+    runtimeMock._set_currentJsonTableData_ACU.mockClear();
+    store.updateCell(0, 1, '紧张');
+    serviceMock.refreshMergedDataAndNotify_ACU.mockRejectedValueOnce(new Error('merged refresh failed'));
+
+    const first = await useVisualizerSave().saveToChat();
+
+    expect(first).toBe(false);
+    expect(store.pendingDataOps.committed).toEqual(expect.objectContaining({ afterData: expect.any(Object) }));
+    expect(serviceMock.persistTableMutationLogBatchV2_ACU).toHaveBeenCalledTimes(1);
+    expect(serviceMock.runTableWriteTransaction_ACU).toHaveBeenCalledTimes(1);
+    expect(toastMock.error).toHaveBeenCalledWith(
+      '数据已持久化，但本地运行时刷新失败：merged refresh failed',
+      { muteable: false },
+    );
+    expect(store.dirty).toBe(true);
+
+    const second = await useVisualizerSave().saveToChat();
+
+    expect(second).toBe(true);
+    expect(serviceMock.persistTableMutationLogBatchV2_ACU).toHaveBeenCalledTimes(1);
+    expect(serviceMock.runTableWriteTransaction_ACU).toHaveBeenCalledTimes(1);
+    expect(store.pendingDataOps.committed).toBeUndefined();
+    expect(store.dirty).toBe(false);
+  });
+
+it('成功保存后回填临时行 ID，refresh 失败时不提前回填', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    const initialData = {
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_test_vz2: sheet(),
+    };
+    store.loadSnapshot(initialData, ['sheet_test_vz2']);
+    runtimeMock._set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(initialData)));
+    runtimeMock._set_currentJsonTableData_ACU.mockClear();
+    store.addRow();
+    const temporaryRowId = String(store.currentSheet.content[2][0]);
+    serviceMock.refreshMergedDataAndNotify_ACU.mockRejectedValueOnce(new Error('merged refresh failed'));
+
+    const first = await useVisualizerSave().saveToChat();
+
+    expect(first).toBe(false);
+    expect(store.currentSheet.content[2][0]).toBe(temporaryRowId);
+    expect(store.pendingDataOps.committed).toEqual(expect.objectContaining({
+      insertedRowIds: { [temporaryRowId]: '2' },
+    }));
+
+    const second = await useVisualizerSave().saveToChat();
+
+    expect(second).toBe(true);
+    expect(store.currentSheet.content[2][0]).toBe('2');
+    expect(store.pendingDataOps.committed).toBeUndefined();
   });
 });

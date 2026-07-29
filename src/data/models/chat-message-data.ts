@@ -6,7 +6,7 @@
  */
 
 import type { Sheet_ACU } from '../../shared/models/table-data';
-import type { TableStorageFrameV2_ACU } from '../../service/table/storage-frame-v2-types';
+import type { TableStorageFrameV2_ACU, TableV2RecoveryBackup_ACU } from '../../service/table/storage-frame-v2-types';
 import type {
     ChatSummaryVectorIndexManifest_ACU,
     ChatSummaryVectorIndexState_ACU,
@@ -21,6 +21,8 @@ export interface IsolationTagData_ACU {
     updateGroupKeys: string[];
     /** V2 checkpoint/log 存储帧。删除单表时必须按 sheetKey 精确清理，不能按楼层误删。 */
     storageFrame?: TableStorageFrameV2_ACU;
+    /** 显式 V2 恢复替换当前 frame 前保留的原始帧，用于导出与事故复盘。 */
+    recoveryBackup?: TableV2RecoveryBackup_ACU;
     /** 旧版/兼容向量记忆状态。保留字段是为了不破坏已有聊天记录。 */
     vectorMemoryState?: any;
     /** 交火模式纪要向量索引轻量状态。新外置模式下不应保存完整 vector 数组。 */

@@ -45,6 +45,7 @@ async function mountAdvancedToolsSqlPanel(opts: {
     getCurrentStorageMode: () => 'sqlite',
   }));
   vi.doMock('../../../src/service/table/table-storage-strategy', () => ({
+    isStorageRuntimeReadyForSyncRead_ACU: () => true,
     getStorageProvider,
     ensureStorageProviderReady_ACU: ensureStorageProviderReady,
   }));

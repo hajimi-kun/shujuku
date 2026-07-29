@@ -809,12 +809,11 @@ describe('FormFillPage · 手动填表面板', () => {
     expect(dialogText).toContain('当前 full checkpoint：AI 第 1 层（初始基线）、AI 第 3 层（历史周期基线）');
     expect(dialogText).toContain('本次重填范围：AI 第 1~3 层');
     expect(dialogText).toContain('选中表：角色状态（sheet_a）、事件记录（sheet_b）');
-    expect(dialogText).toContain('系统会先在 service 层做重填边界检查，并在内存中按当前上下文和批处理设置准备重填当前选中的表');
-    expect(dialogText).toContain('常规路径只会在确认可回放边界后清理本次范围内选中表的 V2 增量日志与 revision 指纹');
-    expect(dialogText).toContain('如果边界检查确认重填起点前没有可回放 checkpoint，系统会停止并弹出第二次破坏性确认');
-    expect(dialogText).toContain('不会清理本次重填范围之外的聊天记录表格数据');
-    expect(dialogText).toContain('不会在未二次确认时替换 checkpoint 基底');
-    expect(dialogText).toContain('失败、终止或从中断处继续时，不会清理本次重填范围之外的聊天记录表格数据');
+    expect(dialogText).toContain('会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志');
+    expect(dialogText).toContain('此前楼层的表格数据将无法恢复');
+    expect(dialogText).toContain('范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除');
+    expect(dialogText).toContain('执行失败或终止时会回滚到本次操作前的状态');
+    expect(dialogText).not.toContain('第二次破坏性确认');
     expect(dialogText).toContain('确认并继续');
     expect(dialogText).not.toContain('直接填表');
     expect(document.querySelector('.acu-toast-viewport')?.textContent || '')

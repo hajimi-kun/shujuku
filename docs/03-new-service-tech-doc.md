@@ -248,21 +248,25 @@ export interface SheetSourceData_ACU {
 - SQLite 模式初始化/切换失败时，自动 fallback 到原生模式
 - `reloadStorageProvider` 在 SQLite 模式下会销毁并重建数据库实例
 
-#### 3.3.2 `table/sql-table-service.ts` (363 行)
+#### 3.3.2 `table/sql-table-service.ts`
 
 SQLite 模式的 `ITableStorageProvider` 实现。
 
 | 方法 | 核心逻辑 |
 |------|---------|
-| `loadFromChat()` | `engine.init()` → `mergeAllIndependentTables_ACU()` → `syncBridge.loadFromTableData()` → 构建 NameMapper |
-| `saveToChat()` | `syncBridge.exportToTableData()` → 更新 JSON 视图 → `saveIndependentTableToChatHistory_ACU()` |
+| `loadFromChat()` | 兼容入口：`mergeAllIndependentTables_ACU()` 回放后委托 `loadFromData()`，避免回放与 hydrate 两套逻辑 |
+| `loadFromData(data)` | `engine.init()` → `syncBridge.loadFromTableData()` → schema 校验 → 以本实例凭证发布 NameMapper；发布被拒即 hydrate 失败 |
+| `saveToChat()` | 已禁用，恒返回失败；所有写入必须走 table update commit 提交模型 |
 | `getCurrentData()` | 从 SQLite 导出最新状态，同步更新 JSON 视图 |
 | `applyEdits(sql)` | 清理 HTML 注释 → 按分号拆分 → `engine.runBatch()` 事务执行 → 同步 JSON → 返回受影响的 sheetKey |
 | `executeQuery(sql)` | 直接委托 `engine.query()` |
 | `executeMutation(sql)` | `engine.run()` + 自动 `syncToJson()` |
-| `dispose()` | 销毁引擎 + 销毁 NameMapper |
+| `refreshNameMapperForData_ACU(data)` | 供外部 CRUD/回滚在活跃 runtime 上以本实例凭证刷新映射 |
+| `dispose()` | 销毁引擎 + 条件释放本实例发布的 NameMapper（已被置换时为 no-op） |
 
 **关键设计**：
+- 全局 NameMapper 由 provider 实例持有发布权：新实例发布后，被置换的旧实例销毁不会清空映射
+- 映射发布失败视为 hydrate 失败，不允许出现「runtime ready 但映射不可信」
 - SQL 语句拆分处理字符串内的分号（状态机解析）
 - 从 SQL 语句中提取受影响的表名（正则匹配 INSERT INTO/UPDATE/DELETE FROM/ALTER TABLE）
 - 表名 → sheetKey 映射通过 DDL 中的表名匹配
@@ -305,7 +309,7 @@ SQLite 模式的 `ITableStorageProvider` 实现。
 **关键设计**：
 - `translateSql` 先提取单引号字符串用占位符替代，替换后再放回，避免误替换数据值
 - 长名称优先替换，避免子串误匹配
-- 全局单例通过 `buildGlobalNameMapper()` / `getNameMapper()` 管理
+- 全局单例通过 owner-aware 发布/释放管理：runtime 实例持有发布凭证，只有当前发布者能把映射清成 `unbound`
 
 #### 3.3.6 `runtime/template-vars/sql-query-var.ts` (472 行)
 
@@ -448,9 +452,13 @@ db.表名                          // → new TableQueryBuilder("表名")
 
 ```typescript
 // 全局单例管理
-buildGlobalNameMapper(ddlMap)     // SQLite 加载完成后调用
-getNameMapper()                   // 获取全局实例
-disposeGlobalNameMapper()         // 销毁
+createNameMapperOwnerToken_ACU(label)                  // runtime 实例创建发布凭证
+publishGlobalNameMapperForDDLs_ACU(ddlMap, owner)      // SQLite 加载完成后发布；被更新发布者拒绝时返回 false
+publishGlobalNameMapperEmptySchema_ACU(owner)          // runtime 就绪但无表
+releaseGlobalNameMapperForOwner_ACU(owner)             // 仅当前发布者可释放，旧实例调用为 no-op
+ensureGlobalNameMapperForDDLs_ACU(ddlMap)              // 兼容入口：仅当无 runtime 持有映射时刷新
+getNameMapper()                                        // 获取全局实例
+disposeGlobalNameMapper()                              // 强制复位（测试/顶层复位）
 
 // 实例方法
 mapper.resolveTableName("背包物品表")     // → "inventory"

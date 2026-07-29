@@ -11,7 +11,7 @@
 import { TABLE_TEMPLATE_ACU } from './defaults-json.js';
 import { DEBUG_MODE_ACU, SCRIPT_ID_PREFIX_ACU, TABLE_ORDER_FIELD_ACU } from './constants';
 import { safeJsonParseWithJsoncComments_ACU } from './json-helpers';
-import { pushLog, isDebugLogEnabled } from './log-buffer';
+import { pushLog, isDebugLogEnabled, isWarnLogEnabled } from './log-buffer';
 
 export function cleanChatName_ACU(fileName: string): string {
   if (!fileName || typeof fileName !== 'string') return 'unknown_chat_source';
@@ -214,6 +214,7 @@ export   function logError_ACU(...args: any[]) {
 
 
 export   function logWarn_ACU(...args: any[]) {
+    if (!isWarnLogEnabled()) return;
     console.warn(`[${SCRIPT_ID_PREFIX_ACU}]`, ...args);
     pushLog('warn', [`[${SCRIPT_ID_PREFIX_ACU}]`, ...args]);
   }

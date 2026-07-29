@@ -198,6 +198,35 @@ describe('SqliteEngine', () => {
       ]);
       expect(result.totalChanges).toBe(2);
     });
+
+    it('finalize 可读取未提交数据并将结果随提交返回', () => {
+      engine.run('CREATE TABLE test (id INTEGER);');
+
+      const result = engine.runBatchWithFinalize(
+        ['INSERT INTO test VALUES (1);'],
+        undefined,
+        () => engine.query('SELECT COUNT(*) FROM test;').values[0][0],
+      );
+
+      expect(result.totalChanges).toBe(1);
+      expect(result.finalizeResult).toBe(1);
+      expect(engine.query('SELECT COUNT(*) FROM test;').values[0][0]).toBe(1);
+    });
+
+    it('finalize 失败时回滚已执行但尚未提交的整批语句', () => {
+      engine.run('CREATE TABLE test (id INTEGER);');
+
+      expect(() => engine.runBatchWithFinalize(
+        ['INSERT INTO test VALUES (1);'],
+        undefined,
+        () => {
+          expect(engine.query('SELECT COUNT(*) FROM test;').values[0][0]).toBe(1);
+          throw new Error('finalize failed');
+        },
+      )).toThrow('finalize failed');
+
+      expect(engine.query('SELECT COUNT(*) FROM test;').values[0][0]).toBe(0);
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════

@@ -62,7 +62,7 @@ function createSettings() {
   } as any;
 }
 
-async function mountDataMgmtPage(chatFileIdentifier = 'chat-data') {
+async function mountDataMgmtPage(chatFileIdentifier = 'chat-data', initialMixedDecision: any = null, sqliteMode = false, pendingReload = false) {
   vi.resetModules();
   document.body.innerHTML = '';
   document.head.innerHTML = '';
@@ -96,6 +96,36 @@ async function mountDataMgmtPage(chatFileIdentifier = 'chat-data') {
   const buildCheckpoint = vi.fn(() => ({ format: 'acu-table-checkpoint' }));
   const parseCheckpoint = vi.fn(() => ({ success: true, checkpoint: { format: 'acu-table-checkpoint', source: { storageMode: 'native' } } }));
   const restoreCheckpoint = vi.fn(async () => ({ success: true, restoredMessageIndex: 1 }));
+  const mixedDecision = { value: initialMixedDecision };
+  const getMixedDecision = vi.fn(() => mixedDecision.value);
+  const buildMixedSnapshots = vi.fn(() => ({
+    legacy: { filename: 'TavernDB_mixed_legacy_chat_alpha_decision.json', payload: { storage: 'legacy-v1' } },
+    v2: { filename: 'TavernDB_mixed_v2_chat_alpha_decision.json', payload: { storage: 'storage-frame-v2' } },
+  }));
+  const commitMixedDecision = vi.fn(async () => ({ status: 'committed', decisionId: 'decision-test' }));
+  const prepareV2Recovery = vi.fn(() => ({ planId: 'recovery-plan', status: 'recoverable_orphan_data_replace', isolationKey: 'alpha', requiresConfirmation: true, message: 'orphan candidate' }));
+  const scanV2IsolationDiagnostics = vi.fn(() => [
+    { isolationKey: 'alpha', status: 'recoverable_orphan_data_replace', requiresConfirmation: true, message: 'alpha candidate', isCurrentIsolation: true },
+    { isolationKey: 'beta', status: 'unrecoverable_no_base', requiresConfirmation: false, message: 'beta has no base', isCurrentIsolation: false },
+  ]);
+  const commitV2Recovery = vi.fn(async () => ({ status: 'committed', planId: 'recovery-plan' }));
+  const runtimeHealth = {
+    status: 'ready' as const,
+    expectedMode: sqliteMode ? 'sqlite' as const : 'native' as const,
+    activeMode: sqliteMode ? 'sqlite' as const : 'native' as const,
+    source: 'merged' as const,
+    loadToken: 7,
+    error: 'token=secret; ddl=private',
+  };
+  const getRuntimeHealth = vi.fn(() => ({ ...runtimeHealth }));
+  const reloadStorageProvider = vi.fn(async () => {
+    if (pendingReload) return new Promise<never>(() => {});
+    return {
+      ok: true,
+      degraded: false,
+      source: 'merged' as const,
+    };
+  });
   const chat = [
     {
       is_user: true,
@@ -211,13 +241,27 @@ async function mountDataMgmtPage(chatFileIdentifier = 'chat-data') {
     }),
   }));
   vi.doMock('../../../src/service/table/storage-mode', () => ({
-    isSqliteMode: () => false,
+    isSqliteMode: () => sqliteMode,
     getCurrentStorageMode: () => settings.storageMode,
+  }));
+  vi.doMock('../../../src/service/table/table-storage-strategy', () => ({
+    getStorageRuntimeHealth_ACU: getRuntimeHealth,
+    reloadStorageProvider,
   }));
   vi.doMock('../../../src/service/table/table-checkpoint-transfer', () => ({
     buildCurrentTableCheckpoint_ACU: buildCheckpoint,
     parseTableCheckpointFile_ACU: parseCheckpoint,
     restoreTableCheckpointToLatestAi_ACU: restoreCheckpoint,
+  }));
+  vi.doMock('../../../src/service/table/mixed-storage-decision-registry', () => ({
+    getActiveMixedStorageDecisionSummary_ACU: getMixedDecision,
+    buildRegisteredMixedStorageSnapshotTransfer_ACU: buildMixedSnapshots,
+    commitRegisteredMixedStorageDecision_ACU: commitMixedDecision,
+  }));
+  vi.doMock('../../../src/service/table/table-v2-recovery-service', () => ({
+    prepareV2Recovery_ACU: prepareV2Recovery,
+    scanV2IsolationDiagnostics_ACU: scanV2IsolationDiagnostics,
+    commitPreparedV2Recovery_ACU: commitV2Recovery,
   }));
 
   const mount = await import('../../../src/presentation-v2/bootstrap/mount');
@@ -243,6 +287,16 @@ async function mountDataMgmtPage(chatFileIdentifier = 'chat-data') {
     buildCheckpoint,
     parseCheckpoint,
     restoreCheckpoint,
+    mixedDecision,
+    getMixedDecision,
+    buildMixedSnapshots,
+    commitMixedDecision,
+    prepareV2Recovery,
+    scanV2IsolationDiagnostics,
+    commitV2Recovery,
+    runtimeHealth,
+    getRuntimeHealth,
+    reloadStorageProvider,
   };
 }
 
@@ -287,6 +341,8 @@ describe('DataMgmtPage', () => {
     expect(text).toContain('备份与恢复');
     expect(text).toContain('删除与清理');
     expect(text).toContain('删除当前标识注入条目');
+    expect(text).toContain('SQLite 运行时诊断');
+    expect(text).toContain('加载序号');
     expect(text).not.toContain('交火模式索引管理');
     expect(text).not.toContain('删除当前交火索引');
     expect(text).not.toContain('清空临时缓存');
@@ -304,6 +360,78 @@ describe('DataMgmtPage', () => {
 
     expect(labels).toEqual(['删除当前标识注入条目', '保存并应用']);
 
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('SQLite 模式下只在确认后重新初始化运行时，且状态卡不展示错误原文', async () => {
+    const { mount, reloadStorageProvider } = await mountDataMgmtPage('chat-data', null, true);
+    const section = document.querySelector<HTMLElement>('.acu-v2-data-mgmt-page__sqlite-runtime-section')!;
+    const button = Array.from(section.querySelectorAll<HTMLButtonElement>('button'))
+      .find(item => item.textContent?.includes('重新初始化当前聊天 SQLite 运行时'));
+
+    expect(section.textContent).toContain('状态');
+    expect(section.textContent).toContain('期望模式');
+    expect(section.textContent).toContain('实际模式');
+    expect(section.textContent).toContain('加载来源');
+    expect(section.textContent).toContain('加载序号');
+    expect(section.textContent).toContain('失败代码');
+    expect(button).toBeDefined();
+    button!.click();
+    await Promise.resolve();
+    expect(reloadStorageProvider).not.toHaveBeenCalled();
+    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('不会修改聊天正文、Checkpoint、模板或世界书');
+    await clickDialogButton('重新初始化运行时');
+
+    expect(reloadStorageProvider).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('.acu-v2-toast--success')?.textContent).toContain('已重新初始化');
+    expect(section.textContent).not.toContain('token=secret');
+    expect(section.textContent).not.toContain('ddl=private');
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('native 模式保留脱敏状态卡但不提供 SQLite 重初始化按钮', async () => {
+    const { mount } = await mountDataMgmtPage();
+    const section = document.querySelector<HTMLElement>('.acu-v2-data-mgmt-page__sqlite-runtime-section')!;
+
+    expect(section).not.toBeNull();
+    expect(section.textContent).toContain('状态');
+    expect(section.querySelector('button')).toBeNull();
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('SQLite runtime 重初始化进行时会禁用同页持久化恢复操作', async () => {
+    const { mount, reloadStorageProvider } = await mountDataMgmtPage('chat-data', null, true, true);
+    const runtimeSection = document.querySelector<HTMLElement>('.acu-v2-data-mgmt-page__sqlite-runtime-section')!;
+    const reloadButton = Array.from(runtimeSection.querySelectorAll<HTMLButtonElement>('button'))
+      .find(item => item.textContent?.includes('重新初始化当前聊天 SQLite 运行时'))!;
+
+    reloadButton.click();
+    await clickDialogButton('重新初始化运行时');
+
+    expect(reloadStorageProvider).toHaveBeenCalledTimes(1);
+    expect(reloadButton.disabled).toBe(true);
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(item => item.textContent?.includes('删除所有本地数据'))?.disabled).toBe(true);
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(item => item.textContent?.includes('保存并应用'))?.disabled).toBe(true);
+    const retainInput = Array.from(document.querySelectorAll<HTMLInputElement>('input[type="number"]'))
+      .find(input => input.closest('.acu-form-row')?.textContent?.includes('保留数据层数'));
+    expect(retainInput?.disabled).toBe(true);
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('聊天切换 tick 到达时立即刷新 SQLite runtime 健康快照', async () => {
+    const { mount, runtimeHealth } = await mountDataMgmtPage('chat-data', null, true);
+    const { useChatChangedTick } = await import('../../../src/presentation-v2/composables/useChatChangedListener');
+    const section = document.querySelector<HTMLElement>('.acu-v2-data-mgmt-page__sqlite-runtime-section')!;
+
+    expect(section.textContent).toContain('7');
+    runtimeHealth.loadToken = 8;
+    useChatChangedTick().value += 1;
+    await Promise.resolve();
+
+    expect(section.textContent).toContain('8');
+    expect(section.textContent).not.toContain('token=secret');
     mount.__resetAcuV2MountForTests();
   });
 
@@ -366,7 +494,7 @@ describe('DataMgmtPage', () => {
     expect(isolationPanel?.textContent || '').toContain('当前正在使用：alpha');
     expect(backupPanel?.querySelector('.acu-stats')).toBeNull();
     expect(cleanupPanel?.querySelector('.acu-stats')).toBeNull();
-    expect(backupPanel?.querySelector('.acu-v2-data-mgmt-page__meta')).toBeNull();
+    expect(backupPanel?.querySelector('.acu-v2-data-mgmt-page__meta')?.textContent).toContain('脱敏健康快照');
     expect(cleanupPanel?.querySelector('.acu-v2-data-mgmt-page__meta')?.textContent).toContain('当前聊天 2 个 AI 楼层');
 
     mount.__resetAcuV2MountForTests();
@@ -829,6 +957,208 @@ describe('DataMgmtPage', () => {
 
     mount.__resetAcuV2MountForTests();
   });
+
+  it('mixed 决议只展示授权动作，并导出 detached legacy/V2 双快照', async () => {
+    const { mount, buildMixedSnapshots } = await mountDataMgmtPage('chat-data', {
+      decisionId: 'decision-test',
+      kind: 'conflict_requires_user_choice',
+      diagnosticCodes: ['provenance_missing_or_invalid'],
+      allowedActions: ['noop', 'download_snapshots'],
+      createdAt: 1,
+    });
+
+    const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
+      .find(item => item.textContent?.includes('混合存储决议'));
+    expect(section).toBeDefined();
+    expect(section!.textContent).toContain('混合存储决议');
+    expect(section?.textContent).toContain('conflict_requires_user_choice');
+    expect(section?.textContent).not.toContain('保留 V2 并清理 legacy');
+    expect(section?.textContent).not.toContain('提交受限合并候选');
+    const downloadButton = Array.from(section!.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes('导出 legacy/V2 快照'))!;
+    downloadButton.click();
+
+    expect(buildMixedSnapshots).toHaveBeenCalledWith('decision-test');
+    expect(capturedDownloads).toEqual([
+      'TavernDB_mixed_legacy_chat_alpha_decision.json',
+      'TavernDB_mixed_v2_chat_alpha_decision.json',
+    ]);
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('mixed 合并候选必须经两次确认，且页面将 decisionId 与固定 action 交给服务', async () => {
+    const { mount, commitMixedDecision } = await mountDataMgmtPage('chat-data', {
+      decisionId: 'decision-test',
+      kind: 'legacy_has_v2_missing_data',
+      diagnosticCodes: ['merge_candidate_available'],
+      allowedActions: ['noop', 'download_snapshots', 'commit_merge_candidate'],
+      createdAt: 1,
+    });
+    const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
+      .find(item => item.textContent?.includes('混合存储决议'))!;
+    const commitButton = Array.from(section.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes('提交受限合并候选'))!;
+
+    commitButton.click();
+    await new Promise(r => setTimeout(r, 0));
+    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('提交混合存储合并候选');
+    expect(commitMixedDecision).not.toHaveBeenCalled();
+    await clickDialogButton('继续提交候选');
+    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('再次确认合并候选');
+    expect(commitMixedDecision).not.toHaveBeenCalled();
+    await clickDialogButton('确认提交候选');
+
+    expect(commitMixedDecision).toHaveBeenCalledWith('decision-test', 'commit_merge_candidate');
+    expect(commitMixedDecision.mock.calls[0]).toHaveLength(2);
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('mixed 提交保存后后置校验失败时提示已保存而非伪造回滚', async () => {
+    const { mount, commitMixedDecision } = await mountDataMgmtPage('chat-data', {
+      decisionId: 'decision-test',
+      kind: 'equivalent_provenance_verified',
+      diagnosticCodes: ['legacy_v2_fingerprints_equal'],
+      allowedActions: ['noop', 'download_snapshots', 'keep_v2'],
+      createdAt: 1,
+    });
+    commitMixedDecision.mockResolvedValueOnce({
+      status: 'committed_postcondition_failed',
+      decisionId: 'decision-test',
+      error: 'reload failed',
+    });
+    const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
+      .find(item => item.textContent?.includes('混合存储决议'))!;
+    const commitButton = Array.from(section.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes('保留 V2 并清理 legacy'))!;
+
+    commitButton.click();
+    await new Promise(r => setTimeout(r, 0));
+    await clickDialogButton('保留 V2');
+
+    expect(commitMixedDecision).toHaveBeenCalledWith('decision-test', 'keep_v2');
+    expect(document.querySelector('.acu-v2-toast--warning')?.textContent).toContain('数据已保存，但后置校验失败：reload failed');
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('扫描全部 V2 隔离域只展示诊断，不创建恢复计划或切换当前隔离域', async () => {
+    const { mount, settings, prepareV2Recovery, scanV2IsolationDiagnostics } = await mountDataMgmtPage('alpha');
+    const scanButton = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes('扫描全部 V2 隔离域'))!;
+
+    scanButton.click();
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(scanV2IsolationDiagnostics).toHaveBeenCalledTimes(1);
+    expect(prepareV2Recovery).not.toHaveBeenCalled();
+    expect(settings.dataIsolationCode).toBe('alpha');
+    const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
+      .find(item => item.textContent?.includes('V2 隔离域恢复诊断'))!;
+    expect(section.textContent).toContain('alpha candidate');
+    expect(section.textContent).toContain('beta has no base');
+    expect(section.textContent).toContain('请切换到该隔离域后重新诊断；当前恢复提交不会跨隔离域执行。');
+    expect(section.textContent).toContain('当前隔离域存在可恢复候选，请使用下方“诊断 V2 数据恢复”生成可提交计划。');
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('V2 恢复备份只导出当前隔离域的 AI 楼层快照', async () => {
+    const { mount, chat, prepareV2Recovery } = await mountDataMgmtPage('alpha/beta:*?gamma');
+    const exportedBackup = {
+      version: 1,
+      createdAt: 1,
+      recoveryKind: 'repaired_full_checkpoint',
+      sourceMessageIndex: 1,
+      failedMessageIndex: 1,
+      storageFrame: { version: 2, checkpoint: { kind: 'full', data: { value: 'before-export' } }, logEntries: [] },
+    };
+    chat[0].TavernDB_ACU_IsolatedData = { alpha: { recoveryBackup: { ignored: 'user-message' } } };
+    chat[1].TavernDB_ACU_IsolatedData.alpha.recoveryBackup = exportedBackup;
+    chat[1].TavernDB_ACU_IsolatedData.beta = { recoveryBackup: { ignored: 'other-isolation' } };
+    chat[2].TavernDB_ACU_IsolatedData.alpha.recoveryBackup = { ...exportedBackup, sourceMessageIndex: 2 };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 12, 21, 18, 41));
+
+    const diagnosticButton = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes('诊断 V2 数据恢复'))!;
+    diagnosticButton.click();
+    await Promise.resolve();
+    expect(prepareV2Recovery).toHaveBeenCalledTimes(1);
+    const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
+      .find(item => item.textContent?.includes('V2 数据恢复诊断'))!;
+    const exportButton = Array.from(section.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes('导出已保存的原始 frame 备份'))!;
+
+    exportButton.click();
+    exportedBackup.storageFrame.checkpoint.data.value = 'mutated-after-export';
+
+    expect(capturedDownloads).toEqual(['TavernDB_v2_recovery_backups_alpha_beta_gamma_20260712-211841.json']);
+    expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+    const blob = (URL.createObjectURL as any).mock.calls[0][0] as Blob;
+    const payload = JSON.parse(await blob.text());
+    expect(payload).toMatchObject({
+      version: 1,
+      isolationKey: 'alpha',
+      backups: [
+        { messageIndex: 1, backup: { sourceMessageIndex: 1 } },
+        { messageIndex: 2, backup: { sourceMessageIndex: 2 } },
+      ],
+    });
+    expect(payload.backups).toHaveLength(2);
+    expect(payload.backups[0].backup.storageFrame.checkpoint.data.value).toBe('before-export');
+    expect(payload.backups.some((item: any) => item.messageIndex === 0)).toBe(false);
+
+    vi.useRealTimers();
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('V2 恢复备份为空时不触发下载并提示原因', async () => {
+    const { mount, prepareV2Recovery } = await mountDataMgmtPage();
+    const diagnosticButton = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes('诊断 V2 数据恢复'))!;
+    diagnosticButton.click();
+    await Promise.resolve();
+    expect(prepareV2Recovery).toHaveBeenCalledTimes(1);
+    const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
+      .find(item => item.textContent?.includes('V2 数据恢复诊断'))!;
+    const exportButton = Array.from(section.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes('导出已保存的原始 frame 备份'))!;
+
+    exportButton.click();
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(capturedDownloads).toEqual([]);
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    const warningToasts = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-toast--warning'));
+    expect(warningToasts.at(-1)?.textContent).toContain('当前隔离标识没有可导出的 V2 恢复原始 frame 备份。');
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('V2 orphan 恢复需两次确认，页面仅向服务传递冻结 planId 与确认布尔值', async () => {
+    const { mount, prepareV2Recovery, commitV2Recovery } = await mountDataMgmtPage();
+    const diagnosticButton = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes('诊断 V2 数据恢复'))!;
+
+    diagnosticButton.click();
+    await new Promise(r => setTimeout(r, 0));
+    expect(prepareV2Recovery).toHaveBeenCalledTimes(1);
+    const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
+      .find(item => item.textContent?.includes('V2 数据恢复诊断'))!;
+    const commitButton = Array.from(section.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes('确认无锚点 data_replace 恢复'))!;
+
+    commitButton.click();
+    await new Promise(r => setTimeout(r, 0));
+    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('确认无锚点 data_replace 恢复');
+    expect(commitV2Recovery).not.toHaveBeenCalled();
+    await clickDialogButton('继续恢复');
+    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('再次确认无锚点恢复');
+    expect(commitV2Recovery).not.toHaveBeenCalled();
+    await clickDialogButton('确认提交恢复');
+
+    expect(commitV2Recovery).toHaveBeenCalledWith('recovery-plan', { confirmOrphanDataReplace: true });
+    expect(commitV2Recovery.mock.calls[0]).toHaveLength(2);
+    mount.__resetAcuV2MountForTests();
+  });
+
 
   it('全页只保留删除所有本地数据为红色危险按钮', async () => {
     const { mount } = await mountDataMgmtPage();

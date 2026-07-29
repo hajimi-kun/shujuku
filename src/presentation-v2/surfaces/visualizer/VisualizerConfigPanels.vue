@@ -22,24 +22,24 @@
 
       <div class="acu-viz-config__columns">
         <article
-          v-for="(header, index) in config.headers.value"
-          :key="`column-${index}`"
+          v-for="column in config.visibleColumnEntries.value"
+          :key="`column-${column.columnIndex}`"
           class="acu-viz-config__column-row"
         >
-          <span class="acu-viz-config__column-index">#{{ index + 1 }}</span>
+          <span class="acu-viz-config__column-index">#{{ column.columnIndex + 1 }}</span>
           <AcuInput
-            :model-value="header"
-            @update:model-value="value => config.updateHeader(index, value)"
+            :model-value="column.header"
+            @update:model-value="value => config.updateHeader(column.columnIndex, value)"
           />
           <AcuIconButton
             icon="fa-solid fa-trash"
             size="sm"
             variant="danger"
             title="删除列"
-            @click="$emit('request-delete-column', index)"
+            @click="$emit('request-delete-column', column.columnIndex)"
           />
         </article>
-        <p v-if="config.headers.value.length === 0" class="acu-viz-config__empty">
+        <p v-if="config.visibleColumnEntries.value.length === 0" class="acu-viz-config__empty">
           当前表没有可编辑列。新增列后，已有数据行会自动补一个空值。
         </p>
         <div class="acu-viz-config__column-operation">
@@ -301,21 +301,21 @@
             </AcuFormRow>
             <div class="acu-viz-config__column-modes">
               <article
-                v-for="(header, index) in config.headers.value"
-                :key="`extra-index-column-${index}`"
+                v-for="column in config.visibleColumnEntries.value"
+                :key="`extra-index-column-${column.columnIndex}`"
                 class="acu-viz-config__column-mode"
               >
                 <AcuCheckbox
-                  :model-value="extraIndexColumns.includes(header)"
-                  :label="header"
-                  @update:model-value="value => config.setExtraIndexColumn(header, value)"
+                  :model-value="extraIndexColumns.includes(column.header)"
+                  :label="column.header"
+                  @update:model-value="value => config.setExtraIndexColumn(column.header, value)"
                 />
                 <AcuSelect
                   size="sm"
-                  :disabled="!extraIndexColumns.includes(header)"
-                  :model-value="extraIndexColumnModes[header] === 'index_only' ? 'index_only' : 'both'"
+                  :disabled="!extraIndexColumns.includes(column.header)"
+                  :model-value="extraIndexColumnModes[column.header] === 'index_only' ? 'index_only' : 'both'"
                   :options="config.extraIndexModeOptions"
-                  @update:model-value="value => config.setExtraIndexColumnMode(header, value === 'index_only' ? 'index_only' : 'both')"
+                  @update:model-value="value => config.setExtraIndexColumnMode(column.header, value === 'index_only' ? 'index_only' : 'both')"
                 />
               </article>
             </div>

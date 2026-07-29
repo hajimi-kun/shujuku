@@ -239,9 +239,10 @@ export async function callCustomOpenAI_ACU_Direct(messages: any[]) {
  * 供 service 层内部使用，替代通过 topLevelWindow_ACU.AutoCardUpdaterAPI.callAI 的循环调用。
  * @param messages 消息数组 [{ role, content }]
  * @param presetName API 预设名称（空字符串表示使用当前配置）
+ * @param maxTokensOverride 可选的最大 token 数覆盖，仅允许公开层传入经校验的安全值
  * @returns AI 响应文本，失败返回 null
  */
-export async function callAIWithPreset_ACU(messages: any[], presetName: string = ''): Promise<string | null> {
+export async function callAIWithPreset_ACU(messages: any[], presetName: string = '', maxTokensOverride?: number): Promise<string | null> {
     if (!Array.isArray(messages) || messages.length === 0) {
         logWarn_ACU('[callAIWithPreset] messages 必须是非空数组');
         return null;
@@ -251,7 +252,7 @@ export async function callAIWithPreset_ACU(messages: any[], presetName: string =
     const effectiveApiMode = apiPresetConfig.apiMode;
     const effectiveApiConfig = apiPresetConfig.apiConfig || {} as any;
     const effectiveTavernProfile = apiPresetConfig.tavernProfile;
-    const maxTokens = effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096;
+    const maxTokens = maxTokensOverride ?? effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096;
 
 
     logDebug_ACU(`[callAIWithPreset] 调用 AI，消息数=${messages.length}，预设=${presetName || '当前配置'}，模式=${effectiveApiMode}`);
@@ -276,6 +277,7 @@ export async function callAIWithPreset_ACU(messages: any[], presetName: string =
         const response = await generateRaw_ACU({
             ordered_prompts: messages,
             should_stream: settings_ACU.streamingEnabled || false,
+            max_tokens: maxTokens,
         });
         return typeof response === 'string' ? response.trim() : null;
     }

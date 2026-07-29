@@ -411,11 +411,11 @@ export function useManualUpdate(): ManualUpdateState {
     manualUpdateBusy.value = true;
     const confirmed = await dialogStore.confirm({
       title: '执行手动填表',
-      message: `即将执行手动填表。\n\n当前 full checkpoint：${checkpointFloorsLabel.value}\n本次重填范围：${manualRefillRangeLabel.value}\n选中表：${selectedSheetSummary.value}\n\n系统会先在 service 层做重填边界检查，并在内存中按当前上下文和批处理设置准备重填当前选中的表。\n常规路径只会在确认可回放边界后清理本次范围内选中表的 V2 增量日志与 revision 指纹，并在全部成功后写入手动重填进度记录。\n如果边界检查确认重填起点前没有可回放 checkpoint，系统会停止并弹出第二次破坏性确认；只有你在第二次确认中授权后，才会替换本次范围内选中表的旧 checkpoint 基底并写入新的单表 checkpoint。\n\n取消、失败、终止或从中断处继续时，不会清理本次重填范围之外的聊天记录表格数据，也不会在未二次确认时替换 checkpoint 基底。`,
+      message: `即将执行手动填表。\n\n当前 full checkpoint：${checkpointFloorsLabel.value}\n本次重填范围：${manualRefillRangeLabel.value}\n选中表：${selectedSheetSummary.value}\n\n高风险操作：系统会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志，再以清理后的状态作为填表基底重新填写，最后写入新的单表 checkpoint。\n如果被删除的 checkpoint 是这些表唯一的数据基线，此前楼层的表格数据将无法恢复。\n\n范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或终止时会回滚到本次操作前的状态。`,
       dangerMessage: checkpointRiskMessage.value || undefined,
       confirmLabel: '确认并继续',
       cancelLabel: '取消',
-      confirmVariant: checkpointRiskMessage.value ? 'danger' : undefined,
+      confirmVariant: 'danger',
     });
     if (!confirmed) {
       manualUpdateBusy.value = false;
@@ -462,37 +462,17 @@ export function useManualUpdate(): ManualUpdateState {
       ));
 
     try {
-      const executeManualUpdate = async (confirmBoundaryReset: boolean) => {
-        const restoreAutoUpdateSettings = applyManualSettingsForOrchestrator();
-        try {
-          return await orchestrateManualUpdate_ACU(
-            targetManualTableKeys,
-            runProcessBatch,
-            async () => { await refreshMergedDataAndNotify_ACU(); },
-            { clearBeforeUpdate, confirmBoundaryReset, onProgress: handleProgress },
-          );
-        } finally {
-          restoreAutoUpdateSettings();
-        }
-      };
-
-      let result: Awaited<ReturnType<typeof orchestrateManualUpdate_ACU>> = await executeManualUpdate(false);
-      if (!result.success && result.requiresUserConfirmation){
-        const request = result.requiresUserConfirmation;
-        const dangerConfirmed = await dialogStore.confirm({
-          title: '破坏性手动重填确认',
-          message: `${request.message}\n\n高风险操作：确认后会在一次提交中删除本次重填范围内选中表的旧表基底，并写入新的单表 checkpoint，随后才继续本次手动填表。\n目标表：${request.targetSheetKeys.join('、')}\n目标消息索引：${request.contextScopeIndices.join('、')}\n\n范围外 checkpoint、范围外聊天记录表格数据和未选中的表不会被删除。`,
-          dangerMessage: '此操作不可撤销。取消将不会执行基底替换，不会写入新的单表 checkpoint，也不会继续本次手动填表。',
-          confirmLabel: '我已了解风险，继续执行',
-          cancelLabel: '取消',
-          confirmVariant: 'danger',
-        });
-        if (!dangerConfirmed) {
-          finishToast('info', '已取消破坏性基底替换。');
-          return;
-        }
-        notifyProgress('已确认破坏性基底替换，继续手动填表。');
-        result = await executeManualUpdate(true);
+      const restoreAutoUpdateSettings = applyManualSettingsForOrchestrator();
+      let result: Awaited<ReturnType<typeof orchestrateManualUpdate_ACU>>;
+      try {
+        result = await orchestrateManualUpdate_ACU(
+          targetManualTableKeys,
+          runProcessBatch,
+          async () => { await refreshMergedDataAndNotify_ACU(); },
+          { clearBeforeUpdate, onProgress: handleProgress },
+        );
+      } finally {
+        restoreAutoUpdateSettings();
       }
       finishToast(
         result.success ? (result.checkpointWarning ? 'warning' : 'success') : (abortRequested || result.error?.includes('终止') ? 'warning' : 'error'),

@@ -1,10 +1,10 @@
-import { readIsolatedTagData_ACU, writeIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
+import { cloneIsolatedData_ACU, readIsolatedTagData_ACU, writeIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import {
     clearSummaryVectorFlushTasksByScope_ACU,
     deleteSummaryVectorHotCacheByScope_ACU,
 } from '../../data/storage/vector-index-hot-cache';
 import { isSummaryOrOutlineTable_ACU } from '../../shared/utils';
-import { getChatArray_ACU, saveChatToHost_ACU } from '../chat/chat-service';
+import { getChatArray_ACU, saveChatToHost_ACU, saveChatToHostStrict_ACU } from '../chat/chat-service';
 import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU } from '../runtime/state-manager';
 import {
     assignSummaryVectorIndexStateToTagData_ACU,
@@ -21,6 +21,38 @@ function getCurrentSummaryVectorIndexSourceTableKey_ACU(): string {
         const table = tables[key];
         return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
     }) || 'summary';
+}
+
+export async function clearSummaryVectorIndexLayerFromChat_ACU(params: {
+    messageIndex: number;
+    isolationKey: string;
+    indexId: string;
+}): Promise<boolean> {
+    const chat = getChatArray_ACU();
+    const message = Array.isArray(chat) ? chat[params.messageIndex] : null;
+    if (!message || message.is_user) return false;
+
+    const nextIsolatedData = cloneIsolatedData_ACU(message);
+    const tagData = nextIsolatedData[params.isolationKey];
+    if (!tagData || typeof tagData !== 'object') return false;
+    const manifest = tagData.summaryVectorIndexManifest || tagData.summaryVectorIndexState?.manifest || null;
+    if (!manifest || String(manifest.indexId || '') !== String(params.indexId || '')) return false;
+
+    const previousIsolatedData = {
+        exists: Object.prototype.hasOwnProperty.call(message, 'TavernDB_ACU_IsolatedData'),
+        value: message.TavernDB_ACU_IsolatedData,
+    };
+    assignSummaryVectorIndexStateToTagData_ACU(tagData, null);
+    try {
+        message.TavernDB_ACU_IsolatedData = nextIsolatedData;
+        writeIsolatedTagData_ACU(message, params.isolationKey, tagData);
+        await saveChatToHostStrict_ACU();
+        return true;
+    } catch (error) {
+        if (previousIsolatedData.exists) message.TavernDB_ACU_IsolatedData = previousIsolatedData.value;
+        else delete message.TavernDB_ACU_IsolatedData;
+        throw error;
+    }
 }
 
 export async function deleteCurrentSummaryVectorIndexFromChat_ACU(): Promise<boolean> {

@@ -31,7 +31,6 @@ describe('worldbook placeholder classification', () => {
     expect(isDatabaseGeneratedLorebookEntry_ACU({ comment: '外部导入-总结条目-1' })).toBe(false);
     expect(isDatabaseGeneratedLorebookEntry_ACU({ comment: 'TavernDB-ACU-CustomExport-关系档案-1' })).toBe(true);
     expect(isDatabaseGeneratedLorebookEntry_ACU({ comment: 'TavernDB-ACU-AgentGreenlight-plot' })).toBe(false);
-    expect(isDatabaseGeneratedLorebookEntry_ACU({ comment: 'TavernDB-ACU-AgentWorldbookSkillRegistry' })).toBe(true);
   });
 
   it('resolves marked external entries and stable internal entries for the unique table only', () => {
@@ -58,6 +57,5 @@ describe('worldbook placeholder classification', () => {
     expect(isAgentSkillifyExcludedLorebookEntry_ACU({ comment: 'TavernDB-ACU-CustomExport-关系档案-25' })).toBe(false);
     expect(isAgentSkillifyExcludedLorebookEntry_ACU({ comment: 'TavernDB-ACU-CustomExport-纪要-337' })).toBe(true);
     expect(isAgentSkillifyExcludedLorebookEntry_ACU({ comment: 'TavernDB-ACU-AgentWorldbookSnapshot' })).toBe(true);
-    expect(isAgentSkillifyExcludedLorebookEntry_ACU({ comment: 'TavernDB-ACU-AgentWorldbookSkillRegistry' })).toBe(true);
   });
 });

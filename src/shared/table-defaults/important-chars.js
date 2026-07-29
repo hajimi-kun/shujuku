@@ -9,7 +9,7 @@ export const importantCharsSheet = {
     initNode: "游戏初始化时为当前在场的重要人物分别插入一个条目。",
     deleteNode: "禁止删除。",
     updateNode: "已有角色的状态、关系、想法或经历变化时更新；若角色死亡需在姓名旁标注（已死亡）。\nSQL示例: UPDATE important_characters SET is_absent = '是', past_experience = '新增经历...' WHERE name = '角色名';",
-    insertNode: "剧情中有未记录的重要人物登场时添加。\nSQL示例: INSERT INTO important_characters (row_id, name, gender_age, brief_intro, appearance, key_items, is_absent, past_experience) VALUES ((SELECT MAX(row_id)+1 FROM important_characters), '角色名', '女/20', '简介', '外貌描述', '物品', '否', '经历');",
+    insertNode: "剧情中有未记录的重要人物登场时添加。\nSQL示例: INSERT INTO important_characters (name, gender_age, brief_intro, appearance, key_items, is_absent, past_experience) VALUES ('角色名', '女/20', '简介', '外貌描述', '物品', '否', '经历');",
     ddl: `CREATE TABLE important_characters ( -- 重要角色表
   row_id INTEGER PRIMARY KEY, -- 行号
   name TEXT NOT NULL UNIQUE, -- 姓名

@@ -32,8 +32,10 @@ import {
   CHAT_TEMPLATE_ARCHIVE_OPTION_PREFIX_ACU,
   MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU,
   getChatScopedConfigContainer_ACU,
+  peekChatScopedConfigContainer_ACU,
   normalizeChatScopedConfigContainer_ACU,
   getChatSheetGuideContainer_ACU,
+  peekChatSheetGuideContainer_ACU,
   setChatScopedConfigContainer_ACU,
   setChatSheetGuideContainer_ACU,
 } from '../../../src/data/storage/chat-history';
@@ -141,6 +143,44 @@ describe('getChatScopedConfigContainer_ACU', () => {
     expect((result!.template as any).other.mode).toBe('inherit_global');
     expect((result!.template as any)[''].mode).toBe('chat_override');
     expect((metadata[CHAT_SCOPED_CONFIG_FIELD_ACU].template as any)[''].mode).toBe('chat_override');
+  });
+
+  it('事务快照纯读取会合并 legacy ScopedConfig 但不回写 chatMetadata', () => {
+    const metadataConfig = { version: 1, template: { other: { mode: 'inherit_global' } } };
+    const chatConfig = { version: 1, template: { '': { mode: 'chat_override' } } };
+    const metadata: any = { [CHAT_SCOPED_CONFIG_FIELD_ACU]: metadataConfig };
+    const updateChatMetadata = vi.fn();
+    _set_SillyTavern_API_ACU({
+      chatId: 'current-chat',
+      getCurrentChatId: () => 'current-chat',
+      chatMetadata: metadata,
+      updateChatMetadata,
+    } as any);
+
+    const result = peekChatScopedConfigContainer_ACU([{ [CHAT_SCOPED_CONFIG_FIELD_ACU]: chatConfig }]);
+
+    expect((result!.template as any)[''].mode).toBe('chat_override');
+    expect((metadata[CHAT_SCOPED_CONFIG_FIELD_ACU].template as any)['']).toBeUndefined();
+    expect(updateChatMetadata).not.toHaveBeenCalled();
+  });
+
+  it('事务快照在 ScopedConfig metadata 整字段缺失时仍只读 legacy 数据', () => {
+    const chatConfig = { version: 1, template: { '': { mode: 'chat_override' } } };
+    const metadata: any = {};
+    const updateChatMetadata = vi.fn();
+    _set_SillyTavern_API_ACU({
+      chatId: 'current-chat',
+      getCurrentChatId: () => 'current-chat',
+      chatMetadata: metadata,
+      updateChatMetadata,
+    } as any);
+
+    const result = peekChatScopedConfigContainer_ACU([{ [CHAT_SCOPED_CONFIG_FIELD_ACU]: chatConfig }]);
+
+    expect((result!.template as any)[''].mode).toBe('chat_override');
+    expect(result).not.toBe(chatConfig);
+    expect(metadata[CHAT_SCOPED_CONFIG_FIELD_ACU]).toBeUndefined();
+    expect(updateChatMetadata).not.toHaveBeenCalled();
   });
 
   it('chat[0] 被删除或无字段时回退到 chatMetadata', () => {
@@ -323,6 +363,45 @@ describe('getChatSheetGuideContainer_ACU', () => {
     expect((result!.tags as any).other.data.sheet_old.name).toBe('旧');
     expect((result!.tags as any)[''].data.sheet_new.name).toBe('新');
     expect((metadata[CHAT_SHEET_GUIDE_FIELD_ACU].tags as any)[''].data.sheet_new.name).toBe('新');
+  });
+
+  it('事务快照纯读取会合并 legacy SheetGuide 但不回写 chatMetadata', () => {
+    const metadataGuide = { version: 2, tags: { other: { data: { sheet_old: { name: '旧' } } } } };
+    const chatGuide = { version: 2, tags: { '': { data: { sheet_new: { name: '新' } } } } };
+    const metadata: any = { [CHAT_SHEET_GUIDE_FIELD_ACU]: metadataGuide };
+    const updateChatMetadata = vi.fn();
+    _set_SillyTavern_API_ACU({
+      chatId: 'current-chat',
+      getCurrentChatId: () => 'current-chat',
+      chatMetadata: metadata,
+      updateChatMetadata,
+    } as any);
+
+    const result = peekChatSheetGuideContainer_ACU([{ [CHAT_SHEET_GUIDE_FIELD_ACU]: chatGuide }]);
+
+    expect((result!.tags as any).other.data.sheet_old.name).toBe('旧');
+    expect((result!.tags as any)[''].data.sheet_new.name).toBe('新');
+    expect((metadata[CHAT_SHEET_GUIDE_FIELD_ACU].tags as any)['']).toBeUndefined();
+    expect(updateChatMetadata).not.toHaveBeenCalled();
+  });
+
+  it('事务快照在 SheetGuide metadata 整字段缺失时仍只读 legacy 数据', () => {
+    const chatGuide = { version: 2, tags: { '': { data: { sheet_new: { name: '新' } } } } };
+    const metadata: any = {};
+    const updateChatMetadata = vi.fn();
+    _set_SillyTavern_API_ACU({
+      chatId: 'current-chat',
+      getCurrentChatId: () => 'current-chat',
+      chatMetadata: metadata,
+      updateChatMetadata,
+    } as any);
+
+    const result = peekChatSheetGuideContainer_ACU([{ [CHAT_SHEET_GUIDE_FIELD_ACU]: chatGuide }]);
+
+    expect((result!.tags as any)[''].data.sheet_new.name).toBe('新');
+    expect(result).not.toBe(chatGuide);
+    expect(metadata[CHAT_SHEET_GUIDE_FIELD_ACU]).toBeUndefined();
+    expect(updateChatMetadata).not.toHaveBeenCalled();
   });
 
   it('SheetGuide 在首条消息字段不存在时回退到 chatMetadata', () => {

@@ -76,3 +76,14 @@ Checkpoint 导入导出以 `acu-table-checkpoint` V1 文件在当前聊天间迁
 | 待执行 | 待执行 | sqlite → sqlite | 待执行 | 待执行 | 待执行 | 待执行 | 待执行 | 待执行 |
 
 本表为空不代表通过。当前尚未在真实 SillyTavern 宿主执行，cp-09 保持未完成。
+
+## 补充：模板切换的结构变更语义（2026-07）
+
+模板切换时，新增表、新增列、列定义变化、列删除/隐藏、元数据变化统一表达为数据边界（最新 AI 楼层）上的 per-sheet full checkpoint（`sheet_rebase` timeline）。
+
+```text
+历史行：保留匹配列数据，新列按填充规则得值（literal DEFAULT / 空串 / null）。
+历史楼层：零补写，旧 frame 原样不动（新结构在旧楼层不存在，属合法状态）。
+边界及之后：回放到边界楼层时由 checkpoint 整表呈现新结构，最终快照正确显示。
+```
+

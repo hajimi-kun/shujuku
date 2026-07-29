@@ -91,6 +91,10 @@ async function mountPlotPage(opts: {
     getCurrentCharacterWorldbookBinding_ACU: mockGetCurrentCharacterWorldbookBinding,
     getCharLorebooks_ACU: vi.fn(async () => ({ primary: 'CharBook', additional: [] })),
   }));
+  vi.doMock('../../../src/service/agent/agent-worldbook-takeover', () => ({
+    getPlotAgentWorldbookSnapshot_ACU: () => ({ active: false, selectionSignature: '', createdAt: 0, books: {} }),
+    refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU: vi.fn(async () => ({ active: false, selectionSignature: '', createdAt: 0, books: {} })),
+  }));
 
   const mount = await import('../../../src/presentation-v2/bootstrap/mount');
   await mount.openAcuV2App();

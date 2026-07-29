@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { collectV2CheckpointFloorsFromChat_ACU, getLatestTableAppendMessageIndexFromChat_ACU, resolveTableHistoryStateFromChat_ACU } from '../../../src/service/table/table-history';
+import {
+  collectV2CheckpointFloorsFromChat_ACU,
+  getLatestTableAppendMessageIndexFromChat_ACU,
+  getLatestV2FullCheckpointMessageIndex_ACU,
+  getLatestV2SheetReplayMessageIndex_ACU,
+  resolveTableHistoryStateFromChat_ACU,
+} from '../../../src/service/table/table-history';
 
 const settings = {
   dataIsolationEnabled: false,
@@ -418,5 +424,64 @@ describe('resolveTableHistoryStateFromChat_ACU', () => {
       // 历史 fixture：reason:'periodic' 仅表示旧数据兼容，新策略不再生成 periodic full checkpoint。
       { messageIndex: 4, aiFloor: 3, reason: 'periodic', createdAt: 2 },
     ]);
+  });
+});
+
+describe('V2 replay layer routing', () => {
+  it('将最新 full checkpoint 作为基底，而不是 sheet 增量追加目标', () => {
+    const chat = [
+      v2Message({
+        version: 2,
+        checkpoint: {
+          kind: 'full', createdAt: 1, reason: 'init',
+          data: { mate: {}, sheet_a: { content: [['row_id']] }, sheet_b: { content: [['row_id']] } },
+        },
+        logEntries: [],
+      }),
+      { is_user: true },
+      v2Message({
+        version: 2,
+        logEntries: [{
+          seq: 1, entryId: 'a-1', createdAt: 2, source: 'manual_crud', targetMessageIndex: 2, aiFloor: 2,
+          filledSheetKeys: [], changedSheetKeys: ['sheet_a'], groupKeys: [],
+          operations: [{ kind: 'row_upsert', sheetKey: 'sheet_a', rowId: '1', cells: ['1'] }],
+        }],
+      }),
+      v2Message({
+        version: 2,
+        perSheetCheckpoints: {
+          sheet_b: { kind: 'sheet_full', createdAt: 3, reason: 'manual', sheetKey: 'sheet_b', data: { content: [['row_id']] } },
+        },
+        logEntries: [],
+      }),
+    ];
+
+    expect(getLatestV2FullCheckpointMessageIndex_ACU(chat, '')).toBe(0);
+    expect(getLatestV2SheetReplayMessageIndex_ACU(chat, '', 'sheet_a')).toBe(2);
+    expect(getLatestV2SheetReplayMessageIndex_ACU(chat, '', 'sheet_b')).toBe(3);
+  });
+
+  it('对没有显式单表 replay 层的 sheet 返回 -1，并忽略 checkpoint 之前的历史', () => {
+    const chat = [
+      v2Message({
+        version: 2,
+        logEntries: [{
+          seq: 1, entryId: 'old-a', createdAt: 1, source: 'manual_crud', targetMessageIndex: 0, aiFloor: 1,
+          filledSheetKeys: [], changedSheetKeys: ['sheet_a'], groupKeys: [],
+          operations: [{ kind: 'row_delete', sheetKey: 'sheet_a', rowId: '1' }],
+        }],
+      }),
+      v2Message({
+        version: 2,
+        checkpoint: {
+          kind: 'full', createdAt: 2, reason: 'init',
+          data: { mate: {}, sheet_a: { content: [['row_id']] }, sheet_b: { content: [['row_id']] } },
+        },
+        logEntries: [],
+      }),
+    ];
+
+    expect(getLatestV2SheetReplayMessageIndex_ACU(chat, '', 'sheet_a')).toBe(-1);
+    expect(getLatestV2SheetReplayMessageIndex_ACU(chat, '', 'sheet_b')).toBe(-1);
   });
 });

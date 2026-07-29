@@ -21,6 +21,8 @@ vi.mock('../../../src/shared/utils', () => ({
 
 import {
   isWorldbookApiAvailable_ACU,
+  normalizeLorebookNameForMatch_ACU,
+  resolveLorebookNameFromList_ACU,
   isLorebookNotFoundError_ACU,
   getLorebookEntries_ACU,
   setLorebookEntries_ACU,
@@ -46,6 +48,21 @@ describe('isWorldbookApiAvailable_ACU', () => {
   it('API 可用返回 true', () => {
     mockTavernHelper.getLorebookEntries = vi.fn();
     expect(isWorldbookApiAvailable_ACU()).toBe(true);
+  });
+});
+
+describe('世界书名称匹配', () => {
+  it('兼容全角字符、零宽字符、NBSP 与组合字符差异', () => {
+    expect(normalizeLorebookNameForMatch_ACU('  ＡＢ\u200BＣ\u00A0e\u0301  ')).toBe('ABC é');
+    expect(resolveLorebookNameFromList_ACU('ＡＢ\u200BＣ', ['ABC'])).toBe('ABC');
+  });
+
+  it('匹配时返回宿主列表中的原始真实名称', () => {
+    expect(resolveLorebookNameFromList_ACU('剧情书', ['剧\u200B情书'])).toBe('剧\u200B情书');
+  });
+
+  it('归一化后出现重名时拒绝猜测', () => {
+    expect(resolveLorebookNameFromList_ACU('ＡＢＣ', ['ABC', 'ＡＢＣ\u200B'])).toBeNull();
   });
 });
 
@@ -79,6 +96,63 @@ describe('getLorebookEntries_ACU', () => {
     const entries = [{ uid: 1, content: '条目1' }];
     mockTavernHelper.getLorebookEntries = vi.fn().mockResolvedValue(entries);
     expect(await getLorebookEntries_ACU('book1')).toEqual(entries);
+  });
+
+  it('名称仅有 Unicode 或不可见字符差异时使用宿主真实名称重试', async () => {
+    const entries = [{ uid: 1, content: '条目1' }];
+    mockTavernHelper.getLorebookEntries = vi.fn()
+      .mockRejectedValueOnce(new Error('Worldbook "ABC" not found'))
+      .mockResolvedValueOnce(entries);
+    mockTavernHelper.getLorebooks = vi.fn().mockResolvedValue(['ＡＢ\u200BＣ']);
+
+    expect(await getLorebookEntries_ACU('ABC')).toEqual(entries);
+    expect(mockTavernHelper.getLorebookEntries).toHaveBeenNthCalledWith(1, 'ABC');
+    expect(mockTavernHelper.getLorebookEntries).toHaveBeenNthCalledWith(2, 'ＡＢ\u200BＣ');
+  });
+
+  it('真实名称重试失败时保留首次 not-found 错误并附加重试诊断', async () => {
+    const originalError = new Error('Worldbook "ABC" not found');
+    const retryError = new Error('network unavailable');
+    mockTavernHelper.getLorebookEntries = vi.fn()
+      .mockRejectedValueOnce(originalError)
+      .mockRejectedValueOnce(retryError);
+    mockTavernHelper.getLorebooks = vi.fn().mockResolvedValue(['ＡＢ\u200BＣ']);
+
+    await expect(getLorebookEntries_ACU('ABC')).rejects.toBe(originalError);
+    expect((originalError as any).lorebookResolvedName).toBe('ＡＢ\u200BＣ');
+    expect((originalError as any).lorebookRetryError).toBe(retryError);
+  });
+
+  it('原始错误不可扩展时仍保留错误对象并输出脱敏重试诊断', async () => {
+    const sensitiveText = '不得泄露的宿主错误正文';
+    const originalError = Object.preventExtensions(new Error('Worldbook "ABC" not found'));
+    const retryError = new Error(sensitiveText);
+    mockTavernHelper.getLorebookEntries = vi.fn()
+      .mockRejectedValueOnce(originalError)
+      .mockRejectedValueOnce(retryError);
+    mockTavernHelper.getLorebooks = vi.fn().mockResolvedValue(['ＡＢ\u200BＣ']);
+
+    await expect(getLorebookEntries_ACU('ABC')).rejects.toBe(originalError);
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      '[WorldbookGateway] 世界书真实名称重试失败，原始错误对象不可扩展。',
+      {
+        phase: 'retry_resolved_lorebook_name',
+        requestedName: 'ABC',
+        resolvedName: 'ＡＢ\u200BＣ',
+        error: { category: 'read_failed' },
+      },
+    );
+    expect(JSON.stringify(mockLogWarn.mock.calls)).not.toContain(sensitiveText);
+  });
+
+  it('非 not-found 错误不枚举列表也不重试', async () => {
+    const error = new Error('permission denied');
+    mockTavernHelper.getLorebookEntries = vi.fn().mockRejectedValue(error);
+    mockTavernHelper.getLorebooks = vi.fn();
+
+    await expect(getLorebookEntries_ACU('ABC')).rejects.toBe(error);
+    expect(mockTavernHelper.getLorebooks).not.toHaveBeenCalled();
+    expect(mockTavernHelper.getLorebookEntries).toHaveBeenCalledTimes(1);
   });
 });
 

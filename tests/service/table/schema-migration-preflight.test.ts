@@ -31,6 +31,48 @@ describe('schema migration preflight', () => {
     expect({ baseline, candidate }).toEqual(before);
   });
 
+  it('未确认删列返回结构化确认 issue 且不返回 operation', async () => {
+    const baseline = state(sheet({
+      content: [['row_id', 'name', 'note'], ['1', 'iron sword', 'old note']],
+      sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT, note TEXT);' },
+    }));
+    const candidate = state(sheet({
+      content: [['row_id', 'name'], ['1', 'iron sword']],
+      sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT);' },
+    }));
+    const before = structuredClone({ baseline, candidate });
+
+    const result = await preflightSchemaMigrations_ACU({ baselineData: baseline, candidateData: candidate });
+
+    expect(result.operations).toEqual([]);
+    expect(result.issues).toEqual([expect.objectContaining({
+      code: 'DESTRUCTIVE_COLUMN_DROP_CONFIRMATION_REQUIRED',
+      sheetKey: 'sheet_inventory',
+      tableName: '背包',
+      affectedRowCount: 1,
+      droppedColumns: [{ physicalName: 'note', displayHeader: 'note', index: 2 }],
+    })]);
+    expect(result.blockers).toHaveLength(1);
+    expect({ baseline, candidate }).toEqual(before);
+  });
+
+  it('已确认删列返回 destructiveChangeConfirmed operation', async () => {
+    const baseline = state(sheet({
+      content: [['row_id', 'name', 'note'], ['1', 'iron sword', 'old note']],
+      sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT, note TEXT);' },
+    }));
+    const candidate = state(sheet({
+      content: [['row_id', 'name'], ['1', 'iron sword']],
+      sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT);' },
+    }));
+
+    const result = await preflightSchemaMigrations_ACU({ baselineData: baseline, candidateData: candidate, destructiveChangeConfirmed: true });
+
+    expect(result.blockers).toEqual([]);
+    expect(result.issues).toEqual([]);
+    expect(result.operations).toMatchObject([{ migrationPolicy: { destructiveChangeConfirmed: true } }]);
+  });
+
   it('P2 physical rename 没有显式 intent 时 fail closed', async () => {
     const baseline = state(sheet());
     const candidate = state(sheet({

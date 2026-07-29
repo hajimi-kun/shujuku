@@ -496,6 +496,7 @@ import { useVisualizerConfigEditing } from "../../composables/visualizer/useVisu
 import { useVisualizerData } from "../../composables/visualizer/useVisualizerData";
 import { useVisualizerSave } from "../../composables/visualizer/useVisualizerSave";
 import { acuClearTimeout, acuSetTimeout, type AcuTimerHandle } from "../../bootstrap/host-env";
+import { getSheetColumnProjection_ACU } from "../../../shared/ddl-utils";
 import { useDialogStore } from "../../stores/dialog-store";
 import { useVisualizerStore } from "../../stores/visualizer-store";
 import VisualizerAssistantPanel from "./VisualizerAssistantPanel.vue";
@@ -543,6 +544,20 @@ const save = useVisualizerSave({
       message: `这会用当前编辑结果覆盖全局预设"${presetName}"。如果不确定，可以先取消，当前草稿会继续保留在编辑器里。`,
       confirmLabel: "覆盖并保存",
       confirmVariant: "primary",
+    });
+  },
+  confirmDestructiveSchemaChange(summary) {
+    const details = summary.sheets.map(sheet => {
+      const columns = sheet.droppedColumns
+        .map(column => `「${column.displayHeader}」`)
+        .join("、");
+      return `表「${sheet.tableName}」将删除 ${columns}（影响 ${sheet.affectedRowCount} 行历史数据）`;
+    }).join("；");
+    return openConfirmDialog({
+      title: "确认保存并永久删除列数据",
+      message: `${details}。这会把当前聊天中这些列的历史值从本次模板提交后的结构中移除，不能直接恢复；如需恢复只能依赖提交前备份或 checkpoint。确认仅适用于当前草稿快照，草稿变化后必须重新确认。`,
+      confirmLabel: "确认删除并保存",
+      confirmVariant: "danger",
     });
   },
 });
@@ -625,9 +640,15 @@ function moveSheet(key: string, direction: "up" | "down"): void {
 const headers = computed<string[]>(() => {
   const content = visualizer.currentSheet?.content;
   if (!Array.isArray(content) || !Array.isArray(content[0])) return [];
-  return content[0]
-    .slice(1)
-    .map((item: any, index: number) => String(item || `字段 ${index + 1}`));
+  return content[0].slice(1).map((item: any, index: number) => String(item || `字段 ${index + 1}`));
+});
+
+const visibleColumns = computed(() => {
+  const sheet = visualizer.currentSheet;
+  if (!sheet) return [];
+  return getSheetColumnProjection_ACU(sheet).visibleColumns
+    .filter(column => column.sourceIndex > 0)
+    .map(column => ({ ...column, columnIndex: column.sourceIndex - 1 }));
 });
 
 const VISUALIZER_SHORT_FIELD_CHAR_LIMIT = 24;
@@ -825,10 +846,10 @@ function isShortDataField(value: string): boolean {
 }
 
 function getColumnIsShort(dataRows: any[][]): boolean[] {
-  return headers.value.map((_, columnIndex) =>
+  return visibleColumns.value.map(column =>
     dataRows.every((row: any[]) =>
       isShortDataField(
-        String(Array.isArray(row) ? (row[columnIndex + 1] ?? "") : ""),
+        String(Array.isArray(row) ? (row[column.sourceIndex] ?? "") : ""),
       ),
     ),
   );
@@ -842,7 +863,8 @@ function getEffectiveColumnIsShort(dataRows: any[][]): boolean[] {
     return columnIsShort;
   }
   return columnIsShort.map((value, index) =>
-    index === active.columnIndex ? snapshot[index] : value,
+    visibleColumns.value[index]?.columnIndex === active.columnIndex
+      ? snapshot[index] : value,
   );
 }
 
@@ -855,9 +877,9 @@ function buildFieldLayoutRows<T extends { columnIndex: number }>(
     const field = fields[index];
     const next = fields[index + 1];
     const pairWithNext =
-      columnIsShort[field.columnIndex] === true &&
+      columnIsShort[index] === true &&
       !!next &&
-      columnIsShort[next.columnIndex] === true;
+      columnIsShort[index + 1] === true;
     if (pairWithNext && next) {
       result.push({
         key: `${field.columnIndex}-${next.columnIndex}`,
@@ -1049,23 +1071,23 @@ const rows = computed(() => {
   return visibleDataRows.value.map((row: any[], visibleIndex: number) => {
     const index = dataPageStartIndex.value + visibleIndex;
     const rowLocked = lockedRows.has(index);
-    const fields = headers.value.map((header, columnIndex) => ({
-      header,
-      columnIndex,
-      value: String(Array.isArray(row) ? (row[columnIndex + 1] ?? "") : ""),
+    const fields = visibleColumns.value.map(column => ({
+      header: column.header,
+      columnIndex: column.columnIndex,
+      value: String(Array.isArray(row) ? (row[column.sourceIndex] ?? "") : ""),
       rowLocked,
-      columnLocked: lockedColumns.has(columnIndex),
-      cellLocked: lockedCells.has(`${index}:${columnIndex}`),
+      columnLocked: lockedColumns.has(column.columnIndex),
+      cellLocked: lockedCells.has(`${index}:${column.columnIndex}`),
       specialIndexLocked:
         specialIndexInfo.enabled &&
-        specialIndexInfo.index === columnIndex &&
+        specialIndexInfo.index === column.columnIndex &&
         specialIndexLocked,
       locked:
         rowLocked ||
-        lockedColumns.has(columnIndex) ||
-        lockedCells.has(`${index}:${columnIndex}`) ||
+        lockedColumns.has(column.columnIndex) ||
+        lockedCells.has(`${index}:${column.columnIndex}`) ||
         (specialIndexInfo.enabled &&
-          specialIndexInfo.index === columnIndex &&
+          specialIndexInfo.index === column.columnIndex &&
           specialIndexLocked),
     }));
     return {

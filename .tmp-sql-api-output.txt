@@ -1,0 +1,396 @@
+
+[1m[46m RUN [49m[22m [36mv3.2.7 [39m[90me:/xiangmu/shujuku[39m
+
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22misSqlReadStatement_ACU[2m > [22m识别查询类 SQL[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22misSqlReadStatement_ACU[2m > [22m识别写入类 SQL[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22misSqlReadStatement_ACU[2m > [22m拒绝多语句和 WITH 包裹写入，避免查询 API 绕过写事务[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlQuery 调用 provider.executeQuery 并返回对象行[32m 2[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlQuery 支持对象参数和 limit/offset 包装[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mqueryTableRows 支持声明式分页查询[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mqueryTableRows 将唯一历史 DDL 名定位到显示名派生的 runtime 表[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mquerySql 拒绝写语句[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mquerySql 拒绝 SELECT 后拼接写语句[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22m当前只读 SQL 绕过 readiness 并直接使用裸 provider，作为 P5 生命周期修复基线[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22m当前 raw SQL 不调用 NameMapper，中文表列名会原样进入 provider，作为 P6 翻译修复基线[32m 1[2mms[22m[39m
+ [31m×[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlMutation 将唯一 DDL alias 重绑定为 runtime SQL，并记录 sql_sheet_batch[32m 10[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ ObjectContaining{…} ][90m
+
+Received: 
+
+[1m  1st spy call:
+
+[22m[2m  [[22m
+[32m-   ObjectContaining {[90m
+[31m+   {[90m
+[31m+     "assumeCommitLock": true,[90m
+[31m+     "checkpointReason": undefined,[90m
+[31m+     "forceCheckpoint": undefined,[90m
+[31m+     "manualRefillProgress": undefined,[90m
+[2m      "operations": [[22m
+[2m        {[22m
+[2m          "kind": "sql_sheet_batch",[22m
+[2m          "params": [[22m
+[2m            [[22m
+[2m              "铁剑",[22m
+[2m            ],[22m
+[2m          ],[22m
+[32m-         "reason": "system",[90m
+[31m+         "reason": "manual_crud",[90m
+[2m          "sheetKey": "sheet_0",[22m
+[2m          "statements": [[22m
+[2m            "INSERT INTO t(name) VALUES (?)",[22m
+[2m          ],[22m
+[2m          "tableName": "t",[22m
+[2m        },[22m
+[2m      ],[22m
+[31m+     "replaceExistingIncremental": undefined,[90m
+[31m+     "revisionWriteSet": [[90m
+[31m+       {[90m
+[31m+         "kind": "sheet",[90m
+[31m+         "sheetKey": "sheet_0",[90m
+[31m+       },[90m
+[31m+     ],[90m
+[2m      "source": "raw_sql_mutation",[22m
+[31m+     "strictSave": undefined,[90m
+[31m+     "tableData": {[90m
+[31m+       "mate": {[90m
+[31m+         "type": "acu",[90m
+[31m+         "version": 1,[90m
+[31m+       },[90m
+[31m+       "sheet_0": {[90m
+[31m+         "content": [[90m
+[31m+           [[90m
+[31m+             "row_id",[90m
+[31m+             "name",[90m
+[31m+           ],[90m
+[31m+           [[90m
+[31m+             "1",[90m
+[31m+             "旧值",[90m
+[31m+           ],[90m
+[31m+         ],[90m
+[31m+         "name": "T",[90m
+[31m+         "sourceData": {[90m
+[31m+           "ddl": "CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT);",[90m
+[31m+         },[90m
+[31m+       },[90m
+[31m+     },[90m
+[31m+     "targetMessageIndex": -1,[90m
+[2m      "targetSheetKeys": [[22m
+[2m        "sheet_0",[22m
+[2m      ],[22m
+[31m+     "trackAsUpdate": false,[90m
+[2m      "trackingSheetKeys": [],[22m
+[31m+     "transactionContext": {[90m
+[31m+       "baseRevision": null,[90m
+[31m+       "chatKey": "chat-a",[90m
+[31m+       "isolationKey": "iso-a",[90m
+[31m+       "runCommit": [Function runCommit],[90m
+[31m+       "source": "raw_sql_mutation",[90m
+[31m+       "transactionId": "tx-test",[90m
+[31m+       "writeSet": [[90m
+[31m+         {[90m
+[31m+           "kind": "sheet",[90m
+[31m+           "sheetKey": "sheet_0",[90m
+[31m+         },[90m
+[31m+       ],[90m
+[31m+     },[90m
+[31m+     "updateGroupKeys": null,[90m
+[2m    },[22m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlMutation 在同 scope 锁内执行 SQL 和分层写回[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlMutation 未声明 targetSheetKeys 时按 SQL 表名推断 sheet 级 writeSet[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlMutation 写入失败时不保存不通知[32m 1[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlMutation 运行时未就绪时拒绝写入[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlMutation 支持跳过保存和通知[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlMutation 支持指定分层写回范围和附加追踪范围[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlMutation 将 targetSheetKeys 转成 sheet 级 writeSet 并贯通 transactionContext[32m 0[2mms[22m[39m
+ [31m×[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlBatch 执行并持久化 runtime SQL 与 physical tableName[32m 2[2mms[22m[39m
+[31m   → expected "spy" to be called with arguments: [ ObjectContaining{…} ][90m
+
+Received: 
+
+[1m  1st spy call:
+
+[22m[2m  [[22m
+[32m-   ObjectContaining {[90m
+[31m+   {[90m
+[31m+     "assumeCommitLock": true,[90m
+[31m+     "checkpointReason": undefined,[90m
+[31m+     "forceCheckpoint": undefined,[90m
+[31m+     "manualRefillProgress": undefined,[90m
+[2m      "operations": [[22m
+[2m        {[22m
+[2m          "kind": "sql_sheet_batch",[22m
+[2m          "reason": "manual_crud",[22m
+[2m          "sheetKey": "sheet_0",[22m
+[2m          "statements": [[22m
+[32m-           "INSERT INTO t VALUES (1, 'a')",[90m
+[32m-           "UPDATE t SET name = 'b' WHERE row_id = 1",[90m
+[31m+           "INSERT INTO t VALUES (1, 'a')[90m
+[31m+ UPDATE t SET name = 'b' WHERE row_id = 1",[90m
+[2m          ],[22m
+[2m          "tableName": "t",[22m
+[31m+       },[90m
+[31m+     ],[90m
+[31m+     "replaceExistingIncremental": undefined,[90m
+[31m+     "revisionWriteSet": [[90m
+[31m+       {[90m
+[31m+         "kind": "sheet",[90m
+[31m+         "sheetKey": "sheet_0",[90m
+[2m        },[22m
+[2m      ],[22m
+[2m      "source": "raw_sql_batch",[22m
+[31m+     "strictSave": undefined,[90m
+[31m+     "tableData": {[90m
+[31m+       "mate": {[90m
+[31m+         "type": "acu",[90m
+[31m+         "version": 1,[90m
+[31m+       },[90m
+[31m+       "sheet_0": {[90m
+[31m+         "content": [[90m
+[31m+           [[90m
+[31m+             "row_id",[90m
+[31m+           ],[90m
+[31m+           [[90m
+[31m+             "1",[90m
+[31m+           ],[90m
+[31m+         ],[90m
+[31m+         "name": "T",[90m
+[31m+       },[90m
+[31m+     },[90m
+[31m+     "targetMessageIndex": -1,[90m
+[2m      "targetSheetKeys": [[22m
+[2m        "sheet_0",[22m
+[2m      ],[22m
+[31m+     "trackAsUpdate": false,[90m
+[2m      "trackingSheetKeys": [],[22m
+[31m+     "transactionContext": {[90m
+[31m+       "baseRevision": null,[90m
+[31m+       "chatKey": "chat-a",[90m
+[31m+       "isolationKey": "iso-a",[90m
+[31m+       "runCommit": [Function runCommit],[90m
+[31m+       "source": "raw_sql_batch",[90m
+[31m+       "transactionId": "tx-test",[90m
+[31m+       "writeSet": [[90m
+[31m+         {[90m
+[31m+           "kind": "sheet",[90m
+[31m+           "sheetKey": "sheet_0",[90m
+[31m+         },[90m
+[31m+       ],[90m
+[31m+     },[90m
+[31m+     "updateGroupKeys": null,[90m
+[2m    },[22m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlBatch 支持覆盖 applyEdits 推断的写回范围[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlBatch 失败时返回错误且不保存[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlBatch 运行时未就绪时拒绝写入[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlMutation 保存失败时由公共提交模型返回错误[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSql 自动分派查询[32m 0[2mms[22m[39m
+ [32m✓[39m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSql 自动分派写入[32m 0[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlMutation 将唯一 DDL alias 重绑定为 runtime SQL，并记录 sql_sheet_batch
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ ObjectContaining{…} ][90m
+
+Received: 
+
+[1m  1st spy call:
+
+[22m[2m  [[22m
+[32m-   ObjectContaining {[90m
+[31m+   {[90m
+[31m+     "assumeCommitLock": true,[90m
+[31m+     "checkpointReason": undefined,[90m
+[31m+     "forceCheckpoint": undefined,[90m
+[31m+     "manualRefillProgress": undefined,[90m
+[2m      "operations": [[22m
+[2m        {[22m
+[2m          "kind": "sql_sheet_batch",[22m
+[2m          "params": [[22m
+[2m            [[22m
+[2m              "铁剑",[22m
+[2m            ],[22m
+[2m          ],[22m
+[32m-         "reason": "system",[90m
+[31m+         "reason": "manual_crud",[90m
+[2m          "sheetKey": "sheet_0",[22m
+[2m          "statements": [[22m
+[2m            "INSERT INTO t(name) VALUES (?)",[22m
+[2m          ],[22m
+[2m          "tableName": "t",[22m
+[2m        },[22m
+[2m      ],[22m
+[31m+     "replaceExistingIncremental": undefined,[90m
+[31m+     "revisionWriteSet": [[90m
+[31m+       {[90m
+[31m+         "kind": "sheet",[90m
+[31m+         "sheetKey": "sheet_0",[90m
+[31m+       },[90m
+[31m+     ],[90m
+[2m      "source": "raw_sql_mutation",[22m
+[31m+     "strictSave": undefined,[90m
+[31m+     "tableData": {[90m
+[31m+       "mate": {[90m
+[31m+         "type": "acu",[90m
+[31m+         "version": 1,[90m
+[31m+       },[90m
+[31m+       "sheet_0": {[90m
+[31m+         "content": [[90m
+[31m+           [[90m
+[31m+             "row_id",[90m
+[31m+             "name",[90m
+[31m+           ],[90m
+[31m+           [[90m
+[31m+             "1",[90m
+[31m+             "旧值",[90m
+[31m+           ],[90m
+[31m+         ],[90m
+[31m+         "name": "T",[90m
+[31m+         "sourceData": {[90m
+[31m+           "ddl": "CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT);",[90m
+[31m+         },[90m
+[31m+       },[90m
+[31m+     },[90m
+[31m+     "targetMessageIndex": -1,[90m
+[2m      "targetSheetKeys": [[22m
+[2m        "sheet_0",[22m
+[2m      ],[22m
+[31m+     "trackAsUpdate": false,[90m
+[2m      "trackingSheetKeys": [],[22m
+[31m+     "transactionContext": {[90m
+[31m+       "baseRevision": null,[90m
+[31m+       "chatKey": "chat-a",[90m
+[31m+       "isolationKey": "iso-a",[90m
+[31m+       "runCommit": [Function runCommit],[90m
+[31m+       "source": "raw_sql_mutation",[90m
+[31m+       "transactionId": "tx-test",[90m
+[31m+       "writeSet": [[90m
+[31m+         {[90m
+[31m+           "kind": "sheet",[90m
+[31m+           "sheetKey": "sheet_0",[90m
+[31m+         },[90m
+[31m+       ],[90m
+[31m+     },[90m
+[31m+     "updateGroupKeys": null,[90m
+[2m    },[22m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/sql-api.test.ts:[2m255:46[22m[39m
+    [90m253| [39m
+    [90m254| [39m    expect(mocks.executeMutation).toHaveBeenCalledWith('INSERT INTO t(…
+    [90m255| [39m    expect(mocks.persistTablesToChatMessage).toHaveBeenCalledWith(expe…
+    [90m   | [39m                                             [31m^[39m
+    [90m256| [39m      source[33m:[39m [32m'raw_sql_mutation'[39m[33m,[39m
+    [90m257| [39m      targetSheetKeys[33m:[39m [[32m'sheet_0'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m tests/presentation/sql-api.test.ts[2m > [22mcreateSqlApi[2m > [22mexecuteSqlBatch 执行并持久化 runtime SQL 与 physical tableName
+[31m[1mAssertionError[22m: expected "spy" to be called with arguments: [ ObjectContaining{…} ][90m
+
+Received: 
+
+[1m  1st spy call:
+
+[22m[2m  [[22m
+[32m-   ObjectContaining {[90m
+[31m+   {[90m
+[31m+     "assumeCommitLock": true,[90m
+[31m+     "checkpointReason": undefined,[90m
+[31m+     "forceCheckpoint": undefined,[90m
+[31m+     "manualRefillProgress": undefined,[90m
+[2m      "operations": [[22m
+[2m        {[22m
+[2m          "kind": "sql_sheet_batch",[22m
+[2m          "reason": "manual_crud",[22m
+[2m          "sheetKey": "sheet_0",[22m
+[2m          "statements": [[22m
+[32m-           "INSERT INTO t VALUES (1, 'a')",[90m
+[32m-           "UPDATE t SET name = 'b' WHERE row_id = 1",[90m
+[31m+           "INSERT INTO t VALUES (1, 'a')[90m
+[31m+ UPDATE t SET name = 'b' WHERE row_id = 1",[90m
+[2m          ],[22m
+[2m          "tableName": "t",[22m
+[31m+       },[90m
+[31m+     ],[90m
+[31m+     "replaceExistingIncremental": undefined,[90m
+[31m+     "revisionWriteSet": [[90m
+[31m+       {[90m
+[31m+         "kind": "sheet",[90m
+[31m+         "sheetKey": "sheet_0",[90m
+[2m        },[22m
+[2m      ],[22m
+[2m      "source": "raw_sql_batch",[22m
+[31m+     "strictSave": undefined,[90m
+[31m+     "tableData": {[90m
+[31m+       "mate": {[90m
+[31m+         "type": "acu",[90m
+[31m+         "version": 1,[90m
+[31m+       },[90m
+[31m+       "sheet_0": {[90m
+[31m+         "content": [[90m
+[31m+           [[90m
+[31m+             "row_id",[90m
+[31m+           ],[90m
+[31m+           [[90m
+[31m+             "1",[90m
+[31m+           ],[90m
+[31m+         ],[90m
+[31m+         "name": "T",[90m
+[31m+       },[90m
+[31m+     },[90m
+[31m+     "targetMessageIndex": -1,[90m
+[2m      "targetSheetKeys": [[22m
+[2m        "sheet_0",[22m
+[2m      ],[22m
+[31m+     "trackAsUpdate": false,[90m
+[2m      "trackingSheetKeys": [],[22m
+[31m+     "transactionContext": {[90m
+[31m+       "baseRevision": null,[90m
+[31m+       "chatKey": "chat-a",[90m
+[31m+       "isolationKey": "iso-a",[90m
+[31m+       "runCommit": [Function runCommit],[90m
+[31m+       "source": "raw_sql_batch",[90m
+[31m+       "transactionId": "tx-test",[90m
+[31m+       "writeSet": [[90m
+[31m+         {[90m
+[31m+           "kind": "sheet",[90m
+[31m+           "sheetKey": "sheet_0",[90m
+[31m+         },[90m
+[31m+       ],[90m
+[31m+     },[90m
+[31m+     "updateGroupKeys": null,[90m
+[2m    },[22m
+[2m  ][22m
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+[36m [2m❯[22m tests/presentation/sql-api.test.ts:[2m370:46[22m[39m
+    [90m368| [39m      writeSet[33m:[39m [{ kind[33m:[39m [32m'sheet'[39m[33m,[39m sheetKey[33m:[39m [32m'sheet_0'[39m }][33m,[39m
+    [90m369| [39m    })[33m,[39m expect[33m.[39m[34many[39m([33mFunction[39m))[33m;[39m
+    [90m370| [39m    expect(mocks.persistTablesToChatMessage).toHaveBeenCalledWith(expe…
+    [90m   | [39m                                             [31m^[39m
+    [90m371| [39m      source[33m:[39m [32m'raw_sql_batch'[39m[33m,[39m
+    [90m372| [39m      targetSheetKeys[33m:[39m [[32m'sheet_0'[39m][33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m24 passed[39m[22m[90m (26)[39m
+[2m   Start at [22m 18:50:39
+[2m   Duration [22m 1.44s[2m (transform 685ms, setup 0ms, collect 1.10s, tests 27ms, environment 0ms, prepare 111ms)[22m
+
