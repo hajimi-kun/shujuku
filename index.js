@@ -46519,6 +46519,18 @@ $CONTENT
                     const aiResponse = collectResult.aiResponse;
                     const isSqlTableEdit = isSqliteMode() && typeof collectResult.tableEditText === 'string' && isSqlContent(collectResult.tableEditText);
                     if (isSqlTableEdit) {
+                        // [SQL假保存修复] 在调用 runTableUpdateCommit_ACU 之前先校验 AI 产出的 SQL 是否可拆分出可执行语句。
+                        // applyEdits / buildSqlSheetBatchOperationsFromText_ACU 共用同一 splitter；若 split 为 0，
+                        // applyEdits 会返回 {success:true, modifiedKeys:[], appliedEdits:0}（未执行任何 SQL），但编排器
+                        // 仍会把 targetSheetKeys 当作已填推进门禁 → persist 写入 operations=0 的 metadata-only fill event，
+                        // 造成"成功横幅 + 未记录归零 + 表格无数据"的假保存。此处静默跳过：不写入、不推进门禁、不报成功。
+                        const sqlStatementsForGuard = normalizeSqlStatementsForRuntimeLog_ACU(collectResult.tableEditText || '');
+                        if (sqlStatementsForGuard.length === 0) {
+                            logWarn_ACU(`[假保存哨兵-SQL] AI 响应无可执行 SQL 语句，静默跳过填表（不写入、不推进门禁、不报成功）。`
+                                + `saveTargetIndex=${saveTargetIndex}, targetSheetKeys=[${(targetSheetKeys || []).join(',')}], `
+                                + `tableEditTextLength=${String(collectResult.tableEditText || '').length}`);
+                            return { success: false, modifiedKeys: [], skippedNoSql: true };
+                        }
                         const writeSet = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0
                             ? targetSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }))
                             : [{ kind: 'all' }];
@@ -50779,6 +50791,11 @@ $CONTENT
                 setTimeout(() => {
                     notifyTableUpdate();
                 }, 250);
+            }
+            else if (result.skippedNoSql && !isSilentMode) {
+                // [SQL假保存修复] AI 本轮未产出可执行 SQL：静默跳过，不报成功/失败，仅提示未写入。
+                showToastr_ACU('warning', '未写入：AI 本轮未产出可执行 SQL，已跳过（门禁未推进）。');
+                updateStatusText('未写入：AI 未产出可执行 SQL。', false);
             }
             else if (!result.success && !result.aborted && !isSilentMode) {
                 showToastr_ACU('error', `更新失败: ${result.error || '未知错误'}`);
@@ -66585,6 +66602,10 @@ $CONTENT
             // ignore
         }
     }
+    // [重roll门控] 一次性 pending 标记：当用户重 roll（MESSAGE_SWIPED 或 regenerate）时置 true，
+    // 在主 API GENERATION_ENDED 时消费——强制触发一次填表（即使本次生成被判定为 quiet/background）。
+    // 精确实现用户诉求"重 roll 等主 api 生成完才是"，避免在 swipe 当即过早触发空 SQL 假保存。
+    let pendingRerollAutoUpdate_ACU = false;
     function mainInitialize_ACU() {
         console.log('ACU_INIT_DEBUG: mainInitialize_ACU called.');
         if (attemptToLoadCoreApis_ACU()) {
@@ -66759,7 +66780,15 @@ $CONTENT
                 if (SillyTavern_API_ACU.eventTypes.GENERATION_ENDED) {
                     SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_ENDED, (message_id) => {
                         logDebug_ACU(`ACU GENERATION_ENDED event for message_id: ${message_id}`);
-                        if (shouldProcessAutoTableUpdateForGenerationEnded_ACU()) {
+                        // [重roll门控] 消费 pending 标记：用户重 roll 后，主 API 生成完成时强制触发一次填表，
+                        // 即使本次生成被判定为 quiet/background 也强制触发，精确实现"重 roll 等主 api 生成完"。
+                        const forceAutoUpdateAfterReroll = pendingRerollAutoUpdate_ACU;
+                        pendingRerollAutoUpdate_ACU = false;
+                        if (forceAutoUpdateAfterReroll) {
+                            logDebug_ACU('ACU: Force auto table update after re-roll (main API generation ended).');
+                            handleNewMessageDebounced_ACU('GENERATION_ENDED');
+                        }
+                        else if (shouldProcessAutoTableUpdateForGenerationEnded_ACU()) {
                             handleNewMessageDebounced_ACU('GENERATION_ENDED');
                         }
                         else {
@@ -66779,6 +66808,9 @@ $CONTENT
                         const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
                         const shouldProcessPlot = shouldProcessPlotForGeneration_ACU(type, params, dryRun);
                         if (type === 'regenerate' && !dryRun) {
+                            // [重roll门控] 标记一次 pending 重 roll，待主 API GENERATION_ENDED 后再触发填表。
+                            pendingRerollAutoUpdate_ACU = true;
+                            logDebug_ACU('[重roll门控] 检测到 regenerate，已标记 pending；将在主 API 生成完成后触发填表。');
                             // Regenerate reuses the previous Agent decision, but the host may have
                             // rebuilt worldbook state between swipes. Reapply the selected blue
                             // lights before prompt construction without invoking Agent again.
@@ -66945,7 +66977,11 @@ $CONTENT
                                 // [修复] 重新合并数据并更新UI和世界书
                                 await refreshMergedDataAndNotifyWithUI_ACU();
                                 if (evName === 'MESSAGE_SWIPED') {
-                                    await triggerAutomaticUpdateIfNeeded_ACU();
+                                    // [重roll门控] 不再在 swipe 当即触发填表——会在主 API 生成前/中过早触发，
+                                    // 此时 AI 尚未产出 SQL，导致空 SQL 假保存（operations=0 但门禁仍推进）。
+                                    // 改为标记 pending，等主 API GENERATION_ENDED 后再触发。
+                                    pendingRerollAutoUpdate_ACU = true;
+                                    logDebug_ACU('[重roll门控] MESSAGE_SWIPED 已标记 pending；将在主 API 生成完成后触发填表。');
                                 }
                                 const realignDirtyReason = evName === 'MESSAGE_DELETED'
                                     ? 'chat_modified_deleted'

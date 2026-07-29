@@ -94,6 +94,9 @@ export interface CardUpdateResult {
     tableData?: Record<string, any>;
     error?: string;
     aborted?: boolean;
+    // [SQL假保存修复] AI 本轮未产出可执行 SQL（split 为 0）时的静默跳过标记。
+    // 不报成功、不报失败、不推进门禁、不写 mutation entry，由展示层显示"未写入(AI未产出SQL)"。
+    skippedNoSql?: boolean;
 }
 
 /** processUpdatesBatch 的返回值 */
@@ -1614,6 +1617,20 @@ export async function executeCardUpdateCore_ACU(
                 const isSqlTableEdit = isSqliteMode() && typeof collectResult.tableEditText === 'string' && isSqlContent(collectResult.tableEditText);
 
                 if (isSqlTableEdit) {
+                    // [SQL假保存修复] 在调用 runTableUpdateCommit_ACU 之前先校验 AI 产出的 SQL 是否可拆分出可执行语句。
+                    // applyEdits / buildSqlSheetBatchOperationsFromText_ACU 共用同一 splitter；若 split 为 0，
+                    // applyEdits 会返回 {success:true, modifiedKeys:[], appliedEdits:0}（未执行任何 SQL），但编排器
+                    // 仍会把 targetSheetKeys 当作已填推进门禁 → persist 写入 operations=0 的 metadata-only fill event，
+                    // 造成"成功横幅 + 未记录归零 + 表格无数据"的假保存。此处静默跳过：不写入、不推进门禁、不报成功。
+                    const sqlStatementsForGuard = normalizeSqlStatementsForRuntimeLog_ACU(collectResult.tableEditText || '');
+                    if (sqlStatementsForGuard.length === 0) {
+                        logWarn_ACU(
+                            `[假保存哨兵-SQL] AI 响应无可执行 SQL 语句，静默跳过填表（不写入、不推进门禁、不报成功）。`
+                            + `saveTargetIndex=${saveTargetIndex}, targetSheetKeys=[${(targetSheetKeys || []).join(',')}], `
+                            + `tableEditTextLength=${String(collectResult.tableEditText || '').length}`,
+                        );
+                        return { success: false, modifiedKeys: [], skippedNoSql: true };
+                    }
                     const writeSet = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0
                         ? targetSheetKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey }))
                         : [{ kind: 'all' as const }];
