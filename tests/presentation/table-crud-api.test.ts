@@ -292,6 +292,34 @@ describe('createTableCrudApi — SQLite 模式', () => {
       );
     });
 
+    it('NameMapper 未构建时从 sheet DDL 兜底把中文列名解析为英文列名（避免 no such column）', async () => {
+      // 复现真实场景：sheet 带 DDL（英文列名 + 中文注释），但全局 NameMapper 未构建（空），
+      // 外部脚本以中文显示名调用 updateCell → 必须把"详细内容"解析成英文列名 detail_desc，
+      // 否则 SQL 会拼出 `SET "详细内容" = ?` 触发 no such column。
+      mockCurrentJsonTableData = {
+        sheet_0: {
+          name: '备忘录',
+          sourceData: {
+            ddl: `CREATE TABLE memo ( -- 备忘录
+  row_id INTEGER PRIMARY KEY, -- 行号
+  memo_title TEXT NOT NULL UNIQUE, -- 备忘标题
+  detail_desc TEXT, -- 详细内容
+  current_status TEXT -- 当前状态
+);`,
+          },
+          content: [
+            ['行号', '备忘标题', '详细内容', '当前状态'],
+            ['1', '测试', '旧内容', '进行中'],
+          ],
+        },
+      };
+      await api.updateCell('备忘录', 1, '详细内容', '新内容');
+      expect(mockExecuteRuntimeMutation).toHaveBeenCalledWith(
+        "UPDATE `memo` SET `detail_desc` = ? WHERE `row_id` = ?;",
+        ['新内容', '1'],
+      );
+    });
+
     it('SQLite updateCell 在统一事务内执行', async () => {
       await api.updateCell('背包物品表', 1, '数量', '10');
       expect(mockRunTableWriteTransaction).toHaveBeenCalledWith(expect.objectContaining({

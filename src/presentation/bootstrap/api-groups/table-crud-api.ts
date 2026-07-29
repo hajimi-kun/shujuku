@@ -15,7 +15,7 @@ import { refreshMergedDataAndNotifyWithUI_ACU } from '../../components/pipeline-
 import type { ApiGroupContext } from './callback-api';
 import { isSqliteMode } from '../../../service/table/storage-mode';
 import { getNameMapper } from '../../../service/runtime/template-vars/name-mapper';
-import { parseDDLTableName } from '../../../shared/ddl-utils';
+import { parseDDLTableName, parseDDLColumnComments } from '../../../shared/ddl-utils';
 import { getLatestTableAppendMessageIndexFromChat_ACU } from '../../../service/table/table-history';
 import { enqueueSummaryVectorIndexFlush_ACU } from '../../../service/vector/summary-vector-index-flush-queue';
 import { getCurrentWorldbookConfig_ACU } from '../../../service/settings/settings-readers';
@@ -106,13 +106,49 @@ export function findTargetSheet(
  * 原生模式下 NameMapper 未构建，resolve* 方法会原样返回——
  * 此时 englishColName === chineseColName === 原始 colName，行为与旧版一致。
  */
+/**
+ * 从 sheet 自身 DDL 解析列名（中→英 / 英→英），作为全局 NameMapper 未构建或缺失时的兜底。
+ * 覆盖"NameMapper 未构建"或"表晚于 mapper 构建才导入"导致中文列名原样透传进 SQL、
+ * 触发 `no such column: <中文名>` 的场景（例如外部脚本 updateCell('memo', row, '详细内容', v)）。
+ */
+function resolveColumnFromSheetDDL(sheet: any, colName: string): { englishColName: string | null; chineseColName: string | null } {
+    const ddl = sheet?.sourceData?.ddl;
+    if (!ddl) return { englishColName: null, chineseColName: null };
+    const trimmed = String(colName ?? '').trim();
+    if (!trimmed) return { englishColName: null, chineseColName: null };
+    try {
+        const comments = parseDDLColumnComments(ddl); // Map<英文列名, 中文注释>
+        // 英文列名直接命中
+        if (comments.has(trimmed)) {
+            return { englishColName: trimmed, chineseColName: comments.get(trimmed) || trimmed };
+        }
+        // 中文注释 → 英文列名
+        for (const [en, cn] of comments) {
+            if (cn === trimmed) return { englishColName: en, chineseColName: cn };
+        }
+    } catch {
+        // DDL 解析失败时静默退回，由调用方按原逻辑处理
+    }
+    return { englishColName: null, chineseColName: null };
+}
+
 function resolveColumnForSheet(
     englishTableName: string,
     colName: string,
+    sheet?: any,
 ): { englishColName: string; chineseColName: string } {
     const mapper = getNameMapper();
-    const englishColName = mapper.resolveColumnName(englishTableName, colName);
-    const chineseColName = mapper.getChineseColumnName(englishTableName, englishColName);
+    let englishColName = mapper.resolveColumnName(englishTableName, colName);
+    let chineseColName = mapper.getChineseColumnName(englishTableName, englishColName);
+    // 全局 NameMapper 未构建 / 缺失本表映射时（中英文形态相同 = 透传未解析），从 sheet 自身 DDL 兜底，
+    // 避免把中文列名直接拼进 `UPDATE ... SET <中文> = ?` 而触发 no such column。
+    if (sheet && chineseColName === englishColName) {
+        const ddlResolved = resolveColumnFromSheetDDL(sheet, colName);
+        if (ddlResolved.englishColName) {
+            englishColName = ddlResolved.englishColName;
+            chineseColName = ddlResolved.chineseColName || englishColName;
+        }
+    }
     return { englishColName, chineseColName };
 }
 
@@ -443,7 +479,7 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
                 }
 
                 // 统一翻译为英文+中文双形态
-                const { englishColName, chineseColName } = resolveColumnForSheet(englishTableName, rawColName);
+                const { englishColName, chineseColName } = resolveColumnForSheet(englishTableName, rawColName, targetSheet);
 
                 // 校验列名：用中文形态和 headers 比对（headers 是中文），
                 // 这样用户传英文列名也能通过校验
@@ -591,7 +627,7 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
                         const headers = targetSheet.content[0] || [];
                         for (const colName in normalizedData) {
                             if (colName === 'isImportMode') continue; // 跳过内部标记
-                            const { englishColName, chineseColName } = resolveColumnForSheet(englishTableName, colName);
+                            const { englishColName, chineseColName } = resolveColumnForSheet(englishTableName, colName, targetSheet);
                             if (!headers.includes(chineseColName)) {
                                 logWarn_ACU(`updateRow: Column "${colName}" not found in table "${tableName}".`);
                                 continue;
@@ -663,7 +699,7 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
                         let updated = 0;
                         for (const colName in normalizedData) {
                             if (colName === 'isImportMode') continue;
-                            const { chineseColName } = resolveColumnForSheet(workingTarget.englishTableName, colName);
+                            const { chineseColName } = resolveColumnForSheet(workingTarget.englishTableName, colName, workingTarget.sheet);
                             const colIndex = headers.indexOf(chineseColName);
                             if (colIndex !== -1) {
                                 row[colIndex] = normalizedData[colName];
@@ -730,7 +766,7 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
                         const colNames: string[] = [];
                         const params: (string | number | null)[] = [];
                         for (const colName in normalizedData) {
-                            const { englishColName, chineseColName } = resolveColumnForSheet(englishTableName, colName);
+                            const { englishColName, chineseColName } = resolveColumnForSheet(englishTableName, colName, targetSheet);
                             // 跳过 row_id（自增主键），同时检查英文形态和原始名，防止用户传中文"行号"等变体
                             if (englishColName === 'row_id' || colName === 'row_id') continue;
                             if (!headers.includes(chineseColName)) continue;
@@ -802,7 +838,7 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
                         const newRow = new Array(workingHeaders.length).fill('');
 
                         for (const colName in normalizedData) {
-                            const { chineseColName } = resolveColumnForSheet(workingTarget.englishTableName, colName);
+                            const { chineseColName } = resolveColumnForSheet(workingTarget.englishTableName, colName, workingTarget.sheet);
                             const colIndex = workingHeaders.indexOf(chineseColName);
                             if (colIndex !== -1) {
                                 newRow[colIndex] = normalizedData[colName];
