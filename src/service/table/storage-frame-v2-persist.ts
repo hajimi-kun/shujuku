@@ -1174,11 +1174,19 @@ async function persistTableMutationLogV2Core_ACU(
   const hasExistingV2Frame = hasAnyV2Frame_ACU(chat, isolationKey, target.index);
   const operations = normalizeOperations_ACU(options.operations, afterData, options.source, hasExistingCheckpoint);
   const effectiveChangedSheetKeys = candidateChangedSheetKeys;
-  const hasMetadataOnlyFillEvent = filledSheetKeys.length > 0 || (Array.isArray(options.groupKeys) && options.groupKeys.length > 0);
+  const hasFillSheets = filledSheetKeys.length > 0 || (Array.isArray(options.groupKeys) && options.groupKeys.length > 0);
+  // A metadata-only fill is valid only when there is a real operation to
+  // replay. Otherwise operations=[] plus group/filled keys advances the fill
+  // gate without durable data (the historical fake-save bug).
+  const hasMetadataOnlyFillEvent = operations.length > 0 && hasFillSheets;
   const hasManualRefillProgress = !!options.manualRefillProgress;
-  const isManualRefillProgressOnly = operations.length === 0 && !hasMetadataOnlyFillEvent && hasManualRefillProgress;
+  const isManualRefillProgressOnly = operations.length === 0 && !hasFillSheets && hasManualRefillProgress;
   const latestFullCheckpoint = findLatestFullCheckpoint_ACU(chat, isolationKey);
-  const writesReplayArtifact = operations.length > 0 || hasMetadataOnlyFillEvent || hasManualRefillProgress || replacement !== null;
+  // Import-without-operations is a full afterData snapshot write, so it is
+  // still a replay artifact for boundary ordering even though it is not a
+  // metadata-only fill event.
+  const writesReplayArtifact = operations.length > 0 || hasMetadataOnlyFillEvent || hasManualRefillProgress || replacement !== null
+    || (options.source === 'import' && operations.length === 0);
   // V2 replay 只从最后一个 full checkpoint 开始。向该 checkpoint 之前写入任何
   // operation、填表事件或追平进度都会制造“保存成功但永远无法回放”的伪提交；不能等到
   // terminal progress-only 写入时才暴露问题。

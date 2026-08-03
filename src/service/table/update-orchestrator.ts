@@ -1450,7 +1450,10 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
         }
         const parseResultObject = typeof parseResult === 'object' && parseResult !== null ? parseResult : null;
         const parseSuccess = parseResultObject ? parseResultObject.success : !!parseResult;
-        const parsedKeys = parseResultObject ? (parseResultObject.modifiedKeys || []) : (response.job?.targetSheetKeys || []);
+        // A bare `true` means the parser accepted the response but found no
+        // replayable tableEdit block. It must not fabricate modified target
+        // sheets or persist an unchanged snapshot as a successful fill.
+        const parsedKeys = parseResultObject ? (parseResultObject.modifiedKeys || []) : [];
         const appliedEdits = parseResultObject && typeof parseResultObject.appliedEdits === 'number'
             ? parseResultObject.appliedEdits
             : (Array.isArray(parsedKeys) ? parsedKeys.length : 0);

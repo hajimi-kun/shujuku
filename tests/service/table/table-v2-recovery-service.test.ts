@@ -19,6 +19,7 @@ vi.mock('../../../src/data/gateways/chat-gateway', () => ({
   saveChatToHostStrict_ACU: h.save,
 }));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
+  settings_ACU: {},
   get currentChatFileIdentifier_ACU() { return h.scope.chatKey; },
   getCurrentIsolationKey_ACU: () => h.scope.isolationKey,
 }));

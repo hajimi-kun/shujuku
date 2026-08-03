@@ -10,6 +10,7 @@ const { chatRef, saveStrict, scope, reload, storageMode, didFallback } = vi.hois
 }));
 vi.mock('../../../src/data/gateways/chat-gateway', () => ({ getChatArray_ACU: vi.fn(() => chatRef.value), saveChatToHostStrict_ACU: saveStrict }));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
+  settings_ACU: {},
   get currentChatFileIdentifier_ACU() { return scope.chatIdentifier; },
   getCurrentIsolationKey_ACU: vi.fn(() => scope.isolationKey),
 }));
