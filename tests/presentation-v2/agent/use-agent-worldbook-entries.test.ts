@@ -9,6 +9,8 @@ const mockSaveSkill = vi.fn();
 const mockDeleteSkill = vi.fn();
 const mockSnapshot = vi.fn(() => ({ active: false, books: {} }));
 const mockRefreshSnapshot = vi.fn(async () => mockSnapshot());
+let lastSaveResult: any = null;
+let lastDeleteResult: any = null;
 
 async function getComposable(onSkillMetaChanged?: () => Promise<unknown>) {
   vi.resetModules();
@@ -32,8 +34,29 @@ async function getComposable(onSkillMetaChanged?: () => Promise<unknown>) {
       updatedAt: Number(draft.updatedAt || 1),
       updatedBy: draft.updatedBy || updatedBy,
     }),
-    saveWorldbookEntrySkillMeta_ACU: mockSaveSkill,
-    deleteWorldbookEntrySkillMeta_ACU: mockDeleteSkill,
+    saveWorldbookEntrySkillMeta_ACU: async (bookName: string, uid: number | string, draft: any, updatedBy?: string) => {
+      const result = await mockSaveSkill(bookName, uid, draft, updatedBy);
+      lastSaveResult = result;
+      return result;
+    },
+    deleteWorldbookEntrySkillMeta_ACU: async (bookName: string, uid: number | string) => {
+      const result = await mockDeleteSkill(bookName, uid);
+      lastDeleteResult = result;
+      return result;
+    },
+    getWorldbookEntrySkillMeta_ACU: async (bookName: string, uid: number | string) => {
+      const op = lastDeleteResult || lastSaveResult;
+      if (!op || !op.entry) return null;
+      const comment = String(op.entry.comment || '');
+      const hasSkill = comment.includes('SKILL');
+      return {
+        bookName,
+        uid,
+        comment,
+        label: comment.replace(' SKILL', '').trim() || `条目 ${uid}`,
+        skillMeta: hasSkill ? { description: '已有', triggerWhen: '测试' } : null,
+      };
+    },
   }));
   vi.doMock('../../../src/service/agent/agent-skillify-service', () => ({
     isWorldbookEntrySkillifyCandidate_ACU: (entry: any) => entry.enabled !== false && String(entry.type || '').trim().toLowerCase() !== 'constant'
@@ -49,6 +72,8 @@ beforeEach(() => {
   mockResolveScope.mockReset();
   mockSaveSkill.mockReset();
   mockDeleteSkill.mockReset();
+  lastSaveResult = null;
+  lastDeleteResult = null;
   mockSnapshot.mockReturnValue({ active: false, books: {} });
   mockRefreshSnapshot.mockImplementation(async () => mockSnapshot());
 });

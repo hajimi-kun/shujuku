@@ -84,6 +84,22 @@ vi.mock('../../../src/service/agent/agent-worldbook-skill-meta', () => ({
       return false;
     }
   }),
+  buildWorldbookSkillMetaMapForEntries_ACU: vi.fn((entries: any[]) => {
+    const map = new Map<string, any>();
+    for (const entry of Array.isArray(entries) ? entries : []) {
+      if (entry?.uid === undefined || entry?.uid === null) continue;
+      const match = /<!--\s*ACU_SKILL_META_START\s*\n([\s\S]*?)\nACU_SKILL_META_END\s*-->/.exec(String(entry?.comment || entry?.name || ''));
+      if (!match) continue;
+      try {
+        const meta = JSON.parse(match[1].trim());
+        if (meta.version !== 1) continue;
+        if (!!String(meta.description || '').trim() || !!String(meta.triggerWhen || '').trim() || Number(meta.tk) > 0) {
+          map.set(String(entry.uid), meta);
+        }
+      } catch {}
+    }
+    return map;
+  }),
 }));
 
 vi.mock('../../../src/service/agent/agent-worldbook-config-meta', () => ({

@@ -7,8 +7,9 @@ import {
   resolveWorldbookEntryTakeoverState_ACU,
 } from './worldbook-entry-display';
 import {
+  buildWorldbookSkillMetaMapForEntries_ACU,
   deleteWorldbookEntrySkillMeta_ACU,
-  parseWorldbookSkillMetaFromComment_ACU,
+  getWorldbookEntrySkillMeta_ACU,
   saveWorldbookEntrySkillMeta_ACU,
   stripWorldbookSkillMetaBlock_ACU,
   type WorldbookSkillMeta_ACU,
@@ -79,9 +80,10 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
       const visibleSelections = new Set<string>();
       for (const bookName of uniqueBookNames) {
         const entries = Array.isArray(entriesByBook[bookName]) ? entriesByBook[bookName] : [];
+        const skillMetaByUid = buildWorldbookSkillMetaMapForEntries_ACU(entries);
         const items = entries.flatMap((entry: any): AgentWorldbookEntryItem[] => {
           const comment = String(entry?.comment || entry?.name || '');
-          const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+          const skillMeta = skillMetaByUid.get(String(entry?.uid)) || null;
           const snapshotEntry = getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry);
           if (!isAgentWorldbookEntryVisible_ACU(bookName, entry, skillMeta, snapshotEntry)) {
             return [];
@@ -155,8 +157,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
     return Array.from(selected.value.values());
   }
 
-  function updateEntrySkillMetaLocal(bookName: string, uid: number, comment: string): void {
-    const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+  function updateEntrySkillMetaLocal(bookName: string, uid: number, comment: string, skillMeta: WorldbookSkillMeta_ACU | null): void {
     groups.value = groups.value.map(group => {
       if (group.bookName !== bookName) return group;
       return {
@@ -191,18 +192,20 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
     updatedBy: WorldbookSkillMetaUpdatedBy_ACU = 'manual',
   ): Promise<void> {
     const result = await saveWorldbookEntrySkillMeta_ACU(bookName, uid, draft, updatedBy);
-    if (result.entry && typeof result.entry.comment === 'string') {
-      updateEntrySkillMetaLocal(bookName, uid, result.entry.comment);
+    if (result.updated) {
+      const read = await getWorldbookEntrySkillMeta_ACU(bookName, uid);
+      if (read) updateEntrySkillMetaLocal(bookName, uid, read.comment, read.skillMeta);
+      await notifySkillMetaChanged();
     }
-    if (result.updated) await notifySkillMetaChanged();
   }
 
   async function deleteEntrySkillMeta(bookName: string, uid: number): Promise<void> {
     const result = await deleteWorldbookEntrySkillMeta_ACU(bookName, uid);
-    if (result.entry && typeof result.entry.comment === 'string') {
-      updateEntrySkillMetaLocal(bookName, uid, result.entry.comment);
+    if (result.updated) {
+      const read = await getWorldbookEntrySkillMeta_ACU(bookName, uid);
+      updateEntrySkillMetaLocal(bookName, uid, read?.comment || String(result.entry?.comment || ''), read?.skillMeta || null);
+      await notifySkillMetaChanged();
     }
-    if (result.updated) await notifySkillMetaChanged();
   }
 
   function toggleGroupExpanded(bookName: string): void {

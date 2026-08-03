@@ -16,28 +16,53 @@ import { getImportStablePrefix_ACU } from '../../shared/constants';
 import { purgeSheetKeysFromMessage_ACU } from '../../data/repositories/chat-message-data-repo';
 import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
 import { resetPlotAgentWorldbookSessionSnapshot_ACU } from '../agent/agent-worldbook-takeover';
+import { resolveAgentWorldbookScopeBookNames_ACU } from '../agent/agent-worldbook-config-meta';
 
   async function enforceCleanupOfCharacterWorldbook_ACU() {
       // 延迟一段时间，确保其他操作完成
       await new Promise(resolve => setTimeout(resolve, 1500));
 
       const worldbookConfig = getCurrentWorldbookConfig_ACU();
-      // 如果当前设置明确指定了注入目标不是 'character'（即不是绑定世界书）
-      if (worldbookConfig && worldbookConfig.injectionTarget && worldbookConfig.injectionTarget !== 'character') {
+      const targetSetting = worldbookConfig?.injectionTarget;
+      const targetIsCharacter = !targetSetting || targetSetting === 'character';
+      // 当前注入目标：非 'character' 时是具体世界书名；'character' 时是角色主世界书（不在此清理）
+      const currentTargetLorebook = targetIsCharacter ? null : String(targetSetting).trim();
+
+      const booksToClean = new Set<string>();
+
+      // 如果注入目标不是 'character'（即不是绑定世界书），清理角色主世界书里的旧导出
+      if (!targetIsCharacter) {
           logDebug_ACU('Enforcing cleanup of character bound worldbook...');
           try {
-              // 获取当前角色绑定的主世界书
               const charLorebook = await gwGetCurrentCharPrimaryLorebook_ACU();
-              if (charLorebook) {
-                  // 只有当绑定的世界书与当前配置的目标不同时才清理
-                  // (虽然 injectionTarget !== 'character' 已经暗示了这点，但如果用户手动把 injectionTarget 填成了绑定世界书的名字，就要小心了)
-                  if (charLorebook !== worldbookConfig.injectionTarget) {
-                      logDebug_ACU(`Cleaning up bound worldbook "${charLorebook}" as target is "${worldbookConfig.injectionTarget}"`);
-                      await deleteAllGeneratedEntries_ACU(charLorebook);
-                  }
+              // 只有当绑定的世界书与当前配置的目标不同时才清理
+              // (虽然 injectionTarget !== 'character' 已经暗示了这点，但如果用户手动把 injectionTarget 填成了绑定世界书的名字，就要小心了)
+              if (charLorebook && charLorebook !== currentTargetLorebook) {
+                  logDebug_ACU(`Cleaning up bound worldbook "${charLorebook}" as target is "${currentTargetLorebook}"`);
+                  booksToClean.add(charLorebook);
               }
           } catch (e) {
               logWarn_ACU('Failed to enforce cleanup of character worldbook:', e);
+          }
+      }
+
+      // [修复] 清理所有 agent 作用域内、非当前注入目标的世界书里的过期导出。
+      // 旧版本只清理"角色主世界书"，导致切换注入目标后旧目标世界书里的导出残留，
+      // 每次重开网页都看到"同时出现在两个世界书"。
+      try {
+          const scopeBookNames = await resolveAgentWorldbookScopeBookNames_ACU();
+          for (const bookName of scopeBookNames) {
+              if (bookName && bookName !== currentTargetLorebook) booksToClean.add(bookName);
+          }
+      } catch (e) {
+          logWarn_ACU('Failed to resolve agent scope worldbooks for cleanup:', e);
+      }
+
+      for (const bookName of booksToClean) {
+          try {
+              await deleteAllGeneratedEntries_ACU(bookName);
+          } catch (e) {
+              logWarn_ACU(`Failed to clean generated entries in "${bookName}":`, e);
           }
       }
   }
