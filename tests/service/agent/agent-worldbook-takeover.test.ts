@@ -1307,7 +1307,7 @@ describe('agent worldbook takeover native trigger suppression', () => {
     expect(result).toMatchObject({ restored: 2, skipped: 0, failed: 0 });
     expect(entries.find(entry => entry.uid === 1)).toMatchObject({ enabled: true, keys: ['钥匙A'], type: 'selective' });
     expect(entries.find(entry => entry.uid === 2)).toMatchObject({ enabled: true, keys: ['钥匙B'], type: 'selective', comment: skillCommentB_ACU });
-    expect(mockDeleteAgentWorldbookState).toHaveBeenCalledTimes(1);
+    expect(mockDeleteAgentWorldbookState).not.toHaveBeenCalled();
   });
 
   it('同 UID state 缺少恢复字段时由合法 meta 补齐，用户改 comment 后仍保守跳过', async () => {
@@ -1485,7 +1485,7 @@ describe('agent worldbook takeover native trigger suppression', () => {
     const retry = await restoreWorldbookGreenlights_ACU({ cleanupMode: 'full' });
 
     expect(retry).toMatchObject({ restored: 0, skipped: 0, failed: 0 });
-    expect(mockDeleteAgentWorldbookState).toHaveBeenCalledTimes(1);
+    expect(mockDeleteAgentWorldbookState).not.toHaveBeenCalled();
     expect(mockStateSnapshot.current).toMatchObject({ active: false, books: {} });
     expect(getPlotAgentWorldbookSnapshot_ACU()).toMatchObject({ active: false, books: {} });
   });
@@ -1561,7 +1561,7 @@ describe('agent worldbook takeover native trigger suppression', () => {
     const retry = await restoreWorldbookGreenlights_ACU({ cleanupMode: 'full' });
 
     expect(retry).toMatchObject({ restored: 0, skipped: 0, failed: 0 });
-    expect(mockDeleteAgentWorldbookState).toHaveBeenCalledTimes(1);
+    expect(mockDeleteAgentWorldbookState).not.toHaveBeenCalled();
     expect(mockStateSnapshot.current).toMatchObject({ active: false, books: {} });
     expect(getPlotAgentWorldbookSnapshot_ACU()).toMatchObject({ active: false, books: {} });
   });

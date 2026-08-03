@@ -27,7 +27,6 @@ import {
   stripWorldbookSkillMetaBlock_ACU,
 } from './agent-worldbook-skill-meta';
 import {
-  deleteAgentWorldbookStateEntry_ACU,
   readAgentWorldbookStateFromWorldbooks_ACU,
   resolveAgentWorldbookScopeBookNames_ACU,
   writeAgentWorldbookStateToWorldbook_ACU,
@@ -1236,9 +1235,10 @@ export async function restoreWorldbookGreenlights_ACU(options: {
   const canClearLegacySnapshot = cleanupMode === 'full' && shouldUseLegacySnapshot && restoreResult.skipped === 0 && restoreResult.failed === 0;
   const deletedFinalGreenlights = await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_FINAL_GENERATION_GREENLIGHT_COMMENT_ACU);
   const deletedSnapshots = cleanupMode === 'full' ? await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_WORLDBOOK_SNAPSHOT_COMMENT_ACU) : 0;
-  const deletedStateEntries = canCleanupPersistentSnapshot ? await deleteAgentWorldbookStateEntry_ACU() : 0;
+  // The persisted control/scope entry is the recovery authority and must survive
+  // snapshot cleanup. Only the snapshot payload and legacy artifacts are removed.
   const legacySnapshotCleared = canClearLegacySnapshot && clearLegacyPlotAgentWorldbookSnapshot_ACU() ? 1 : 0;
-  const cleaned = deletedFinalGreenlights + deletedSnapshots + deletedStateEntries + legacySnapshotCleared;
+  const cleaned = deletedFinalGreenlights + deletedSnapshots + legacySnapshotCleared;
   const changed = restoreResult.restored + restoreResult.failed + stateWriteFailed + cleaned;
   setPlotAgentWorldbookSnapshot_ACU(canCleanupPersistentSnapshot
     ? buildInactiveSnapshot_ACU(selectionSignature)
