@@ -390,19 +390,11 @@ function parseTakeoverMetaFromComment_ACU(comment: unknown): AgentWorldbookTakeo
 }
 
 function buildTakeoverMetaComment_ACU(comment: unknown, selectionSignature: string, createdAt: number, snapshotEntry: AgentWorldbookControlSnapshotEntry_ACU): string {
-  const baseComment = stripTakeoverMetaBlock_ACU(comment);
-  const meta: AgentWorldbookTakeoverMeta_ACU = {
-    version: 1,
-    kind: 'agent_worldbook_takeover',
-    selectionSignature,
-    createdAt,
-    previousEnabled: snapshotEntry.previousEnabled !== false,
-    previousKeys: Array.isArray(snapshotEntry.previousKeys) ? snapshotEntry.previousKeys : [],
-    previousType: snapshotEntry.previousType,
-    commentHash: snapshotEntry.commentHash,
-  };
-  const metaBlock = `<!-- ${AGENT_TAKEOVER_META_START_ACU}\n${JSON.stringify(meta)}\n${AGENT_TAKEOVER_META_END_ACU} -->`;
-  return [baseComment, metaBlock].filter(Boolean).join('\n\n');
+  // Agent snapshot/state 持久化恢复信息,不污染酒馆展示用 comment。
+  void selectionSignature;
+  void createdAt;
+  void snapshotEntry;
+  return stripTakeoverMetaBlock_ACU(comment);
 }
 
 function getLegacyPlotAgentWorldbookSnapshot_ACU(): AgentWorldbookControlSnapshot_ACU {
@@ -492,6 +484,7 @@ export async function resolvePreTakeoverWorldbookSnapshot_ACU(): Promise<PreTake
 }
 
 async function backfillMissingTakeoverMeta_ACU(snapshot: AgentWorldbookControlSnapshot_ACU): Promise<void> {
+  // 兼容旧版本:只清理已经写入 comment 的接管元数据,绝不再追加元数据。
   for (const [bookName, snapshotEntries] of Object.entries(snapshot.books || {})) {
     if (!bookName || !Array.isArray(snapshotEntries) || snapshotEntries.length === 0) continue;
     try {
@@ -503,19 +496,14 @@ async function backfillMissingTakeoverMeta_ACU(snapshot: AgentWorldbookControlSn
       const entries = await getLorebookEntries_ACU(bookName);
       const patches = (entries || []).flatMap(entry => {
         const snapshotEntry = snapshotEntriesByUid.get(String(entry?.uid));
-        if (!snapshotEntry) return [];
         const currentComment = normalizeCommentText_ACU(entry?.comment);
-        if (hasTakeoverMetaBlock_ACU(currentComment)
-          || !doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, currentComment)
-          || (entry?.enabled !== false && !isFinalGenerationBlueLightEntry_ACU(entry))) return [];
-        return [{
-          uid: entry.uid,
-          comment: buildTakeoverMetaComment_ACU(currentComment, snapshot.selectionSignature, snapshot.createdAt, snapshotEntry),
-        }];
+        if (!snapshotEntry || !hasTakeoverMetaBlock_ACU(currentComment)) return [];
+        if (!doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, currentComment)) return [];
+        return [{ uid: entry.uid, comment: stripTakeoverMetaBlock_ACU(currentComment) }];
       });
       if (patches.length > 0) await setLorebookEntries_ACU(bookName, patches);
     } catch (error) {
-      logWarn_ACU(`[Agent世界书] 为旧接管条目补写可分享恢复元数据失败：${bookName}`, error);
+      logWarn_ACU(`[Agent世界书] 清理旧接管条目名称元数据失败:${bookName}`, error);
     }
   }
 }
@@ -776,16 +764,15 @@ async function disableTakeoverCandidates_ACU(
         .map(({ entry, snapshotEntry }) => ({
           uid: entry.uid,
           enabled: false,
-          comment: buildTakeoverMetaComment_ACU(entry?.comment, snapshot.selectionSignature, snapshot.createdAt, snapshotEntry!),
+          // 不再把接管元数据写入 comment;恢复依据保存在 snapshot/state。
         }));
       if (patchEntries.length === 0) continue;
       await setLorebookEntries_ACU(bookName, patchEntries);
       const patchedEntriesByUid = new Map((await getLorebookEntries_ACU(bookName) || []).map(entry => [String(entry?.uid), entry]));
       for (const patch of patchEntries) {
         const currentEntry = patchedEntriesByUid.get(String(patch.uid));
-        const meta = parseTakeoverMetaFromComment_ACU(currentEntry?.comment);
         const update = { bookName, uid: patch.uid };
-        if (currentEntry?.enabled === false && meta?.selectionSignature === snapshot.selectionSignature) {
+        if (currentEntry?.enabled === false) {
           disabled += 1;
           report.applied.push(update);
         } else {
