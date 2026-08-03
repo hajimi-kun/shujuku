@@ -277,6 +277,55 @@ describe('validateDDLText', () => {
     expect(result.valid).toBe(true);
   });
 
+  it('ASCII 展示表头可通过精确 DDL 注释映射到不同物理列名', () => {
+    const ddl = `CREATE TABLE battle_status (
+      row_id INTEGER PRIMARY KEY, -- 行号
+      hp_rp TEXT, -- HP/RP
+      en TEXT -- EN
+    );`;
+
+    expect(validateDDLText(ddl, ['row_id', 'HP/RP', 'EN'])).toEqual(
+      expect.objectContaining({ valid: true }),
+    );
+  });
+
+  it('ASCII 展示表头既不匹配物理列名也不匹配注释时仍拒绝', () => {
+    const ddl = `CREATE TABLE battle_status (
+      row_id INTEGER PRIMARY KEY, -- 行号
+      hp_rp TEXT, -- 生命值
+      en TEXT
+    );`;
+
+    const result = validateDDLText(ddl, ['row_id', 'HP/RP', 'EN']);
+
+    expect(result.valid).toBe(false);
+    expect(result.message).toContain('第 1 列不匹配');
+    expect(result.message).toContain('第 2 列不匹配');
+  });
+
+  it('ASCII 展示表头不会仅凭大小写差异匹配物理列名', () => {
+    const ddl = `CREATE TABLE battle_status (
+      row_id INTEGER PRIMARY KEY,
+      en TEXT
+    );`;
+
+    expect(validateDDLText(ddl, ['row_id', 'EN']).valid).toBe(false);
+  });
+
+  it('ASCII 表头按列位置校验，交换顺序仍拒绝', () => {
+    const ddl = `CREATE TABLE battle_status (
+      row_id INTEGER PRIMARY KEY, -- 行号
+      hp_rp TEXT, -- HP/RP
+      en TEXT -- EN
+    );`;
+
+    const result = validateDDLText(ddl, ['row_id', 'EN', 'HP/RP']);
+
+    expect(result.valid).toBe(false);
+    expect(result.message).toContain('第 1 列不匹配');
+    expect(result.message).toContain('第 2 列不匹配');
+  });
+
   it('英文物理列名缺少中文注释时校验失败', () => {
     const ddl = `CREATE TABLE inventory (
       row_id INTEGER PRIMARY KEY,

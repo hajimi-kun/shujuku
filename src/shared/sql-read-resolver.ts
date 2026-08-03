@@ -1,6 +1,6 @@
 import type { TableDataObject_ACU } from './models/table-data';
 import { parseDDLColumnInfos_ACU, parseDDLTableName } from './ddl-utils';
-import { getPhysicalTableNameForSheet_ACU, resolvePhysicalTableNames_ACU } from './sheet-identity';
+import { canonicalizeDisplayName_ACU, getPhysicalTableNameForSheet_ACU, resolvePhysicalTableNames_ACU } from './sheet-identity';
 import { resolveEffectiveDDL } from '../data/sqlite/schema-mapper';
 import { rebindSqlReadIdentifiers_ACU } from './sql-mutation-table-rebind';
 
@@ -14,6 +14,13 @@ export interface SheetAliasMapResult_ACU {
   conflicts: Set<string>;
 }
 
+export class SheetTableAliasResolutionError_ACU extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SheetTableAliasResolutionError_ACU';
+  }
+}
+
 export interface ReadQueryResolveResult_ACU {
   sql: string;
   tableRebindCount: number;
@@ -23,8 +30,12 @@ export interface ReadQueryResolveResult_ACU {
   conflicts?: string[];
 }
 
+function canonicalizeSheetTableAlias_ACU(alias: unknown): string {
+  return canonicalizeDisplayName_ACU(alias);
+}
+
 function addAlias_ACU(aliases: Map<string, string>, conflicts: Set<string>, alias: unknown, physicalName: string): void {
-  const key = String(alias || '').trim().toLowerCase();
+  const key = canonicalizeSheetTableAlias_ACU(alias);
   if (!key || conflicts.has(key)) return;
   const existing = aliases.get(key);
   if (existing && existing !== physicalName) {
@@ -53,7 +64,8 @@ export function buildSheetTableAliasMap_ACU(
     }
     for (const [sheetKey, physicalName] of physicalNames) {
       const sheet = (source as Record<string, any>)[sheetKey];
-      const sourceAliases = [parseDDLTableName(String(sheet?.sourceData?.ddl || '')), physicalName];
+      const declaredAliases = Array.isArray(sheet?.sourceData?.tableAliases) ? sheet.sourceData.tableAliases : [];
+      const sourceAliases = [parseDDLTableName(String(sheet?.sourceData?.ddl || '')), physicalName, ...declaredAliases];
       if (options.includeExtendedAliases !== false) {
         sourceAliases.push(sheetKey, sheet?.uid, sheet?.name);
       }
@@ -61,6 +73,146 @@ export function buildSheetTableAliasMap_ACU(
     }
   }
   return { aliases, conflicts };
+}
+
+/**
+ * Resolves historical runtime sheet keys that may be safely moved to keys from a
+ * newer guide/template snapshot. A destructive re-key requires two independent,
+ * deterministic identity signals: the runtime physical name and the author DDL
+ * table name must both match. Display-name/physical-name equality alone is not
+ * sufficient because genuinely distinct sheets may collide after romanization.
+ */
+export function resolveHistoricalSheetKeyMigrations_ACU(
+  sourceData: TableDataObject_ACU | Record<string, unknown> | null | undefined,
+  targetData: TableDataObject_ACU | Record<string, unknown> | null | undefined,
+): Map<string, string> {
+  if (!sourceData || typeof sourceData !== 'object' || !targetData || typeof targetData !== 'object') {
+    return new Map();
+  }
+
+  const sourcePhysicalNames = resolvePhysicalTableNames_ACU(sourceData);
+  const targetPhysicalNames = resolvePhysicalTableNames_ACU(targetData);
+  const targetByPhysicalName = new Map<string, { sheetKey: string; ddlTableName: string }>();
+
+  for (const [targetKey, physicalName] of targetPhysicalNames) {
+    const targetSheet = (targetData as Record<string, any>)[targetKey];
+    const ddlTableName = String(parseDDLTableName(String(targetSheet?.sourceData?.ddl || '')) || '').trim().toLowerCase();
+    targetByPhysicalName.set(physicalName.toLowerCase(), { sheetKey: targetKey, ddlTableName });
+  }
+
+  const migrations = new Map<string, string>();
+  for (const [sourceKey, physicalName] of sourcePhysicalNames) {
+    if (targetPhysicalNames.has(sourceKey)) continue;
+    const targetIdentity = targetByPhysicalName.get(physicalName.toLowerCase());
+    if (!targetIdentity) continue;
+    const sourceSheet = (sourceData as Record<string, any>)[sourceKey];
+    const ddlTableName = String(parseDDLTableName(String(sourceSheet?.sourceData?.ddl || '')) || '').trim().toLowerCase();
+    if (!ddlTableName || !targetIdentity.ddlTableName || ddlTableName !== targetIdentity.ddlTableName) {
+      throw new SheetTableAliasResolutionError_ACU(
+        `历史表身份迁移无法证明：${sourceKey} 与 ${targetIdentity.sheetKey} 共享物理表名「${physicalName}」，但作者 DDL 表名不一致或缺失。`,
+      );
+    }
+    const targetKey = targetIdentity.sheetKey;
+    if (Object.prototype.hasOwnProperty.call(sourceData, targetKey)) {
+      throw new SheetTableAliasResolutionError_ACU(
+        `历史表身份迁移冲突：${sourceKey} 对应 ${targetKey}，但运行时基底已存在目标 key。`,
+      );
+    }
+    migrations.set(sourceKey, targetKey);
+  }
+  return migrations;
+}
+
+/**
+ * Rebinds scheduling-time table selectors to sheet keys in a later snapshot by
+ * using the same conflict-safe alias registry as SQL readers and writers.
+ * Selectors may be sheet keys, uid values, display names, pinyin physical names,
+ * or author DDL table names. Ambiguous and unprovable aliases fail closed.
+ */
+export function rebindSheetKeysThroughTableAliases_ACU(
+  selectors: readonly string[],
+  sourceData: TableDataObject_ACU | Record<string, unknown> | null | undefined,
+  targetData: TableDataObject_ACU | Record<string, unknown> | null | undefined,
+): string[] {
+  if (!targetData || typeof targetData !== 'object') {
+    throw new SheetTableAliasResolutionError_ACU('表身份重绑定失败：当前基底不可用。');
+  }
+  const sourcePhysicalNames = sourceData && typeof sourceData === 'object'
+    ? resolvePhysicalTableNames_ACU(sourceData)
+    : new Map<string, string>();
+  const targetPhysicalNames = resolvePhysicalTableNames_ACU(targetData);
+  const targetSheetKeyByPhysicalName = new Map<string, string>();
+  for (const [sheetKey, physicalName] of targetPhysicalNames) {
+    targetSheetKeyByPhysicalName.set(canonicalizeSheetTableAlias_ACU(physicalName), sheetKey);
+  }
+  const sourceRegistry = buildSheetTableAliasMap_ACU([sourceData], { includeExtendedAliases: true });
+  const targetRegistry = buildSheetTableAliasMap_ACU([targetData], { includeExtendedAliases: true });
+  const rebound: string[] = [];
+  const sourceOwnerByTargetKey = new Map<string, string>();
+  for (const rawSelector of selectors || []) {
+    const selector = String(rawSelector || '').trim();
+    if (!selector) continue;
+    const normalized = canonicalizeSheetTableAlias_ACU(selector);
+    const sourcePhysicalNameForSelector = sourceRegistry.conflicts.has(normalized)
+      ? undefined
+      : sourceRegistry.aliases.get(normalized);
+    const sourceOwner = sourcePhysicalNameForSelector
+      ? ([...sourcePhysicalNames].find(([, physicalName]) => canonicalizeSheetTableAlias_ACU(physicalName) === canonicalizeSheetTableAlias_ACU(sourcePhysicalNameForSelector))?.[0] || normalized)
+      : normalized;
+
+    if (targetRegistry.conflicts.has(normalized)) {
+      throw new SheetTableAliasResolutionError_ACU(`表身份重绑定存在歧义：别名「${selector}」同时指向多张物理表。`);
+    }
+    const directTargetPhysicalName = targetRegistry.aliases.get(normalized);
+    if (directTargetPhysicalName) {
+      const directTargetSheetKey = targetSheetKeyByPhysicalName.get(canonicalizeSheetTableAlias_ACU(directTargetPhysicalName));
+      if (!directTargetSheetKey) {
+        throw new SheetTableAliasResolutionError_ACU(`表身份重绑定失败：别名「${selector}」对应的物理表不在当前基底中。`);
+      }
+      const directOwner = sourceOwnerByTargetKey.get(directTargetSheetKey);
+      if (directOwner && directOwner !== sourceOwner) {
+        throw new SheetTableAliasResolutionError_ACU(`表身份重绑定存在多对一冲突：${directOwner}、${sourceOwner} 同时指向 ${directTargetSheetKey}。`);
+      }
+      sourceOwnerByTargetKey.set(directTargetSheetKey, sourceOwner);
+      if (!rebound.includes(directTargetSheetKey)) rebound.push(directTargetSheetKey);
+      continue;
+    }
+
+    if (sourceRegistry.conflicts.has(normalized)) {
+      throw new SheetTableAliasResolutionError_ACU(`表身份重绑定存在歧义：调度快照中的别名「${selector}」同时指向多张物理表。`);
+    }
+    const sourcePhysicalName = sourceRegistry.aliases.get(normalized);
+    if (!sourcePhysicalName) {
+      throw new SheetTableAliasResolutionError_ACU(`表身份重绑定失败：无法解析别名「${selector}」。`);
+    }
+    const sourceAliases = [...sourceRegistry.aliases.entries()]
+      .filter(([, physicalName]) => canonicalizeSheetTableAlias_ACU(physicalName) === canonicalizeSheetTableAlias_ACU(sourcePhysicalName))
+      .map(([alias]) => alias);
+    const ambiguousAliases = sourceAliases.filter(alias => targetRegistry.conflicts.has(alias));
+    if (ambiguousAliases.length > 0) {
+      throw new SheetTableAliasResolutionError_ACU(`表身份重绑定存在歧义：别名「${ambiguousAliases[0]}」在当前基底中同时指向多张物理表。`);
+    }
+    const targetCandidates = new Set(
+      sourceAliases
+        .map(alias => targetRegistry.aliases.get(alias) && canonicalizeSheetTableAlias_ACU(targetRegistry.aliases.get(alias)))
+        .filter((physicalName): physicalName is string => Boolean(physicalName)),
+    );
+    if (targetCandidates.size !== 1) {
+      const reason = targetCandidates.size === 0 ? '无法证明其在当前基底中的对应表' : '多个别名证据指向不同物理表';
+      throw new SheetTableAliasResolutionError_ACU(`表身份重绑定失败：别名「${selector}」${reason}。`);
+    }
+    const targetPhysicalName = [...targetCandidates][0];
+    const targetSheetKey = targetSheetKeyByPhysicalName.get(targetPhysicalName);
+    if (!targetSheetKey) throw new SheetTableAliasResolutionError_ACU(`表身份重绑定失败：别名「${selector}」对应的物理表不在当前基底中。`);
+    const sourceSheetKey = [...sourcePhysicalNames].find(([, physicalName]) => canonicalizeSheetTableAlias_ACU(physicalName) === canonicalizeSheetTableAlias_ACU(sourcePhysicalName))?.[0] || normalized;
+    const existingOwner = sourceOwnerByTargetKey.get(targetSheetKey);
+    if (existingOwner && existingOwner !== sourceSheetKey) {
+      throw new SheetTableAliasResolutionError_ACU(`表身份重绑定存在多对一冲突：${existingOwner}、${sourceSheetKey} 同时指向 ${targetSheetKey}。`);
+    }
+    sourceOwnerByTargetKey.set(targetSheetKey, sourceSheetKey);
+    if (!rebound.includes(targetSheetKey)) rebound.push(targetSheetKey);
+  }
+  return rebound;
 }
 
 /** Builds table-scoped column aliases without guessing ambiguous fallback DDL columns. */
@@ -205,7 +357,7 @@ function protectImplicitSelectAliases_ACU(masked: string, mask: (value: string) 
   return result;
 }
 
-function translateLegacyReadSqlSafely_ACU(sql: string, translateSql: (sql: string) => string): string {
+function translateLegacyReadSqlSafely_ACU(sql: string, translateSql: (sql: string) => string, protectedIdentifierSpans: ReadonlyArray<{ start: number; end: number }> = []): string {
   const protectedParts: string[] = [];
   let masked = '';
   let index = 0;
@@ -214,7 +366,14 @@ function translateLegacyReadSqlSafely_ACU(sql: string, translateSql: (sql: strin
     protectedParts.push(value);
     return marker;
   };
+  const protectedByStart = new Map(protectedIdentifierSpans.map(span => [span.start, span]));
   while (index < sql.length) {
+    const protectedSpan = protectedByStart.get(index);
+    if (protectedSpan && protectedSpan.end > index) {
+      masked += mask(sql.slice(index, protectedSpan.end));
+      index = protectedSpan.end;
+      continue;
+    }
     const char = sql[index];
     const next = sql[index + 1];
     if (char === '-' && next === '-') {
@@ -256,7 +415,15 @@ function translateLegacyReadSqlSafely_ACU(sql: string, translateSql: (sql: strin
     ;
   const protectedOutputAliases = protectImplicitSelectAliases_ACU(protectedAliases, mask);
   const translated = translateSql(protectedOutputAliases);
-  return translated.replace(/__ACU_SQL_PROTECTED_(\d+)__/g, (_match, value) => protectedParts[Number(value)] || '');
+  let restored = translated;
+  // Quoted identifiers are masked before explicit AS aliases are masked. The
+  // latter can therefore contain an earlier marker; restore to a fixed point.
+  for (let pass = 0; pass < protectedParts.length; pass += 1) {
+    const next = restored.replace(/__ACU_SQL_PROTECTED_(\d+)__/g, (_match, value) => protectedParts[Number(value)] || '');
+    if (next === restored) break;
+    restored = next;
+  }
+  return restored;
 }
 
 export function resolveReadQuerySql_ACU(
@@ -267,7 +434,13 @@ export function resolveReadQuerySql_ACU(
   // PRAGMA arguments are SQLite grammar rather than SELECT identifiers.
   // Do not run a broad legacy translation over them.
   if (/^\s*PRAGMA\b/i.test(sql)) return { sql, tableRebindCount: 0, columnRebindCount: 0 };
-  if (!tableData) return { sql: translateLegacyReadSqlSafely_ACU(sql, translateSql), tableRebindCount: 0, columnRebindCount: 0 };
+  if (!tableData) {
+    // Even without runtime table data, the legacy mapper must still respect
+    // derived/CTE output scope. Run the structural pass with no aliases solely
+    // to collect protected virtual-output spans.
+    const rebound = rebindSqlReadIdentifiers_ACU(sql, new Map(), new Map(), { lenient: true });
+    return { ...rebound, sql: translateLegacyReadSqlSafely_ACU(rebound.sql, translateSql, rebound.protectedIdentifierSpans) };
+  }
   const { aliases: tableAliases, conflicts: tableConflicts } = buildSheetTableAliasMap_ACU([tableData]);
   const { aliases: columnAliases, conflicts: columnConflicts } = buildSheetColumnAliasMap_ACU([tableData]);
 
@@ -283,7 +456,7 @@ export function resolveReadQuerySql_ACU(
   const referencedTableConflicts = [...tableConflicts].filter(conflict => referencedTableAliases.has(conflict));
   return {
     ...rebound,
-    sql: translateLegacyReadSqlSafely_ACU(rebound.sql, translateSql),
+    sql: translateLegacyReadSqlSafely_ACU(rebound.sql, translateSql, rebound.protectedIdentifierSpans),
     tableConflicts: referencedTableConflicts,
     columnConflicts: [...referencedColumnConflicts],
     conflicts: [...referencedTableConflicts, ...referencedColumnConflicts],

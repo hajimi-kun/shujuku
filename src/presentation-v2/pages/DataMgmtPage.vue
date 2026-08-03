@@ -159,6 +159,9 @@
             <h3 id="acu-mixed-storage-title" class="acu-v2-data-mgmt-page__section-title">混合存储决议</h3>
             <p class="acu-v2-data-mgmt-page__section-description">
               当前聊天同时检测到 legacy-v1 与 V2 数据。决议：{{ flow.mixedStorageDecision.value.kind }}。
+              <template v-if="flow.mixedStorageDecision.value.diagnosticCodes.length">
+                诊断：{{ flow.mixedStorageDecision.value.diagnosticCodes.join('、') }}。
+              </template>
               可先导出两份独立快照；提交动作只引用当前决议，不会从页面接收或覆盖表格数据。
             </p>
             <div class="acu-v2-data-mgmt-page__checkpoint-actions">
@@ -200,14 +203,14 @@
                 导出已保存的原始 frame 备份
               </AcuButton>
               <AcuButton
-                v-if="flow.v2RecoverySummary.value.status === 'recoverable_repaired_checkpoint'"
+                v-if="flow.v2RecoverySummary.value.status === 'recoverable_repaired_checkpoint' || flow.v2RecoverySummary.value.status === 'recoverable_temporary_sheet_anchor'"
                 block
                 variant="danger"
                 :disabled="runtimeDiagnostic.busy.value"
                 :loading="flow.busyAction.value === 'commit-v2-recovery'"
                 @click="onCommitV2Recovery(false)"
               >
-                应用 Checkpoint 修复
+                应用 Checkpoint 修复/收敛
               </AcuButton>
               <AcuButton
                 v-if="flow.v2RecoverySummary.value.status === 'recoverable_orphan_data_replace'"

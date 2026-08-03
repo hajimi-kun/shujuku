@@ -143,6 +143,53 @@ describe('reconcileChatTemplate_ACU', () => {
     expect(plan.audit[0].inheritedColumns).toContain('前一轮时间');
   });
 
+  it('同一逻辑表改名时累积旧表名，并允许后续模板以显式 tableAliases 认回旧 key', async () => {
+    const baseline = state({
+      sheet_protagonist: sheet('sheet_protagonist', '主角信息', ['row_id', '名称'],
+        'row_id INTEGER PRIMARY KEY, 名称 TEXT'),
+    });
+    const renamed = state({
+      sheet_protagonist: sheet('sheet_protagonist', '主角信息表', ['row_id', '名称'],
+        'row_id INTEGER PRIMARY KEY, 名称 TEXT'),
+    });
+    renamed.sheet_protagonist.sourceData.tableAliases = ['主角信息'];
+
+    const first = await reconcileChatTemplate_ACU({ baselineData: baseline, templateData: renamed, destructiveChangeConfirmed: false, storageMode: 'native' });
+    expect(first.blockers).toEqual([]);
+    expect(first.candidateData.sheet_protagonist.sourceData.tableAliases).toEqual(['主角信息']);
+
+    const laterTemplate = state({
+      sheet_protagonist_later: sheet('sheet_protagonist_later', '人物档案', ['row_id', '名称'],
+        'row_id INTEGER PRIMARY KEY, 名称 TEXT'),
+    });
+    laterTemplate.sheet_protagonist_later.sourceData.tableAliases = ['主角信息表'];
+    const second = await reconcileChatTemplate_ACU({
+      baselineData: first.candidateData,
+      templateData: laterTemplate,
+      destructiveChangeConfirmed: false,
+      storageMode: 'native',
+    });
+
+    expect(second.blockers).toEqual([]);
+    expect(second.candidateData.sheet_protagonist.name).toBe('人物档案');
+    expect(second.candidateData.sheet_protagonist.sourceData.tableAliases)
+      .toEqual(['主角信息', '主角信息表']);
+  });
+
+  it('模板中的 tableAliases 与其他表身份冲突时在协调前 fail closed', async () => {
+    const template = state({
+      sheet_alpha: sheet('sheet_alpha', '甲表', ['row_id', '值'], 'row_id INTEGER PRIMARY KEY, 值 TEXT'),
+      sheet_beta: sheet('sheet_beta', '乙表', ['row_id', '值'], 'row_id INTEGER PRIMARY KEY, 值 TEXT'),
+    });
+    template.sheet_alpha.sourceData.tableAliases = ['角色表'];
+    template.sheet_beta.sourceData.tableAliases = [' 角色表 '];
+
+    const plan = await reconcileChatTemplate_ACU({ baselineData: state({}), templateData: template, destructiveChangeConfirmed: false });
+
+    expect(plan.blockers.join('\n')).toContain('表别名规范化重复');
+    expect(plan.sheetChanges).toEqual([]);
+  });
+
   it('改名后自动累积别名，再改一次仍能顺别名链继承', async () => {
     const baseline = state({
       sheet_g: sheet('sheet_g', '表', ['row_id', '上轮场景时间'],
@@ -703,14 +750,72 @@ describe('reconcileChatTemplate_ACU', () => {
   });
 
 
-  it('仅 introduction 的 DDL 与表头不一致时，完整 replay candidate hydrate 必须阻断', async () => {
+  it('仅 introduction 的 DDL 与表头不一致时，由 DDL/表头预检阶段阻断', async () => {
     const invalidTemplate = sheet('sheet_new', '新表', ['row_id', '显示名称'], 'row_id INTEGER PRIMARY KEY, physical_name TEXT', []);
     const plan = await reconcileChatTemplate_ACU({ baselineData: state({}), templateData: state({ sheet_new: invalidTemplate }), destructiveChangeConfirmed: false });
 
-    expect(plan.blockers.join('\n')).toContain('完整 replay candidate SQLite hydrate 失败');
+    expect(plan.blockers.join('\n')).toContain('完整 replay candidate DDL/表头预检失败');
+    expect(plan.blockers.join('\n')).toContain('sheet_new');
     expect(plan.sheetChanges).toEqual([]);
     expect(plan.candidateData.sheet_new).toBeUndefined();
     expect(plan.audit.every(item => item.operations.length === 0)).toBe(true);
+  });
+
+  it('ASCII 展示表头通过 DDL 注释映射后可携带数据完成真实 SQLite hydrate', async () => {
+    const battleSheet = sheet(
+      'sheet_zhan_dou_zhuang_tai_ji_lu',
+      '战斗状态记录',
+      ['row_id', 'HP/RP', 'EN'],
+      'row_id INTEGER PRIMARY KEY, hp_rp TEXT, en TEXT',
+      [['1', '10/20', '8']],
+    );
+    battleSheet.sourceData.ddl = `CREATE TABLE battle_status (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  hp_rp TEXT, -- HP/RP
+  en TEXT -- EN
+);`;
+
+    const plan = await reconcileChatTemplate_ACU({
+      baselineData: state({}),
+      templateData: state({ sheet_zhan_dou_zhuang_tai_ji_lu: battleSheet }),
+      destructiveChangeConfirmed: false,
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.candidateData.sheet_zhan_dou_zhuang_tai_ji_lu.content).toEqual([
+      ['row_id', 'HP/RP', 'EN'],
+      ['1', '10/20', '8'],
+    ]);
+    expect(plan.sheetChanges).toEqual([
+      expect.objectContaining({ kind: 'introduction', sheetKey: 'sheet_zhan_dou_zhuang_tai_ji_lu' }),
+    ]);
+  });
+
+  it('hidden physical column 无效时由列投影预检阶段阻断', async () => {
+    const invalidProjection = sheet('sheet_new', '新表', ['row_id', 'value'], 'row_id INTEGER PRIMARY KEY, value TEXT', []);
+    invalidProjection.sourceData.hiddenPhysicalColumns = ['missing_column'];
+
+    const plan = await reconcileChatTemplate_ACU({ baselineData: state({}), templateData: state({ sheet_new: invalidProjection }), destructiveChangeConfirmed: false });
+
+    expect(plan.blockers.join('\n')).toContain('完整 replay candidate 列投影预检失败');
+    expect(plan.blockers.join('\n')).toContain('missing_column');
+    expect(plan.sheetChanges).toEqual([]);
+    expect(plan.candidateData.sheet_new).toBeUndefined();
+  });
+
+  it('通过预检但违反 SQLite CHECK 的数据由真实 hydrate 阶段阻断', async () => {
+    const invalidRow = sheet('sheet_new', '新表', ['row_id', 'Score'], 'row_id INTEGER PRIMARY KEY, score INTEGER', [['1', '-1']]);
+    invalidRow.sourceData.ddl = `CREATE TABLE score_table (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  score INTEGER CHECK(score > 0) -- Score
+);`;
+
+    const plan = await reconcileChatTemplate_ACU({ baselineData: state({}), templateData: state({ sheet_new: invalidRow }), destructiveChangeConfirmed: false });
+
+    expect(plan.blockers.join('\n')).toContain('完整 replay candidate SQLite hydrate 失败');
+    expect(plan.blockers.join('\n')).toContain('SQLite 写入失败');
+    expect(plan.sheetChanges).toEqual([]);
+    expect(plan.candidateData.sheet_new).toBeUndefined();
   });
 
   it('audit 与实际 change set 对账，包含 schema、metadata、introduction 和 hide/delete 摘要', async () => {

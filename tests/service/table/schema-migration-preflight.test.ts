@@ -73,17 +73,23 @@ describe('schema migration preflight', () => {
     expect(result.operations).toMatchObject([{ migrationPolicy: { destructiveChangeConfirmed: true } }]);
   });
 
-  it('P2 physical rename 没有显式 intent 时 fail closed', async () => {
-    const baseline = state(sheet());
+  it('display header 唯一对应时自动推导 physical rename 的 V2 mapping', async () => {
+    const baseline = state(sheet({
+      content: [['row_id', '名称'], ['1', 'iron sword']],
+      sourceData: { ddl: 'CREATE TABLE inventory (\n  row_id INTEGER PRIMARY KEY, -- row_id\n  name TEXT -- 名称\n);' },
+    }));
     const candidate = state(sheet({
-      content: [['row_id', 'item_name'], ['1', 'iron sword']],
-      sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT);' },
+      content: [['row_id', '名称'], ['1', 'iron sword']],
+      sourceData: { ddl: 'CREATE TABLE inventory (\n  row_id INTEGER PRIMARY KEY, -- row_id\n  item_name TEXT -- 名称\n);' },
     }));
 
     const result = await preflightSchemaMigrations_ACU({ baselineData: baseline, candidateData: candidate });
 
-    expect(result.operations).toEqual([]);
-    expect(result.blockers.join('\n')).toContain('mapping 契约');
+    expect(result.blockers).toEqual([]);
+    expect(result.operations).toMatchObject([{
+      kind: 'sheet_schema_migrate', contractVersion: 2,
+      physicalColumnMappings: [{ fromPhysicalName: 'name', toPhysicalName: 'item_name' }],
+    }]);
   });
 
   it('P2 physical rename 携带完整显式 intent 时返回 V2 operation', async () => {
@@ -108,6 +114,73 @@ describe('schema migration preflight', () => {
 
     expect(result.blockers).toEqual([]);
     expect(result.operations).toMatchObject([{ kind: 'sheet_schema_migrate', contractVersion: 2 }]);
+  });
+
+  it('literal DEFAULT 新列自动生成 V2 fill 并保留历史行', async () => {
+    const baseline = state(sheet());
+    const candidate = state(sheet({
+      content: [['row_id', 'name', 'quality'], ['1', 'iron sword', 'normal']],
+      sourceData: { ddl: "CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT, quality TEXT NOT NULL DEFAULT 'normal');" },
+    }));
+
+    const result = await preflightSchemaMigrations_ACU({ baselineData: baseline, candidateData: candidate });
+
+    expect(result.blockers).toEqual([]);
+    expect(result.operations).toMatchObject([{
+      contractVersion: 2,
+      fills: { quality: { kind: 'ddl_literal_default', literal: { kind: 'string', value: 'normal' } } },
+    }]);
+  });
+
+  it('自动推导 operation 的逐行结果与候选不一致时拒绝', async () => {
+    const baseline = state(sheet());
+    const candidate = state(sheet({
+      content: [['row_id', 'name', 'quality'], ['1', 'iron sword', 'tampered']],
+      sourceData: { ddl: "CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT, quality TEXT NOT NULL DEFAULT 'normal');" },
+    }));
+
+    const result = await preflightSchemaMigrations_ACU({ baselineData: baseline, candidateData: candidate });
+
+    expect(result.operations).toEqual([]);
+    expect(result.blockers.join('\n')).toContain('operation 应用结果与 candidate 不一致');
+  });
+
+  it('无法解析的 candidate DDL 返回 blocker 而不是抛出异常', async () => {
+    const baseline = state(sheet());
+    const candidate = state(sheet({ sourceData: { ddl: 'not sql' } }));
+
+    await expect(preflightSchemaMigrations_ACU({ baselineData: baseline, candidateData: candidate })).resolves.toMatchObject({
+      operations: [], blockers: [expect.stringContaining('DDL/表头不一致')],
+    });
+  });
+
+  it('retained physical column 重排自动生成 V2 operation', async () => {
+    const baseline = state(sheet({
+      content: [['row_id', 'name', 'quantity'], ['1', 'iron sword', '3']],
+      sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT, quantity INTEGER);' },
+    }));
+    const candidate = state(sheet({
+      content: [['row_id', 'quantity', 'name'], ['1', '3', 'iron sword']],
+      sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, quantity INTEGER, name TEXT);' },
+    }));
+
+    const result = await preflightSchemaMigrations_ACU({ baselineData: baseline, candidateData: candidate });
+
+    expect(result.blockers).toEqual([]);
+    expect(result.operations).toMatchObject([{ contractVersion: 2, physicalColumnMappings: [], fills: {}, conversions: [] }]);
+  });
+
+  it('无法唯一证明 identity 的 physical add/drop 仍然拒绝', async () => {
+    const baseline = state(sheet());
+    const candidate = state(sheet({
+      content: [['row_id', 'quality'], ['1', 'normal']],
+      sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, quality TEXT);' },
+    }));
+
+    const result = await preflightSchemaMigrations_ACU({ baselineData: baseline, candidateData: candidate });
+
+    expect(result.operations).toEqual([]);
+    expect(result.blockers.join('\n')).toContain('无法唯一推导');
   });
 
   it('完整 candidate hydrate 失败时不返回 operation', async () => {

@@ -572,6 +572,61 @@ describe('createTableCrudApi — SQLite 模式', () => {
       );
     });
 
+    it('等待模板导入中的 runtime 后，使用最新 canonical 模板插入对象参数数据', async () => {
+      const readyProvider = {
+        executeMutation: mockExecuteRuntimeMutation,
+        getCurrentData: mockGetRuntimeData,
+        createRuntimeSnapshot: mockCreateRuntimeSnapshot,
+        restoreRuntimeSnapshot: mockRestoreRuntimeSnapshot,
+      };
+      mockEnsureStorageProviderReady.mockImplementation(async () => {
+        // 模拟 importTemplateFromData 已提交新模板，但 SQLite reload flight 尚未完成。
+        // CRUD 必须在 await 后重新读取 canonical 数据，而不是用调用开始时的旧库存表。
+        mockCurrentJsonTableData = {
+          sheet_hero: {
+            uid: 'hero',
+            name: '主角信息',
+            sourceData: {
+              ddl: `CREATE TABLE hero_legacy ( -- 主角信息
+  row_id INTEGER PRIMARY KEY, -- 行号
+  character_name TEXT -- 人物名称
+);`,
+            },
+            content: [['row_id', '人物名称']],
+          },
+        };
+        mockGetRuntimeData.mockImplementation(() => {
+          const workingData = JSON.parse(JSON.stringify(mockCurrentJsonTableData));
+          const sheet = workingData.sheet_hero;
+          const lastCall = mockExecuteRuntimeMutation.mock.calls.at(-1) || [];
+          const sql = String(lastCall[0] || '');
+          const params = (lastCall[1] || []) as any[];
+          if (sql.startsWith('INSERT')) {
+            sheet.content.push(['1', params[0] ?? '']);
+          }
+          return workingData;
+        });
+        return readyProvider;
+      });
+
+      const result = await api.insertRow({
+        tableName: '主角信息',
+        data: { '人物名称': '助手' },
+        skipNotify: true,
+      });
+
+      expect(result).toBe(1);
+      expect(mockEnsureStorageProviderReady).toHaveBeenCalledTimes(2);
+      expect(mockExecuteRuntimeMutation).toHaveBeenCalledWith(
+        'INSERT INTO `zhujuexinxi` (`character_name`) VALUES (?);',
+        ['助手'],
+      );
+      expect(mockPersistTablesToChatMessage).toHaveBeenCalledWith(expect.objectContaining({
+        source: 'manual_crud',
+        targetSheetKeys: ['sheet_hero'],
+      }));
+    });
+
     it('表不存在返回 -1', async () => {
       const result = await api.insertRow('不存在的表', { '物品名': '盾牌' });
       expect(result).toBe(-1);

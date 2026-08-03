@@ -68,15 +68,23 @@ vi.mock('../../src/service/table/table-storage-strategy', () => ({
 
 import { NativeTableServiceAdapter } from '../../src/service/table/native-table-service-adapter';
 import { SqlTableService } from '../../src/service/table/sql-table-service';
-import { restoreTableCheckpointToLatestAi_ACU } from '../../src/service/table/table-checkpoint-transfer';
+import { buildCurrentTableCheckpoint_ACU, parseTableCheckpointFile_ACU, restoreTableCheckpointToLatestAi_ACU } from '../../src/service/table/table-checkpoint-transfer';
 
 describe('cp-07: Checkpoint 真实存储跨模式恢复', () => {
-  const tableData: TableDataObject_ACU = { mate: { type: 'acu', version: 1 } as any, sheet_0: { uid: 'inventory', name: '背包', content: [['row_id', 'name'], ['1', '铁剑']], sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT)' }, updateConfig: {}, exportConfig: {}, orderNo: 0 } as any };
+  const tableData: TableDataObject_ACU = { mate: { type: 'acu', version: 1 } as any, sheet_3NoMc1wI: { uid: 'chronicle', name: '纪要表', content: [['row_id', 'content'], ['1', '铁剑']], sourceData: { ddl: 'CREATE TABLE chronicle (row_id INTEGER PRIMARY KEY, content TEXT)' }, updateConfig: {}, exportConfig: {}, orderNo: 0 } as any };
   const checkpoint = (sourceStorageMode: 'native' | 'sqlite') => ({ format: 'acu-table-checkpoint', version: 1, createdAt: 1, source: { storageMode: sourceStorageMode }, tableSnapshot: tableData, templateSnapshot: { data: tableData, presetName: '测试预设' }, guideSnapshot: { data: tableData }, integrity: { algorithm: 'fnv1a', payloadHash: 'hash' } } as any);
+  const setHeterogeneousTarget = async () => {
+    const target = { mate: { type: 'acu', version: 1 }, sheet_target: { uid: 'target', name: '目标旧表', content: [['row_id', 'old', 'extra'], ['1', '旧值', 'x']], sourceData: { ddl: 'CREATE TABLE target (row_id INTEGER PRIMARY KEY, old TEXT, extra TEXT)' }, updateConfig: {}, exportConfig: {}, orderNo: 0 } };
+    await h.provider.replaceAllData(target);
+    h.data = target;
+    h.guide = target;
+    h.scope = { mode: 'chat_override', templateStr: JSON.stringify(target) };
+  };
 
   beforeEach(() => { h.chat = [{ is_user: true }, { is_user: false }]; h.data = null; h.scope = null; h.guide = null; h.sqliteMode = false; h.persistedTableData = null; h.provider = new NativeTableServiceAdapter(); });
 
   it('native → native：来源与目标均为原生 provider 时保留完整 Checkpoint 快照', async () => {
+    await setHeterogeneousTarget();
     const result = await restoreTableCheckpointToLatestAi_ACU(checkpoint('native'));
     expect(result).toMatchObject({ success: true, postCondition: { runtimeMatches: true, scopeIsChatOverride: true, templateMatches: true, guideMatches: true, providerMode: 'native' } });
     expect(h.provider).toBeInstanceOf(NativeTableServiceAdapter);
@@ -86,6 +94,7 @@ describe('cp-07: Checkpoint 真实存储跨模式恢复', () => {
   it('native → sqlite：目标 SQLite provider 以真实 sql.js 重建持久化快照', async () => {
     h.sqliteMode = true;
     h.provider = new SqlTableService();
+    await setHeterogeneousTarget();
     const result = await restoreTableCheckpointToLatestAi_ACU(checkpoint('native'));
     expect(result).toMatchObject({ success: true, postCondition: { runtimeMatches: true, scopeIsChatOverride: true, templateMatches: true, guideMatches: true, providerMode: 'sqlite' } });
     expect(h.provider).toBeInstanceOf(SqlTableService);
@@ -94,6 +103,7 @@ describe('cp-07: Checkpoint 真实存储跨模式恢复', () => {
   });
 
   it('sqlite → native：来源元数据不改变真实 native 目标运行时', async () => {
+    await setHeterogeneousTarget();
     const result = await restoreTableCheckpointToLatestAi_ACU(checkpoint('sqlite'));
     expect(result).toMatchObject({ success: true, postCondition: { runtimeMatches: true, scopeIsChatOverride: true, templateMatches: true, guideMatches: true, providerMode: 'native' } });
     expect(h.provider).toBeInstanceOf(NativeTableServiceAdapter);
@@ -102,11 +112,29 @@ describe('cp-07: Checkpoint 真实存储跨模式恢复', () => {
   it('sqlite → sqlite：来源与目标均为 SQLite 时重建真实 SQL runtime', async () => {
     h.sqliteMode = true;
     h.provider = new SqlTableService();
+    await setHeterogeneousTarget();
     const result = await restoreTableCheckpointToLatestAi_ACU(checkpoint('sqlite'));
     expect(result).toMatchObject({ success: true, postCondition: { runtimeMatches: true, scopeIsChatOverride: true, templateMatches: true, guideMatches: true, providerMode: 'sqlite' } });
     expect(h.provider).toBeInstanceOf(SqlTableService);
     expect(h.provider.isReady()).toBe(true);
     expect(h.provider.getCurrentData()).toEqual(tableData);
     h.provider.dispose();
+  });
+
+  it('修复 sheet_3NoMc1wI 历史尾标记后可导出并再次恢复，列宽不漂移', async () => {
+    const legacyTable = { ...tableData, sheet_3NoMc1wI: { ...tableData.sheet_3NoMc1wI, content: [['row_id', 'content'], ['1', '旧纪要', 'auto_merged']] } } as any;
+    const legacyCheckpoint = { ...checkpoint('native'), tableSnapshot: legacyTable, templateSnapshot: { data: legacyTable, presetName: '旧预设' }, guideSnapshot: { data: legacyTable } };
+    const parsed = parseTableCheckpointFile_ACU(JSON.stringify(legacyCheckpoint));
+    expect(parsed).toMatchObject({ success: true });
+    if (!parsed.success) throw new Error(parsed.error);
+
+    await expect(restoreTableCheckpointToLatestAi_ACU(parsed.checkpoint)).resolves.toMatchObject({ success: true });
+    h.data = parsed.checkpoint.templateSnapshot.data;
+    h.guide = parsed.checkpoint.guideSnapshot.data;
+    const reExported = buildCurrentTableCheckpoint_ACU();
+
+    expect(reExported.tableSnapshot.sheet_3NoMc1wI.content[1]).toHaveLength(2);
+    expect(parseTableCheckpointFile_ACU(JSON.stringify(reExported))).toMatchObject({ success: true });
+    await expect(restoreTableCheckpointToLatestAi_ACU(reExported)).resolves.toMatchObject({ success: true });
   });
 });

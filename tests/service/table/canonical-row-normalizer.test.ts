@@ -3,6 +3,7 @@ import {
   formatCanonicalRowIssues_ACU,
   isEmptyCanonicalRowId_ACU,
   normalizeCanonicalTableRows_ACU,
+  repairLegacyAutoMergedRowTails_ACU,
 } from '../../../src/shared/canonical-row-normalizer';
 
 describe('canonical-row-normalizer', () => {
@@ -50,5 +51,32 @@ describe('canonical-row-normalizer', () => {
     ]);
     expect(formatCanonicalRowIssues_ACU(result.errors)).toBe('sheet_0 第 2 行：duplicate_row_id；sheet_0 第 3 行：invalid_row');
     expect(formatCanonicalRowIssues_ACU(result.errors)).not.toContain('不得进入错误文本');
+  });
+
+  it('只剥离恰好多一格且末位严格为 auto_merged 的历史尾标记', () => {
+    const data: any = {
+      sheet_0: {
+        content: [
+          ['row_id', '名称'],
+          ['1', '历史自动合并行', 'auto_merged'],
+          ['2', '额外业务列', 'auto_merged', '仍然保留'],
+          ['3', '非标记尾列', 'manual'],
+        ],
+      },
+    };
+
+    expect(repairLegacyAutoMergedRowTails_ACU(data)).toEqual(['sheet_0']);
+    expect(data.sheet_0.content).toEqual([
+      ['row_id', '名称'],
+      ['1', '历史自动合并行'],
+      ['2', '额外业务列', 'auto_merged', '仍然保留'],
+      ['3', '非标记尾列', 'manual'],
+    ]);
+  });
+
+  it('不把 seedRows 当作运行时历史尾标记修复对象', () => {
+    const data: any = { sheet_0: { content: [['row_id', '名称'], ['1', '正常']], seedRows: [['2', '种子', 'auto_merged']] } };
+    expect(repairLegacyAutoMergedRowTails_ACU(data)).toEqual([]);
+    expect(data.sheet_0.seedRows).toEqual([['2', '种子', 'auto_merged']]);
   });
 });

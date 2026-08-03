@@ -5,6 +5,7 @@ import {
   type CanonicalCheckpointValidationContext_ACU,
 } from '../../shared/canonical-checkpoint-validator';
 import type {
+  ManualRefillTemplateRootProvenanceV1_ACU,
   ManualRefillProgressV2_ACU,
   TableCheckpointScheduleSummaryV2_ACU,
   TableCheckpointV2_ACU,
@@ -61,6 +62,7 @@ export interface BuildCanonicalFullCheckpointOptions_ACU {
   event?: TableMutationEventV2_ACU;
   manualRefillProgress?: ManualRefillProgressV2_ACU;
   migrationProvenance?: TableMigrationProvenanceV1_ACU;
+  fallbackProvenance?: ManualRefillTemplateRootProvenanceV1_ACU;
   context?: CanonicalCheckpointValidationContext_ACU;
 }
 
@@ -76,6 +78,7 @@ export function buildCanonicalFullCheckpoint_ACU(
     ...(options.event ? { event: deepClone_ACU(options.event) } : {}),
     ...(options.manualRefillProgress ? { manualRefillProgress: deepClone_ACU(options.manualRefillProgress) } : {}),
     ...(options.migrationProvenance ? { migrationProvenance: deepClone_ACU(options.migrationProvenance) } : {}),
+    ...(options.fallbackProvenance ? { fallbackProvenance: deepClone_ACU(options.fallbackProvenance) } : {}),
   };
   return validateCandidate_ACU(checkpoint, { ...options.context, reason: options.reason });
 }

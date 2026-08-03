@@ -12,6 +12,8 @@ import { getActiveStorageProvider, getStorageProvider, reloadStorageProvider } f
 import { getLatestAiMessageIndexFromChat_ACU } from './table-history';
 import { persistTablesToChatMessage_ACU } from './table-service';
 import { runTableWriteTransaction_ACU } from './table-write-transaction';
+import { repairLegacyAutoMergedRowTails_ACU } from '../../shared/canonical-row-normalizer';
+import { validateCanonicalCheckpointData_ACU } from '../../shared/canonical-checkpoint-validator';
 
 const CHECKPOINT_FORMAT_ACU = 'acu-table-checkpoint' as const;
 const CHECKPOINT_VERSION_ACU = 1 as const;
@@ -111,6 +113,9 @@ function assertMatchingSheetSchema_ACU(leftSheet: any, rightSheet: any, key: str
   }
 }
 
+/**
+ * 仅比较同一 Checkpoint 文件内的 runtime/template/guide 快照；绝不读取目标聊天当前模板。
+ */
 function assertCheckpointSchemaConsistency_ACU(
   tableSnapshot: TableDataObject_ACU,
   templateData: TableDataObject_ACU,
@@ -127,6 +132,25 @@ function assertCheckpointSchemaConsistency_ACU(
       assertMatchingSheetSchema_ACU(tableSnapshot[key], templateData[key], key, 'tableSnapshot', 'templateSnapshot.data');
     }
   }
+}
+
+function assertCanonicalCheckpointRows_ACU(data: TableDataObject_ACU, label: string): void {
+  const validation = validateCanonicalCheckpointData_ACU(data);
+  if (!validation.valid) {
+    const locations = validation.issues.map(issue => `${issue.type}: ${issue.sheetKey || 'unknown'}${issue.rowIndex === undefined ? '' : ` 第 ${issue.rowIndex} 行`}`).join('；');
+    throw new Error(`${label} 行标识或结构不合法：${locations}`);
+  }
+}
+
+function repairCheckpointLegacyAutoMergedTails_ACU(
+  tableSnapshot: TableDataObject_ACU,
+  templateData: TableDataObject_ACU,
+  guideData: Record<string, any>,
+): boolean {
+  const repairedTable = repairLegacyAutoMergedRowTails_ACU(tableSnapshot);
+  const repairedTemplate = repairLegacyAutoMergedRowTails_ACU(templateData);
+  const repairedGuide = repairLegacyAutoMergedRowTails_ACU(guideData);
+  return repairedTable.length > 0 || repairedTemplate.length > 0 || repairedGuide.length > 0;
 }
 
 function normalizeCheckpointPayload_ACU(raw: unknown): TableCheckpointFileV1_ACU {
@@ -153,8 +177,19 @@ function normalizeCheckpointPayload_ACU(raw: unknown): TableCheckpointFileV1_ACU
   };
   if (!checkpoint.integrity.payloadHash) throw new Error('Checkpoint 缺少完整性哈希。');
   const { integrity, ...payload } = checkpoint;
+  // 先验证文件原始内容的哈希，再修复历史版本错误追加的尾标记；否则会把被篡改
+  // 的文件误当作可兼容旧文件。修复后重签内部对象，使 parse → restore 幂等。
   if (payloadHash_ACU(payload) !== integrity.payloadHash) throw new Error('Checkpoint 完整性校验失败，文件可能已损坏或被篡改。');
+  const repairedLegacyAutoMergedTails = repairCheckpointLegacyAutoMergedTails_ACU(tableSnapshot, templateData, guideData);
+  assertCanonicalCheckpointRows_ACU(tableSnapshot, 'tableSnapshot');
+  assertCanonicalCheckpointRows_ACU(templateData, 'templateSnapshot.data');
+  assertCanonicalCheckpointRows_ACU(guideData as TableDataObject_ACU, 'guideSnapshot.data');
   assertCheckpointSchemaConsistency_ACU(tableSnapshot, templateData, guideData);
+  if (repairedLegacyAutoMergedTails) {
+    const { integrity: _previousIntegrity, ...repairedPayload } = checkpoint;
+    checkpoint.integrity = { algorithm: 'fnv1a', payloadHash: payloadHash_ACU(repairedPayload) };
+    logDebug_ACU('[Checkpoint] 已修复历史 auto_merged 越界尾列。');
+  }
   return checkpoint;
 }
 
@@ -173,8 +208,12 @@ export function buildCurrentTableCheckpoint_ACU(): TableCheckpointFileV1_ACU {
   const tableSnapshot = normalizeTableData_ACU(provider.getCurrentData(), '当前表格数据');
   const isolationKey = getCurrentIsolationKey_ACU();
   const templateData = normalizeTableData_ACU(parseTableTemplateJson_ACU({ stripSeedRows: false }), '当前生效模板');
-  const guideData = normalizeGuideData_ACU(getChatSheetGuideDataForIsolationKey_ACU(isolationKey));
+  const guideData = normalizeGuideData_ACU(cloneJson_ACU(getChatSheetGuideDataForIsolationKey_ACU(isolationKey)));
   if (!guideData || !Object.keys(guideData).some(key => key.startsWith('sheet_'))) throw new Error('当前聊天缺少可导出的指导表。');
+  repairCheckpointLegacyAutoMergedTails_ACU(tableSnapshot, templateData, guideData);
+  assertCanonicalCheckpointRows_ACU(tableSnapshot, '当前表格数据');
+  assertCanonicalCheckpointRows_ACU(templateData, '当前生效模板');
+  assertCanonicalCheckpointRows_ACU(guideData as TableDataObject_ACU, '当前指导表');
   assertCheckpointSchemaConsistency_ACU(tableSnapshot, templateData, guideData);
   const scope = getCurrentChatTemplateScopeState_ACU({ isolationKey });
   const payload = {

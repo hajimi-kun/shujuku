@@ -700,6 +700,14 @@ describe('sql-query-var', () => {
       _set_currentJsonTableData_ACU(null);
     });
 
+    it('保留派生查询输出列名，不把外层引用重新翻译为实体列', () => {
+      const result = evaluateRawSqlExpression(
+        'sql "SELECT 姓名 FROM (SELECT char_name AS 姓名 FROM characters) AS people_view ORDER BY 姓名"',
+      );
+
+      expect(result).toBe('角色A\n角色B\n角色C');
+    });
+
     it('多行单列结果用换行分隔', () => {
       const result = evaluateRawSqlExpression('sql "SELECT item_name FROM inventory"');
       expect(result).toContain('铁剑');
@@ -1207,6 +1215,14 @@ describe('sql-query-var', () => {
 
       expect(result).toMatchObject({ content: '记录A', executedCount: 1, rejectedCount: 0 });
       _set_currentJsonTableData_ACU(null);
+    });
+
+    it('在 Agent SQL 标签中保留派生查询输出列名', () => {
+      const result = renderAgentReadOnlyQueryTemplates_ACU(
+        '{[sql "SELECT 姓名 FROM (SELECT char_name AS 姓名 FROM characters) AS people_view ORDER BY 姓名"]}',
+      );
+
+      expect(result).toMatchObject({ content: '角色A\n角色B\n角色C', executedCount: 1, rejectedCount: 0 });
     });
 
     it('executes allowlisted ORM chains without evaluating arbitrary JavaScript', () => {

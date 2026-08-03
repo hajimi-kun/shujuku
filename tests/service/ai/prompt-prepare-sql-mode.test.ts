@@ -165,22 +165,21 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
 
     const result = await prepareAIInput_ACU([], 'standard');
     expect(result).not.toBeNull();
-    // SQL 模式下应输出 DDL，且表名必须是 runtime 物理名（显示名拼音），
-    // 不能是 DDL 原文英文名——否则 AI 照抄后 SQL 会撞 no such table。
-    expect(result!.tableDataText).toContain('CREATE TABLE beibaowupinbiao');
-    expect(result!.tableDataText).not.toContain('CREATE TABLE inventory');
+    expect(result!.tableDataText).toContain('CREATE TABLE inventory');
+    expect(result!.tableDataText).not.toContain('CREATE TABLE beibaowupinbiao');
+    expect(result!.tableDataText).toContain('SQL 写入必须使用表名 inventory；系统会在执行时映射到内部表。');
     // 应输出 Note 注释
     expect(result!.tableDataText).toContain('-- Note: 记录角色背包中的物品');
     // 应输出当前数据（注释格式）
     expect(result!.tableDataText).toContain('-- 当前数据');
   });
 
-  it('显式 sqlApplyScope 存在时，prompt 物理表名使用请求前模板快照而不是当前运行时显示名', async () => {
+  it('显式 sqlApplyScope 存在时，prompt 使用请求前模板的作者英文名而不是运行时 DDL 名', async () => {
     mockCurrentJsonTableData = {
       sheet_0: {
         uid: 'inventory',
         name: '切换后模板表',
-        sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, value TEXT);' },
+        sourceData: { ddl: 'CREATE TABLE runtime_table (row_id INTEGER PRIMARY KEY, value TEXT);' },
         content: [['row_id', 'value'], ['1', '运行时数据']],
         updateConfig: {},
       },
@@ -190,7 +189,7 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
       sheet_0: {
         uid: 'inventory',
         name: '请求前模板表',
-        sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, value TEXT);' },
+        sourceData: { ddl: 'CREATE TABLE request_contract (row_id INTEGER PRIMARY KEY, value TEXT);' },
         content: [['row_id', 'value']],
         updateConfig: {},
         exportConfig: {},
@@ -208,9 +207,24 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
     });
 
     expect(result).not.toBeNull();
-    expect(result!.tableDataText).toContain('CREATE TABLE qingqiuqianmubanbiao');
-    expect(result!.tableDataText).not.toContain('CREATE TABLE qiehuanhoumubanbiao');
+    expect(result!.tableDataText).toContain('CREATE TABLE request_contract');
+    expect(result!.tableDataText).not.toContain('CREATE TABLE runtime_table');
+    expect(result!.tableDataText).not.toContain('CREATE TABLE qingqiuqianmubanbiao');
     expect(result!.tableDataText).toContain('运行时数据');
+  });
+
+  it('请求模板内作者 DDL 表名冲突时返回结构化失败，不构造可能误写的 AI prompt', async () => {
+    mockCurrentJsonTableData = {
+      sheet_0: { name: '甲表', sourceData: { ddl: 'CREATE TABLE shared_legacy (row_id INTEGER PRIMARY KEY);' }, content: [['row_id'], ['1']], updateConfig: {} },
+      sheet_1: { name: '乙表', sourceData: { ddl: 'CREATE TABLE shared_legacy (row_id INTEGER PRIMARY KEY);' }, content: [['row_id'], ['1']], updateConfig: {} },
+    };
+
+    await expect(prepareAIInput_ACU([], 'standard')).resolves.toEqual({
+      ok: false,
+      failureCode: 'authored_table_name_conflict',
+      message: '模板中多个表共用作者 DDL 表名「shared_legacy」，无法安全路由 AI SQL。',
+      retryable: false,
+    });
   });
 
   it('无 DDL 的表在 SQLite 模式下使用 effective fallback DDL，且不使用 seedRows', async () => {
@@ -278,8 +292,14 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
       },
     });
 
-    const text = formatTableForSqliteMode(table, 0, 'sheet_execution', null, { allowSeedRowsFallback: false });
+    const text = formatTableForSqliteMode(table, 0, 'sheet_execution', null, {
+      allowSeedRowsFallback: false,
+      runtimeTableName: 'zhixinghuibiao',
+      authoredTableName: 'execution_broken',
+    });
 
+    expect(text).toContain('CREATE TABLE execution_broken');
+    expect(text).not.toContain('CREATE TABLE zhixinghuibiao');
     expect(text).toContain('wu_pin_ming_cheng TEXT');
     expect(text).toContain('-- | row_id | wu_pin_ming_cheng |');
     expect(text).not.toContain('INVALID_SUFFIX');
@@ -361,8 +381,29 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
     expect(result!.tableDataText).toContain('row_id 由系统在执行前分配稳定身份');
     expect(result!.tableDataText).not.toContain('row_id 值为当前表最大 row_id + 1');
     expect(result!.tableDataText).toContain('UNIQUE 约束');
+    expect(result!.tableDataText).toContain('SQL 表名和列名必须严格使用上方 CREATE TABLE 中的英文标识符');
+    expect(result!.tableDataText).toContain('<tableEdit> 标签内');
     expect(result!.tableDataText).toContain('表达式更新');
     expect(result!.tableDataText).toContain('按 SQLite 原生整行替换语义执行');
+  });
+
+  it('strict JSON 模式沿用同一英文标识符契约', async () => {
+    mockSettings.strictJsonTableFillEnabled = true;
+    mockCurrentJsonTableData = {
+      sheet_0: {
+        name: '背包物品表',
+        sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT);' },
+        content: [['row_id', 'item_name'], ['1', '铁剑']],
+        updateConfig: {},
+      },
+    };
+
+    const result = await prepareAIInput_ACU([], 'standard');
+    expect(result).not.toBeNull();
+    expect(result!.tableDataText).toContain('CREATE TABLE inventory');
+    expect(result!.tableDataText).not.toContain('CREATE TABLE beibaowupinbiao');
+    expect(result!.tableDataText).toContain('响应 JSON 的 sql 字符串中');
+    expect(result!.tableDataText).toContain('SQL 表名和列名必须严格使用上方 CREATE TABLE 中的英文标识符');
   });
 
   it('固定 row_id 约束不再生成专用 REPLACE 许可注释', async () => {
@@ -443,7 +484,7 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
     const result = await prepareAIInput_ACU([], 'standard');
     expect(result).not.toBeNull();
     // 有 DDL 的表走 SQL 格式化
-    expect(result!.tableDataText).toContain('CREATE TABLE beibaowupinbiao');
+    expect(result!.tableDataText).toContain('CREATE TABLE inventory');
     // 无 DDL 的表也必须走 SQL effective fallback，避免模型收到无法执行的原生 DSL。
     expect(result!.tableDataText).toContain('CREATE TABLE juesebiao');
     expect(result!.tableDataText).toContain('-- | row_id | name |');
@@ -474,7 +515,7 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
     const result = await prepareAIInput_ACU([], 'standard', null, { tableData: explicitTableData });
 
     expect(result).not.toBeNull();
-    expect(result!.tableDataText).toContain('CREATE TABLE yunxingshibiao');
+    expect(result!.tableDataText).toContain('CREATE TABLE runtime_table');
     expect(result!.tableDataText).toContain('运行时值');
     expect(result!.tableDataText).not.toContain('explicit_table');
     expect(result!.tableDataText).not.toContain('显式快照值');
@@ -503,8 +544,8 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
     const result = await prepareAIInput_ACU([], 'standard', ['sheet_1']);
     expect(result).not.toBeNull();
     // 只输出 sheet_1
-    expect(result!.tableDataText).toContain('CREATE TABLE juesebiao');
-    expect(result!.tableDataText).not.toContain('CREATE TABLE beibaowupinbiao');
+    expect(result!.tableDataText).toContain('CREATE TABLE characters');
+    expect(result!.tableDataText).not.toContain('CREATE TABLE inventory');
   });
 
   it('对话消息被正确格式化', async () => {

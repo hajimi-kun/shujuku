@@ -8,7 +8,7 @@ import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU, independentTableS
 import { isSqliteMode } from '../table/storage-mode';
 import { getChatArray_ACU, saveChatToHost_ACU } from '../../data/gateways/chat-gateway';
 import { applyTemplateScopeForCurrentChat_ACU, saveSettings_ACU } from '../settings/settings-service';
-import { buildChatSheetGuideDataFromTemplateObj_ACU, getChatSheetGuideDataForIsolationKey_ACU, getSortedSheetKeys_ACU, materializeDataFromSheetGuide_ACU, reorderDataBySheetKeys_ACU, sanitizeTemplateSnapshotForChat_ACU, setChatSheetGuideDataForIsolationKey_ACU } from '../template/chat-scope';
+import { buildChatSheetGuideDataFromTemplateObj_ACU, ensureStableRowIdsForSheetContent_ACU, getChatSheetGuideDataForIsolationKey_ACU, getSortedSheetKeys_ACU, materializeDataFromSheetGuide_ACU, reorderDataBySheetKeys_ACU, sanitizeTemplateSnapshotForChat_ACU, setChatSheetGuideDataForIsolationKey_ACU } from '../template/chat-scope';
 import { deleteAllGeneratedEntries_ACU } from '../worldbook/pipeline';
 import { ensureSheetOrderNumbers_ACU, isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
 import { getTemplateSheetKeys_ACU } from '../template/chat-scope';
@@ -62,13 +62,10 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                   for (let r = 1; r < next.content.length; r++) {
                       const row = next.content[r];
                       if (!Array.isArray(row)) continue;
-                      const hasAutoMergedTag = row.length > 0 && row[row.length - 1] === 'auto_merged';
                       if (row.length < targetLen) {
                           while (row.length < targetLen) row.push('');
-                          if (hasAutoMergedTag && row[row.length - 1] !== 'auto_merged') row.push('auto_merged');
                       } else if (row.length > targetLen) {
                           row.splice(targetLen);
-                          if (hasAutoMergedTag) row.push('auto_merged');
                       }
                   }
               }
@@ -535,7 +532,17 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
       const sheetKeys = Object.keys(templateObj).filter(k => k.startsWith('sheet_'));
       if (sheetKeys.length === 0) return null;
       sheetKeys.forEach(k => {
-          out[k] = JSON.parse(JSON.stringify(templateObj[k]));
+          const sheet = JSON.parse(JSON.stringify(templateObj[k]));
+          if (Array.isArray(sheet?.content)) {
+              if (sheet.content.length > 0 && (!Array.isArray(sheet.content[0]) || sheet.content[0][0] !== 'row_id')) {
+                  throw new Error(`初始模板 Sheet「${k}」缺少 row_id 表头，拒绝写入 checkpoint。`);
+              }
+              if (sheet.content.slice(1).some((row: unknown) => !Array.isArray(row))) {
+                  throw new Error(`初始模板 Sheet「${k}」包含非数组数据行，拒绝伪造 row_id。`);
+              }
+              sheet.content = ensureStableRowIdsForSheetContent_ACU(sheet.content);
+          }
+          out[k] = sheet;
       });
       return out;
   }
@@ -703,7 +710,9 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
       return ensureInitialSeedCheckpoint_ACU({ reason: 'legacy_seed_greeting_alias' });
   }
 
-  // 用于 initGameSession 场景；与发送前初始化共用同一条 checkpoint 写入链路。
+  // 仅保留给既有 greeting seed 流程；initGameSession 已改用
+  // resetCurrentChatTableStateFromTemplate_ACU，以确保删除旧状态、checkpoint、guide 与
+  // template scope 在一次严格保存中提交或回滚。
   export async function fillFirstLayerWithTemplateData_ACU(templateObj: Record<string, any>, { reason = 'game_init', presetName = '', source = 'game_init', registerPreset = true } = {}) {
       try {
           return await writeInitialTemplateCheckpoint_ACU(templateObj, {

@@ -25,6 +25,10 @@ vi.mock('../../../src/service/template/chat-scope', () => ({
 }));
 
 import {
+  clearRuntimePerformanceSpans_ACU,
+  getRecentRuntimePerformanceSpans_ACU,
+} from '../../../src/shared/runtime-performance';
+import {
   buildAutoUpdatePlan_ACU,
   checkAutoUpdatePreConditions_ACU,
   handleFloorIncreaseDelay_ACU,
@@ -339,6 +343,34 @@ describe('buildAutoUpdatePlan_ACU', () => {
       expect(plan.tablesToUpdate[0].indices.length).toBeLessThanOrEqual(1);
     }
   });
+
+  it.each([
+    { messageCount: 50, sheetCount: 8 },
+    { messageCount: 200, sheetCount: 20 },
+    { messageCount: 500, sheetCount: 40 },
+  ])('合成基线 $messageCount messages × $sheetCount sheets 保持聊天层线性读取', ({ messageCount, sheetCount }) => {
+    let isUserReads = 0;
+    const liveChat = Array.from({ length: messageCount }, (_, index) => new Proxy({
+      is_user: index % 2 === 0,
+    }, {
+      get(target, property, receiver) {
+        if (property === 'is_user') isUserReads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    }));
+    const tableData = Object.fromEntries(Array.from({ length: sheetCount }, (_, index) => [
+      `sheet_${index}`,
+      { name: `表${index}`, updateConfig: { updateFrequency: 1, contextDepth: 3, groupId: index % 4 } },
+    ]));
+
+    const plan = buildAutoUpdatePlan_ACU(liveChat, tableData, {
+      ...baseSettings,
+      performanceDiagnosticsEnabled: true,
+    }, '');
+
+    expect(plan.tablesToUpdate).toHaveLength(sheetCount);
+    expect(isUserReads).toBeLessThanOrEqual(messageCount * 3);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -464,6 +496,7 @@ describe('executeAutoUpdatePlan_ACU', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearRuntimePerformanceSpans_ACU();
   });
 
   it('空计划返回 success', async () => {
@@ -614,5 +647,29 @@ describe('executeAutoUpdatePlan_ACU', () => {
     });
     const result = await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, ops);
     expect(result.success).toBe(true); // 清理失败不影响整体
+  });
+
+  it('执行链异常退出时仍关闭性能 span 并记录失败', async () => {
+    const plan = {
+      tablesToUpdate: [],
+      updateGroups: {
+        group_a: { indices: [1], batchSize: 2, groupId: 0, sheetKeys: ['sheet_0'], sheetNames: ['表A'] },
+      },
+    };
+    const ops = makeOps({
+      loadAllChatMessages: vi.fn().mockRejectedValue(new Error('load failed')),
+    });
+
+    await expect(executeAutoUpdatePlan_ACU(
+      plan,
+      { ...baseSettings, performanceDiagnosticsEnabled: true },
+      mockSetAutoUpdating,
+      ops,
+      { runId: 'run-failure', parentSpanId: 'parent-failure' },
+    )).rejects.toThrow('load failed');
+
+    expect(getRecentRuntimePerformanceSpans_ACU()).toContainEqual(expect.objectContaining({
+      name: 'auto-update-execute', runId: 'run-failure', parentSpanId: 'parent-failure', metrics: expect.objectContaining({ success: false }),
+    }));
   });
 });

@@ -5,6 +5,7 @@ import {
   getLatestV2FullCheckpointMessageIndex_ACU,
   getLatestV2SheetReplayMessageIndex_ACU,
   resolveTableHistoryStateFromChat_ACU,
+  resolveTableHistoryStatesFromChat_ACU,
 } from '../../../src/service/table/table-history';
 
 const settings = {
@@ -483,5 +484,172 @@ describe('V2 replay layer routing', () => {
 
     expect(getLatestV2SheetReplayMessageIndex_ACU(chat, '', 'sheet_a')).toBe(-1);
     expect(getLatestV2SheetReplayMessageIndex_ACU(chat, '', 'sheet_b')).toBe(-1);
+  });
+});
+
+describe('resolveTableHistoryStatesFromChat_ACU', () => {
+  const historyOptions = (sheetKey: string, overrides: Record<string, any> = {}) => ({
+    sheetKey,
+    isSummaryTable: false,
+    isolationKey: '',
+    settings,
+    ...overrides,
+  });
+
+  it('在一次批量解析中保持 legacy、V2 checkpoint、per-sheet checkpoint 与 operation log 语义', () => {
+    const chat = [
+      {
+        is_user: false,
+        TavernDB_ACU_Data: {
+          sheet_legacy: { name: '旧表', content: [['row_id'], ['1']] },
+        },
+        TavernDB_ACU_ModifiedKeys: ['sheet_legacy'],
+      },
+      { is_user: true },
+      v2Message({
+        version: 2,
+        checkpoint: {
+          kind: 'full',
+          createdAt: 2,
+          reason: 'init',
+          data: { mate: {}, sheet_full: { name: '全量表', content: [['row_id']] } },
+          event: { filledSheetKeys: [], changedSheetKeys: ['sheet_full'], groupKeys: ['sheet_full'] },
+        },
+        perSheetCheckpoints: {
+          sheet_single: {
+            kind: 'sheet_full',
+            createdAt: 2,
+            reason: 'manual',
+            sheetKey: 'sheet_single',
+            data: { name: '单表', content: [['row_id']] },
+            scheduleSummary: { lastFilledAiFloor: 7 },
+          },
+        },
+        logEntries: [],
+      }),
+      { is_user: true },
+      v2Message({
+        version: 2,
+        logEntries: [{
+          seq: 1,
+          entryId: 'fill-log',
+          createdAt: 3,
+          source: 'auto_fill',
+          targetMessageIndex: 4,
+          aiFloor: 3,
+          filledSheetKeys: ['sheet_log'],
+          changedSheetKeys: ['sheet_log'],
+          groupKeys: [],
+          operations: [{ kind: 'row_upsert', sheetKey: 'sheet_log', rowId: '1', cells: ['1'] }],
+        }],
+      }),
+    ];
+
+    const states = resolveTableHistoryStatesFromChat_ACU(chat, [
+      historyOptions('sheet_legacy'),
+      historyOptions('sheet_full'),
+      historyOptions('sheet_single'),
+      historyOptions('sheet_log'),
+    ]);
+
+    expect(states.get('sheet_legacy')).toEqual({
+      latestAiMessageIndex: 4,
+      latestDataMessageIndex: 0,
+      lastTrackedUpdateMessageIndex: 0,
+      latestDataAiFloor: 1,
+      lastTrackedUpdateAiFloor: 1,
+      hasAnyData: true,
+      hasTrackedUpdate: true,
+    });
+    expect(states.get('sheet_full')).toMatchObject({
+      latestDataMessageIndex: 2,
+      lastTrackedUpdateMessageIndex: 2,
+      latestDataAiFloor: 2,
+      lastTrackedUpdateAiFloor: 2,
+    });
+    expect(states.get('sheet_single')).toMatchObject({
+      latestDataMessageIndex: 2,
+      lastTrackedUpdateMessageIndex: 2,
+      latestDataAiFloor: 2,
+      lastTrackedUpdateAiFloor: 7,
+    });
+    expect(states.get('sheet_log')).toMatchObject({
+      latestDataMessageIndex: 4,
+      lastTrackedUpdateMessageIndex: 4,
+      latestDataAiFloor: 3,
+      lastTrackedUpdateAiFloor: 3,
+    });
+  });
+
+  it('按 isolationKey 隔离数据，并为未知表返回空历史状态', () => {
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        branch_a: {
+          independentData: { sheet_a: { name: 'A' } },
+          modifiedKeys: ['sheet_a'],
+          updateGroupKeys: [],
+        },
+        branch_b: {
+          independentData: { sheet_b: { name: 'B' } },
+          modifiedKeys: [],
+          updateGroupKeys: ['sheet_b'],
+        },
+      },
+    }];
+
+    const states = resolveTableHistoryStatesFromChat_ACU(chat, [
+      historyOptions('sheet_a', { isolationKey: 'branch_a' }),
+      historyOptions('sheet_b', { isolationKey: 'branch_b' }),
+      historyOptions('sheet_missing', { isolationKey: 'branch_a' }),
+    ]);
+
+    expect(states.get('sheet_a')).toMatchObject({ hasAnyData: true, hasTrackedUpdate: true, lastTrackedUpdateAiFloor: 1 });
+    expect(states.get('sheet_b')).toMatchObject({ hasAnyData: true, hasTrackedUpdate: true, lastTrackedUpdateAiFloor: 1 });
+    expect(states.get('sheet_missing')).toEqual({
+      latestAiMessageIndex: 0,
+      latestDataMessageIndex: -1,
+      lastTrackedUpdateMessageIndex: -1,
+      latestDataAiFloor: 0,
+      lastTrackedUpdateAiFloor: 0,
+      hasAnyData: false,
+      hasTrackedUpdate: false,
+    });
+  });
+
+  it('忽略空 sheetKey，重复 sheetKey 只解析一次，无 AI 消息时返回空状态', () => {
+    const states = resolveTableHistoryStatesFromChat_ACU([{ is_user: true }], [
+      historyOptions('sheet_a'),
+      historyOptions('sheet_a'),
+      historyOptions(''),
+    ]);
+
+    expect([...states.keys()]).toEqual(['sheet_a']);
+    expect(states.get('sheet_a')).toMatchObject({
+      latestAiMessageIndex: -1,
+      latestDataMessageIndex: -1,
+      lastTrackedUpdateMessageIndex: -1,
+      hasAnyData: false,
+      hasTrackedUpdate: false,
+    });
+  });
+
+  it('聊天层扫描次数不随 sheet 数量平方增长', () => {
+    let isUserReads = 0;
+    const messageCount = 500;
+    const chat = Array.from({ length: messageCount }, (_, index) => new Proxy({
+      is_user: index % 2 === 0,
+    }, {
+      get(target, property, receiver) {
+        if (property === 'is_user') isUserReads += 1;
+        return Reflect.get(target, property, receiver);
+      },
+    }));
+    const options = Array.from({ length: 40 }, (_, index) => historyOptions(`sheet_${index}`));
+
+    const states = resolveTableHistoryStatesFromChat_ACU(chat, options);
+
+    expect(states.size).toBe(40);
+    expect(isUserReads).toBeLessThanOrEqual(messageCount * 2);
   });
 });

@@ -16,10 +16,12 @@ import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, n
 import { applyContextTagFilters_ACU } from '../../runtime/helpers-remaining';
 import { isSqliteMode } from '../../table/storage-mode';
 import { ensureStorageProviderReady_ACU, getStorageRuntimeHealth_ACU } from '../../table/table-storage-strategy';
-import { resolveEffectiveDDL, type EffectiveDDLColumnMap_ACU } from '../../../data/sqlite/schema-mapper';
+import { parseDDLTableName, rebindCreateTableName_ACU, resolveEffectiveDDL, type EffectiveDDLColumnMap_ACU } from '../../../data/sqlite/schema-mapper';
 import { getSheetColumnProjection_ACU, projectSheetDDLForVisibleColumns_ACU, projectSheetRowToVisibleColumns_ACU } from '../../../shared/ddl-utils';
 import { getPhysicalTableNameForSheet_ACU } from '../../../shared/sheet-identity';
 import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var';
+
+const AUTHOR_SQL_TABLE_IDENTIFIER_ACU = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
   export interface PrepareAIInputFailure_ACU {
     ok: false;
@@ -57,7 +59,7 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
     }
 
     try {
-        const provider = await ensureStorageProviderReady_ACU();
+        const provider = await ensureStorageProviderReady_ACU({ signal: options?.signal });
         if (provider.mode !== 'sqlite') {
             logError_ACU('prepareAIInput_ACU: SQLite mode expected a SQLite runtime provider.');
             return createPromptRuntimeFailure_ACU('provider_fallback', 'SQLite 运行时加载失败，当前未使用 SQLite 数据库。', false);
@@ -69,6 +71,9 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
         }
         return runtimeData;
     } catch (e) {
+        if ((e as any)?.name === 'AbortError') {
+            throw e;
+        }
         const failure = getPromptRuntimeFailureFromHealth_ACU();
         logError_ACU(`prepareAIInput_ACU: SQLite runtime unavailable (${failure.failureCode}).`, e);
         return failure;
@@ -79,7 +84,7 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
     messages: any[],
     updateMode = 'standard',
     targetSheetKeys: string[] | null = null,
-    options: { tableData?: any; excludeImportTaggedWorldbookEntries?: boolean; agentGreenlights?: any[]; isolationKey?: string; templateScope?: TemplateScope_ACU; sqlApplyScope?: SqlTableApplyScope_ACU } = {},
+    options: { tableData?: any; excludeImportTaggedWorldbookEntries?: boolean; agentGreenlights?: any[]; isolationKey?: string; templateScope?: TemplateScope_ACU; sqlApplyScope?: SqlTableApplyScope_ACU; signal?: AbortSignal } = {},
   ) {
     const sqlMode = isSqliteMode();
     const sourceTableData = await resolvePromptSourceTableData_ACU(options, sqlMode);
@@ -127,6 +132,19 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
         ? options.templateScope ?? null
         : resolveTemplateScope_ACU(options.isolationKey);
     const tableIndexes = filterSheetKeysByTemplateScope_ACU(getSortedSheetKeys_ACU(workingTableData), templateScope);
+    // 作者 DDL 名是 AI 写入契约；冲突时不能让异常越过编排器，也不能继续构造无法安全路由的 prompt。
+    const promptIdentifierSource = options.sqlApplyScope?.templateData || workingTableData;
+    const authoredTableNames = new Map<string, string | undefined>();
+    if (sqlMode) {
+        try {
+            for (const sheetKey of tableIndexes) {
+                authoredTableNames.set(sheetKey, resolveAuthoredTableNameForPrompt_ACU(promptIdentifierSource, sheetKey));
+            }
+        } catch (error: any) {
+            const message = error?.message || String(error);
+            return createPromptRuntimeFailure_ACU('authored_table_name_conflict', message, false);
+        }
+    }
     tableIndexes.forEach((sheetKey, tableIndex) => {
         const rawTable = workingTableData[sheetKey];
         if (!rawTable || !rawTable.name || !rawTable.content) return;
@@ -160,13 +178,11 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
 
         // SQLite 模式：输出 DDL + 注释数据格式；数据只来自运行时 DB，不再从模板 seedRows 兜底。
         if (sqlMode) {
-            // 物理表名必须与提交阶段使用同一请求前模板快照解析；运行时数据可能仍保留旧模板显示名。
-            const runtimeNameSource = options.sqlApplyScope?.templateData?.[sheetKey]
-                ? options.sqlApplyScope.templateData
-                : workingTableData;
+            // 作者 DDL 名必须与提交阶段使用同一请求前模板快照解析；运行时数据可能仍保留旧模板显示名。
             tableDataText += formatTableForSqliteMode(table, tableIndex, sheetKey, _seedGuideDataForThisPrepare_ACU, {
                 allowSeedRowsFallback: false,
-                runtimeTableName: resolveRuntimeTableNameForPrompt_ACU(runtimeNameSource, sheetKey),
+                authoredTableName: authoredTableNames.get(sheetKey),
+                runtimeTableName: resolveRuntimeTableNameForPrompt_ACU(promptIdentifierSource, sheetKey),
             });
             return;
         }
@@ -251,6 +267,7 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
     }
     
     let messagesText = '当前最新对话内容:\n';
+    const conditionalSeedParts: string[] = [];
     if (messages && messages.length > 0) {
         const extractTags = (settings_ACU.tableContextExtractTags || '').trim();
         const extractRules = normalizeExtractRules_ACU(settings_ACU.tableContextExtractRules, extractTags);
@@ -264,12 +281,16 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
             if (!msg.is_user && (extractTags || extractRules.length > 0 || excludeTags || excludeRules.length > 0)) {
                 content = applyContextTagFilters_ACU(content, { extractTags, extractRules, excludeTags, excludeRules });
             }
+            if (!msg.is_user && typeof content === 'string' && content) {
+                conditionalSeedParts.push(content);
+            }
 
             return `${prefix}: ${content}`;
         }).join('\n');
     } else {
         messagesText += '(无最新对话内容)';
     }
+    const conditionalSeedContent = conditionalSeedParts.join('\n');
 
     const worldbookScanText = messagesText;
     const excludeImportTaggedWorldbookEntries = options?.excludeImportTaggedWorldbookEntries === true;
@@ -322,15 +343,16 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
     // SQLite 模式下追加 SQL 编辑格式兜底说明（Q17 确认：$0 自带格式说明）
     if (isSqliteMode() && tableDataText) {
         if (settings_ACU.strictJsonTableFillEnabled === true) {
-            tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在响应 JSON 的 sql 字符串中仅使用 INSERT INTO / INSERT OR REPLACE INTO / REPLACE INTO / UPDATE / DELETE FROM 数据变更语句\n-- 上方 CREATE TABLE 仅用于说明表结构，严禁复制或输出 CREATE、ALTER、DROP、SELECT、PRAGMA、VACUUM、BEGIN、COMMIT、ROLLBACK 等语句\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- 普通 INSERT 必须显式列出业务列，不得包含 row_id；row_id 由系统在执行前分配稳定身份\n-- INSERT OR REPLACE / REPLACE INTO 按 SQLite 原生整行替换语义执行，应显式提供目标列及用于冲突定位的 row_id 或 UNIQUE 列\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
+            tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在响应 JSON 的 sql 字符串中仅使用 INSERT INTO / INSERT OR REPLACE INTO / REPLACE INTO / UPDATE / DELETE FROM 数据变更语句\n-- SQL 表名和列名必须严格使用上方 CREATE TABLE 中的英文标识符；禁止使用中文名、sheet key、uid 或自行拼音化的内部表名\n-- 上方 CREATE TABLE 仅用于说明表结构，严禁复制或输出 CREATE、ALTER、DROP、SELECT、PRAGMA、VACUUM、BEGIN、COMMIT、ROLLBACK 等语句\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- 普通 INSERT 必须显式列出业务列，不得包含 row_id；row_id 由系统在执行前分配稳定身份\n-- INSERT OR REPLACE / REPLACE INTO 按 SQLite 原生整行替换语义执行，应显式提供目标列及用于冲突定位的 row_id 或 UNIQUE 列\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
         } else {
-            tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在 <tableEdit> 标签内仅使用 INSERT INTO / INSERT OR REPLACE INTO / REPLACE INTO / UPDATE / DELETE FROM 数据变更语句\n-- 上方 CREATE TABLE 仅用于说明表结构，严禁复制或输出 CREATE、ALTER、DROP、SELECT、PRAGMA、VACUUM、BEGIN、COMMIT、ROLLBACK 等语句\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- 普通 INSERT 必须显式列出业务列，不得包含 row_id；row_id 由系统在执行前分配稳定身份\n-- INSERT OR REPLACE / REPLACE INTO 按 SQLite 原生整行替换语义执行，应显式提供目标列及用于冲突定位的 row_id 或 UNIQUE 列\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新等标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
+            tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在 <tableEdit> 标签内仅使用 INSERT INTO / INSERT OR REPLACE INTO / REPLACE INTO / UPDATE / DELETE FROM 数据变更语句\n-- SQL 表名和列名必须严格使用上方 CREATE TABLE 中的英文标识符；禁止使用中文名、sheet key、uid 或自行拼音化的内部表名\n-- 上方 CREATE TABLE 仅用于说明表结构，严禁复制或输出 CREATE、ALTER、DROP、SELECT、PRAGMA、VACUUM、BEGIN、COMMIT、ROLLBACK 等语句\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- 普通 INSERT 必须显式列出业务列，不得包含 row_id；row_id 由系统在执行前分配稳定身份\n-- INSERT OR REPLACE / REPLACE INTO 按 SQLite 原生整行替换语义执行，应显式提供目标列及用于冲突定位的 row_id 或 UNIQUE 列\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新等标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
         }
     }
 
     return {
         tableDataText,
         messagesText,
+        conditionalSeedContent,
         worldbookContent,
         worldbookDatabaseExcludedContent,
         resolveTableWorldbookContent,
@@ -339,15 +361,31 @@ import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var
 }
 
 /**
- * 解析提示词用的 runtime 物理表名（显示名拼音）。
- * 拼音冲突等异常下返回 undefined：提示词构建不应因此硬失败，
- * 退回未重绑定的 DDL 仍能让 AI 看到列结构，冲突本身由启动自检负责上报。
+ * Resolves the user-authored DDL identifier that AI must use for mutations.
+ * Runtime names are deliberately excluded from the prompt: they are an
+ * implementation detail rebound at the write boundary.
  */
+function resolveAuthoredTableNameForPrompt_ACU(data: any, sheetKey: string): string | undefined {
+    const sheet = data?.[sheetKey];
+    const tableName = parseDDLTableName(String(sheet?.sourceData?.ddl || ''));
+    if (!tableName || !AUTHOR_SQL_TABLE_IDENTIFIER_ACU.test(tableName)) return undefined;
+
+    const normalized = tableName.toLowerCase();
+    for (const [candidateKey, candidate] of Object.entries(data || {})) {
+        if (candidateKey === sheetKey || !candidateKey.startsWith('sheet_')) continue;
+        const candidateName = parseDDLTableName(String((candidate as any)?.sourceData?.ddl || ''));
+        if (candidateName && candidateName.toLowerCase() === normalized) {
+            throw new Error(`模板中多个表共用作者 DDL 表名「${tableName}」，无法安全路由 AI SQL。`);
+        }
+    }
+    return tableName;
+}
+
 function resolveRuntimeTableNameForPrompt_ACU(data: any, sheetKey: string): string | undefined {
     try {
         return getPhysicalTableNameForSheet_ACU(data, sheetKey);
-    } catch (e: any) {
-        logWarn_ACU(`[AI输入准备] 无法解析 runtime 物理表名，提示词将使用原 DDL 表名: ${sheetKey}: ${e?.message || e}`);
+    } catch (error: any) {
+        logWarn_ACU(`[AI输入准备] 无法解析 runtime 物理表名: ${sheetKey}: ${error?.message || error}`);
         return undefined;
     }
 }
@@ -357,7 +395,7 @@ function resolveRuntimeTableNameForPrompt_ACU(data: any, sheetKey: string): stri
  * SQLite 模式下的表格格式化
  * 输出 DDL + Note/Trigger 注释 + 当前数据（注释格式）
  */
-export function formatTableForSqliteMode(table: any, tableIndex: number, sheetKey: string, guideData: any, options: { allowSeedRowsFallback?: boolean; runtimeTableName?: string } = {}): string {
+export function formatTableForSqliteMode(table: any, tableIndex: number, sheetKey: string, guideData: any, options: { allowSeedRowsFallback?: boolean; runtimeTableName?: string; authoredTableName?: string } = {}): string {
     let text = '';
     const projection = getSheetColumnProjection_ACU(table);
     const hasHiddenPhysicalColumns = projection.hiddenPhysicalColumns.length > 0;
@@ -371,13 +409,17 @@ export function formatTableForSqliteMode(table: any, tableIndex: number, sheetKe
         }
         : table;
     const runtimeSchema = table?._acu_runtimeEffectiveSchema;
-    // 必须把 runtime 物理表名（显示名拼音）传进去重绑定 CREATE TABLE 标识符。
-    // 漏传会让提示词出现 DDL 原文英文名，AI 照抄后 SQL 打到不存在的表上（no such table）。
+    // runtime effective schema controls columns; only its CREATE TABLE name is
+    // replaced with the author-facing SQL contract shown to AI.
     const resolvedDDL = (!hasHiddenPhysicalColumns && runtimeSchema)
         || resolveEffectiveDDL(promptSchemaTable, table.uid || sheetKey, options.runtimeTableName);
-    const ddl = hasHiddenPhysicalColumns
+    let ddl = hasHiddenPhysicalColumns
         ? resolvedDDL.effectiveDDL
         : projectSheetDDLForVisibleColumns_ACU(table, resolvedDDL.effectiveDDL);
+    const promptTableName = options.authoredTableName || options.runtimeTableName;
+    if (promptTableName) {
+        ddl = rebindCreateTableName_ACU(ddl, promptTableName);
+    }
     const visiblePhysicalNames = new Set(projection.visibleColumns.map(column => column.physicalName.toLowerCase()));
     const allowSeedRowsFallback = options.allowSeedRowsFallback !== false;
 
@@ -385,6 +427,9 @@ export function formatTableForSqliteMode(table: any, tableIndex: number, sheetKe
     text += ddl.trim() + '\n';
     if (resolvedDDL.source !== 'explicit') {
         text += `-- WARNING: ${resolvedDDL.diagnostics[0]} 原始 DDL 未被改写。\n`;
+    }
+    if (options.authoredTableName) {
+        text += `-- SQL 写入必须使用表名 ${options.authoredTableName}；系统会在执行时映射到内部表。\n`;
     }
 
     // 输出 Note 和 Trigger（作为 SQL 注释）

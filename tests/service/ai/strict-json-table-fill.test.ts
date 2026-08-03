@@ -78,13 +78,50 @@ describe('strict-json-table-fill', () => {
     expect(result.tableEditText).toContain('deleteRow(0, 0)');
   });
 
+  it('将显式 tableAliases、DDL 名和物理名统一路由到同一个权威 sheetKey', () => {
+    const data = {
+      mate: { type: 'chatSheets' },
+      sheet_zhu_jue_xin_xi: {
+        uid: 'protagonist_uid',
+        name: '主角信息表',
+        sourceData: {
+          tableAliases: ['主角信息'],
+          ddl: `CREATE TABLE protagonist_info (
+            row_id INTEGER PRIMARY KEY,
+            name TEXT -- 姓名
+          );`,
+        },
+        content: [['row_id', '姓名'], ['1', '小玉']],
+      },
+    };
+    for (const alias of ['sheet_zhu_jue_xin_xi', 'protagonist_uid', '主角信息', 'protagonist_info', 'zhujuexinxibiao']) {
+      const result = extractStrictJsonTableFillResponse_ACU(JSON.stringify({
+        format: 'table_edit_ops_v1',
+        ops: [{ op: 'update', sheet: alias, where: { 姓名: '小玉' }, set: { 姓名: '小明' } }],
+      }), { tableData: data });
+      expect(result.ok, `${alias}: ${result.error || ''}`).toBe(true);
+      expect(result.modifiedKeys).toEqual(['sheet_zhu_jue_xin_xi']);
+    }
+  });
+
+  it('合法别名指向非目标表时按越权拒绝，不伪装为未知表', () => {
+    const data = tableData();
+    data.sheet_relation.sourceData = { tableAliases: ['关系表旧名'] };
+    const result = extractStrictJsonTableFillResponse_ACU(JSON.stringify({
+      format: 'table_edit_ops_v1',
+      ops: [{ op: 'insert', sheet: '关系表旧名', row: { 姓名: '小玉', 好感: '升高' } }],
+    }), { tableData: data, targetSheetKeys: ['sheet_status'] });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('越权');
+  });
+
   it('rejects unknown sheet', () => {
     const result = extractStrictJsonTableFillResponse_ACU(JSON.stringify({
       format: 'table_edit_ops_v1',
       ops: [{ op: 'insert', sheet: '不存在', row: { 姓名: '小玉' } }],
     }), { tableData: tableData() });
     expect(result.ok).toBe(false);
-    expect(result.error).toContain('sheet 未匹配');
+    expect(result.error).toContain('无法解析别名');
   });
 
   it('rejects unknown field', () => {

@@ -20,6 +20,32 @@ export function formatCanonicalRowIssues_ACU(issues: CanonicalRowIssue_ACU[]): s
     .join('；');
 }
 
+/**
+ * Legacy auto-merge state was incorrectly appended as an unheaded cell.
+ * Only remove the exact, provably synthetic trailing marker; all other
+ * row-width defects remain for the canonical validator to reject.
+ */
+export function repairLegacyAutoMergedRowTails_ACU(data: Record<string, any> | null | undefined): string[] {
+  const changedSheetKeys: string[] = [];
+  if (!data || typeof data !== 'object') return changedSheetKeys;
+
+  Object.entries(data).forEach(([sheetKey, sheet]) => {
+    if (!sheetKey.startsWith('sheet_') || !sheet || typeof sheet !== 'object') return;
+    const content = (sheet as any).content;
+    const header = Array.isArray(content) ? content[0] : null;
+    if (!Array.isArray(header)) return;
+
+    let changed = false;
+    content.slice(1).forEach((row: unknown) => {
+      if (!Array.isArray(row) || row.length !== header.length + 1 || row[row.length - 1] !== 'auto_merged') return;
+      row.pop();
+      changed = true;
+    });
+    if (changed) changedSheetKeys.push(sheetKey);
+  });
+  return changedSheetKeys;
+}
+
 function normalizeRows_ACU(
   rows: unknown[],
   sheetKey: string,

@@ -12,7 +12,8 @@ import { SqliteEngine } from './sqlite-engine';
 import { buildRuntimeFallbackDDL_ACU, createSheetInsertPlan, generateInserts, resultToContent, parseDDLTableName, parseDDLColumnNames, buildColumnNameMap, resolveEffectiveDDL } from './schema-mapper';
 import type { TableDataObject_ACU, Sheet_ACU, Mate_ACU } from '../../shared/models/table-data';
 import { hashUserInput_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
-import { formatCanonicalRowIssues_ACU, normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
+import { formatCanonicalRowIssues_ACU, normalizeCanonicalTableRows_ACU, repairLegacyAutoMergedRowTails_ACU } from '../../shared/canonical-row-normalizer';
+import { validateCanonicalCheckpointSheet_ACU } from '../../shared/canonical-checkpoint-validator';
 import { resolvePhysicalTableNames_ACU } from '../../shared/sheet-identity';
 
 /** 同步桥的元数据表名（内部使用，对用户和 AI 不可见） */
@@ -97,6 +98,8 @@ export class SyncBridge {
 
     // strict hydrate 必须在副本上校验，失败时不得清洗或改写调用方快照。
     const workingData = options.strict ? JSON.parse(JSON.stringify(data)) as TableDataObject_ACU : data;
+    // 仅兼容历史版本错误追加的精确尾标记，其他宽度异常仍由后续 strict 校验拒绝。
+    repairLegacyAutoMergedRowTails_ACU(workingData);
     const normalization = normalizeCanonicalTableRows_ACU(workingData);
     const canonicalIssues = [...normalization.errors, ...normalization.removedRows];
     if (canonicalIssues.length > 0) {
@@ -105,6 +108,14 @@ export class SyncBridge {
         throw new Error(message);
       }
       logWarn_ACU(message);
+    }
+    if (options.strict) {
+      const canonicalIssues = Object.entries(workingData)
+        .filter(([sheetKey, sheet]) => sheetKey.startsWith('sheet_') && Array.isArray((sheet as any)?.content))
+        .flatMap(([sheetKey, sheet]) => validateCanonicalCheckpointSheet_ACU(sheet, sheetKey, 'data').issues);
+      if (canonicalIssues.length > 0) {
+        throw new Error(`[SyncBridge] snapshot 结构不合法：${canonicalIssues.map(issue => `${issue.type}: ${issue.sheetKey || 'unknown'}${issue.rowIndex === undefined ? '' : ` 第 ${issue.rowIndex} 行`}`).join('；')}`);
+      }
     }
     this.engine.run(META_TABLE_DDL);
     this._ensureMetaSchema();

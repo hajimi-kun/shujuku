@@ -65,7 +65,7 @@ describe('table-v2-recovery-service', () => {
     }];
     const before = structuredClone(h.chat);
 
-    const diagnostics = scanV2IsolationDiagnostics_ACU();
+    const diagnostics = await scanV2IsolationDiagnostics_ACU();
 
     expect(diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({ isolationKey: 'alpha', status: 'recoverable_repaired_checkpoint', isCurrentIsolation: false }),
@@ -82,7 +82,7 @@ describe('table-v2-recovery-service', () => {
   it('修复重复 row_id checkpoint，持久化原 frame 备份并生成 integrity_repair anchor', async () => {
     const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
     h.chat = chatWithFrame(source);
-    const prepared = prepareV2Recovery_ACU();
+    const prepared = await prepareV2Recovery_ACU();
 
     expect(prepared).toMatchObject({ status: 'recoverable_repaired_checkpoint', requiresConfirmation: false });
     const result = await commitPreparedV2Recovery_ACU(prepared.planId!);
@@ -96,7 +96,93 @@ describe('table-v2-recovery-service', () => {
     await expect(loadTableStateFromFramesV2_ACU(h.chat, '', { updateRuntimeState: false })).resolves.toBeTruthy();
   });
 
-  it('后续 operation 引用被重复身份修复重映射的 row_id 时拒绝猜测', () => {
+  it('健康 full checkpoint 的历史 SQL 依赖临时 Sheet 补锚时，生成并提交严格可回放的收敛 checkpoint', async () => {
+    const template = {
+      mate: { type: 'acu', version: 1 },
+      sheet_global: {
+        uid: 'global_state', name: '全局数据表',
+        content: [['row_id', 'prev_scene_time', 'elapsed_time', 'cur_time'], ['99', '模板示例', '0分', '模板时间']],
+        sourceData: { ddl: 'CREATE TABLE global_state (row_id INTEGER PRIMARY KEY, prev_scene_time TEXT, elapsed_time TEXT, cur_time TEXT);' },
+        updateConfig: {}, exportConfig: {}, orderNo: 1,
+      },
+    } as any;
+    const source = frame(
+      { kind: 'full', createdAt: 1, reason: 'init', data: data() },
+      [{
+        seq: 1, entryId: 'missing-global-sheet', createdAt: 2, source: 'manual_crud', targetMessageIndex: 0, aiFloor: 1,
+        filledSheetKeys: ['sheet_global'], changedSheetKeys: ['sheet_global'], groupKeys: [],
+        operations: [{
+          kind: 'sql_sheet_batch', sheetKey: 'sheet_global', tableName: 'quanjushujubiao',
+          statements: ["INSERT INTO quanjushujubiao (row_id, prev_scene_time, elapsed_time, cur_time) VALUES (1, '2026-08-07 00:15', '5分', '2026-08-07 00:20')"],
+          reason: 'system',
+        }],
+      }],
+    );
+    h.chat = [{
+      is_user: false,
+      TavernDB_ACU_ScopedConfig: {
+        version: 1,
+        template: { '': { mode: 'chat_override', isolationKey: '', templateStr: JSON.stringify(template) } },
+      },
+      TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: source } },
+    }];
+
+    const prepared = await prepareV2Recovery_ACU();
+    expect(prepared).toMatchObject({
+      status: 'recoverable_temporary_sheet_anchor',
+      requiresConfirmation: false,
+      sourceMessageIndex: 0,
+      affectedSheetKeys: ['sheet_global'],
+      compatibilityRepairs: [expect.objectContaining({
+        kind: 'temporary_sheet_anchor', sheetKey: 'sheet_global', messageIndex: 0, seq: 1, operationIndex: 0,
+      })],
+    });
+    expect(prepared.message).toContain('sheet_global');
+    expect(prepared.message).toContain('#0/seq=1/op=0');
+    expect(prepared.message).toContain('自动收敛');
+
+    await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toEqual({ status: 'committed', planId: prepared.planId });
+    const tag = h.chat[0].TavernDB_ACU_IsolatedData[''];
+    expect(tag.storageFrame.checkpoint).toMatchObject({ kind: 'full', reason: 'integrity_repair' });
+    expect(tag.storageFrame.logEntries).toEqual([]);
+    expect(tag.storageFrame.checkpoint.data.sheet_global.content).toEqual([
+      ['row_id', 'prev_scene_time', 'elapsed_time', 'cur_time'],
+      ['1', '2026-08-07 00:15', '5分', '2026-08-07 00:20'],
+    ]);
+    expect(tag.storageFrame.checkpoint.data.sheet_global.content).not.toContainEqual(['99', '模板示例', '0分', '模板时间']);
+    expect(tag.recoveryBackup).toMatchObject({ recoveryKind: 'temporary_sheet_anchor_convergence', storageFrame: source });
+    const strictReplay = await storageFrameV2Replay.loadTableStateFromFramesV2Detailed_ACU(h.chat, '', {
+      updateRuntimeState: false,
+      compatibilityMode: 'disabled',
+    });
+    expect(strictReplay?.requiresCheckpointConvergence).toBeUndefined();
+    expect(strictReplay?.compatibilityRepairs).toBeUndefined();
+  });
+
+  it('模板临时根数据完整时仅作为可升级根诊断，不创建修复计划或写入', async () => {
+    const templateRoot = frame({
+      kind: 'full', createdAt: 1, reason: 'manual', data: data(),
+      fallbackProvenance: {
+        version: 1, kind: 'manual_refill_template_root', runId: 'manual-refill:test',
+        isolationKey: '', targetSheetKeys: ['sheet_0'], rangeStartMessageIndex: 0,
+        rangeEndMessageIndex: 0, templateFingerprint: 'fnv1a:test', createdAt: 1,
+      },
+    });
+    h.chat = chatWithFrame(templateRoot);
+
+    const summary = await prepareV2Recovery_ACU();
+
+    expect(summary).toMatchObject({
+      status: 'unrecoverable',
+      requiresConfirmation: false,
+      message: expect.stringContaining('模板临时根'),
+    });
+    expect(summary.planId).toBeUndefined();
+    expect(h.save).not.toHaveBeenCalled();
+  });
+
+
+  it('后续 operation 引用被重复身份修复重映射的 row_id 时拒绝猜测', async () => {
     const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
     h.chat = chatWithFrame(source);
     h.chat.push({
@@ -113,14 +199,14 @@ describe('table-v2-recovery-service', () => {
       },
     });
 
-    expect(prepareV2Recovery_ACU()).toMatchObject({
+    expect(await prepareV2Recovery_ACU()).toMatchObject({
       status: 'unrecoverable',
       message: expect.stringContaining('重复 row_id 修复会改变后续引用的语义'),
     });
     expect(h.save).not.toHaveBeenCalled();
   });
 
-  it('后续 SQL operation 绑定被重映射的 row_id 时拒绝猜测', () => {
+  it('后续 SQL operation 绑定被重映射的 row_id 时拒绝猜测', async () => {
     const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
     h.chat = chatWithFrame(source);
     h.chat.push({
@@ -137,7 +223,7 @@ describe('table-v2-recovery-service', () => {
       },
     });
 
-    expect(prepareV2Recovery_ACU()).toMatchObject({
+    expect(await prepareV2Recovery_ACU()).toMatchObject({
       status: 'unrecoverable',
       message: expect.stringContaining('重复 row_id 修复会改变后续引用的语义'),
     });
@@ -148,7 +234,7 @@ describe('table-v2-recovery-service', () => {
     const source = frame(undefined, [{ seq: 1, entryId: 'replace', createdAt: 1, source: 'import', targetMessageIndex: 0, aiFloor: 1, filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [], operations: [{ kind: 'data_replace', data: data(), reason: 'import' }] }]);
     h.chat = chatWithFrame(source);
     const before = structuredClone(h.chat);
-    const prepared = prepareV2Recovery_ACU();
+    const prepared = await prepareV2Recovery_ACU();
 
     expect(prepared).toMatchObject({ status: 'recoverable_orphan_data_replace', requiresConfirmation: true });
     await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({ status: 'commit_failed_rolled_back', error: expect.stringContaining('必须显式确认') });
@@ -160,7 +246,7 @@ describe('table-v2-recovery-service', () => {
     const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
     h.chat = chatWithFrame(source);
     const before = structuredClone(h.chat);
-    const prepared = prepareV2Recovery_ACU();
+    const prepared = await prepareV2Recovery_ACU();
     h.save.mockRejectedValueOnce(new Error('host write failed'));
 
     await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({
@@ -178,8 +264,8 @@ describe('table-v2-recovery-service', () => {
     const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
     h.chat = chatWithFrame(source);
     const before = structuredClone(h.chat);
-    const prepared = prepareV2Recovery_ACU();
-    const replaySpy = vi.spyOn(storageFrameV2Replay, 'loadTableStateFromFramesV2_ACU').mockRejectedValueOnce(new Error('candidate replay failed'));
+    const prepared = await prepareV2Recovery_ACU();
+    const replaySpy = vi.spyOn(storageFrameV2Replay, 'loadTableStateFromFramesV2Detailed_ACU').mockRejectedValueOnce(new Error('candidate replay failed'));
 
     try {
       await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({
@@ -197,7 +283,7 @@ describe('table-v2-recovery-service', () => {
     const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
     h.chat = chatWithFrame(source);
     h.storageMode = 'sqlite';
-    const prepared = prepareV2Recovery_ACU();
+    const prepared = await prepareV2Recovery_ACU();
 
     await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toEqual({ status: 'committed', planId: prepared.planId });
     expect(h.save).toHaveBeenCalledTimes(1);
@@ -209,7 +295,7 @@ describe('table-v2-recovery-service', () => {
     const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
     h.chat = chatWithFrame(source);
     h.storageMode = 'sqlite';
-    const prepared = prepareV2Recovery_ACU();
+    const prepared = await prepareV2Recovery_ACU();
     h.reload.mockRejectedValueOnce(new Error('sqlite reload failed'));
 
     await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({
@@ -225,7 +311,7 @@ describe('table-v2-recovery-service', () => {
     h.chat = chatWithFrame(source);
     h.storageMode = 'sqlite';
     h.didFallback.mockReturnValueOnce(true);
-    const prepared = prepareV2Recovery_ACU();
+    const prepared = await prepareV2Recovery_ACU();
 
     await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({
       status: 'committed_postcondition_failed', planId: prepared.planId, error: expect.stringContaining('静默回退'),
@@ -242,7 +328,7 @@ describe('table-v2-recovery-service', () => {
     h.storageMode = 'sqlite';
     h.reload.mockImplementationOnce(async () => { h.storageMode = 'native'; });
     h.didFallback.mockImplementationOnce(expectedMode => expectedMode === 'sqlite' && h.storageMode === 'sqlite');
-    const prepared = prepareV2Recovery_ACU();
+    const prepared = await prepareV2Recovery_ACU();
 
     await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toEqual({ status: 'committed', planId: prepared.planId });
     expect(h.save).toHaveBeenCalledTimes(1);
@@ -254,7 +340,7 @@ describe('table-v2-recovery-service', () => {
   it('计划生成后 chat identifier 或 isolation key 漂移时拒绝提交且零保存', async () => {
     h.chat = chatWithFrame(frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) }));
     const before = structuredClone(h.chat);
-    const prepared = prepareV2Recovery_ACU();
+    const prepared = await prepareV2Recovery_ACU();
     h.scope.chatKey = 'other-chat';
 
     await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({ status: 'commit_failed_rolled_back' });
@@ -269,8 +355,8 @@ describe('table-v2-recovery-service', () => {
 
   it('同一作用域重新诊断会淘汰旧计划，仅最新计划可提交', async () => {
     h.chat = chatWithFrame(frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) }));
-    const first = prepareV2Recovery_ACU();
-    const second = prepareV2Recovery_ACU();
+    const first = await prepareV2Recovery_ACU();
+    const second = await prepareV2Recovery_ACU();
 
     expect(first.planId).not.toBe(second.planId);
     await expect(commitPreparedV2Recovery_ACU(first.planId!)).resolves.toMatchObject({
@@ -283,7 +369,7 @@ describe('table-v2-recovery-service', () => {
   it('恢复源 frame 漂移后使计划失效，旧计划不能覆盖新 frame', async () => {
     const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
     h.chat = chatWithFrame(source);
-    const prepared = prepareV2Recovery_ACU();
+    const prepared = await prepareV2Recovery_ACU();
     h.chat[0].TavernDB_ACU_IsolatedData[''].storageFrame = frame({ kind: 'full', createdAt: 2, reason: 'init', data: data([['2', '新源']]) });
 
     await expect(commitPreparedV2Recovery_ACU(prepared.planId!)).resolves.toMatchObject({
@@ -295,22 +381,22 @@ describe('table-v2-recovery-service', () => {
     expect(h.save).not.toHaveBeenCalled();
   });
 
-  it('checkpoint 后存在日志或健康 checkpoint 时拒绝自动重写', () => {
+  it('checkpoint 后存在日志或健康 checkpoint 时拒绝自动重写', async () => {
     const invalidWithLog = frame(
       { kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) },
       [{ seq: 1, entryId: 'later', createdAt: 2, source: 'system', targetMessageIndex: 0, aiFloor: 1, filledSheetKeys: [], changedSheetKeys: [], groupKeys: [], operations: [{ kind: 'data_replace', data: data([['2', '后续']]), reason: 'system' }] }],
     );
     h.chat = chatWithFrame(invalidWithLog);
-    expect(prepareV2Recovery_ACU()).toMatchObject({ status: 'unrecoverable', message: expect.stringContaining('replay artifact') });
+    expect(await prepareV2Recovery_ACU()).toMatchObject({ status: 'unrecoverable', message: expect.stringContaining('replay artifact') });
 
     h.chat = chatWithFrame(frame({ kind: 'full', createdAt: 1, reason: 'init', data: data() }));
-    expect(prepareV2Recovery_ACU()).toMatchObject({ status: 'unrecoverable', message: expect.stringContaining('无需恢复') });
+    expect(await prepareV2Recovery_ACU()).toMatchObject({ status: 'unrecoverable', message: expect.stringContaining('无需恢复') });
     expect(h.save).not.toHaveBeenCalled();
   });
 
-  it('纯无 base 日志保持不可恢复且零保存', () => {
+  it('纯无 base 日志保持不可恢复且零保存', async () => {
     h.chat = chatWithFrame(frame(undefined, [{ seq: 1, entryId: 'log-only', createdAt: 1, source: 'system', targetMessageIndex: 0, aiFloor: 1, filledSheetKeys: [], changedSheetKeys: [], groupKeys: [], operations: [{ kind: 'row_delete', sheetKey: 'sheet_0', rowId: '1' }] }]));
-    expect(prepareV2Recovery_ACU()).toMatchObject({ status: 'unrecoverable_no_base' });
+    expect(await prepareV2Recovery_ACU()).toMatchObject({ status: 'unrecoverable_no_base' });
     expect(h.save).not.toHaveBeenCalled();
   });
 

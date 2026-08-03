@@ -1,7 +1,13 @@
 export type SqlTableAliasMap_ACU = ReadonlyMap<string, string>;
 export type SqlColumnAliasMap_ACU = ReadonlyMap<string, ReadonlyMap<string, string>>;
 
-export interface SqlReadRebindResult_ACU { sql: string; tableRebindCount: number; columnRebindCount: number; }
+export interface SqlReadRebindResult_ACU {
+  sql: string;
+  tableRebindCount: number;
+  columnRebindCount: number;
+  /** Internal ranges used by the shared read resolver before legacy translation. */
+  protectedIdentifierSpans?: Array<{ start: number; end: number }>;
+}
 
 type Quote_ACU = '"' | '`' | '[' | null;
 interface Token_ACU { start: number; end: number; value: string; quote: Quote_ACU; depth: number; commaBefore: boolean; }
@@ -144,7 +150,7 @@ export function decodeSqlIdentifier_ACU(value: unknown): string {
 export function rebindSqlMutationTableReferences_ACU(
   statements: string[],
   aliases: SqlTableAliasMap_ACU,
-  options: { lenient?: boolean } = {},
+  options: { lenient?: boolean; requireKnownTables?: boolean } = {},
 ): string[] {
   const resolvedAliases = new Map<string, string>();
   for (const [alias, physicalName] of aliases) resolvedAliases.set(decodeSqlIdentifier_ACU(alias).toLowerCase(), physicalName);
@@ -152,8 +158,18 @@ export function rebindSqlMutationTableReferences_ACU(
     try {
       const values = tokens(statement);
       const target = mutationTarget(statement, values);
-      if (!target || !resolvedAliases.has(target.value.toLowerCase())) return statement;
-      const replacements = references(statement, values, target)
+      if (!target) return statement;
+      const tableReferences = references(statement, values, target);
+      if (options.requireKnownTables) {
+        for (const reference of tableReferences) {
+          if (!resolvedAliases.has(reference.value.toLowerCase())) {
+            const role = reference.start === target.start ? '目标表' : '关联表';
+            throw new Error(`SQL 写入包含无法识别的${role}「${reference.value}」。`);
+          }
+        }
+      }
+      if (!resolvedAliases.has(target.value.toLowerCase())) return statement;
+      const replacements = tableReferences
         .map(token => ({ token, name: resolvedAliases.get(token.value.toLowerCase()) }))
         .filter((item): item is { token: Token_ACU; name: string } => !!item.name);
       let result = statement;
@@ -172,6 +188,14 @@ interface ReadScope_ACU {
   start: number;
   end: number;
   depth: number;
+  /** Projection aliases exported by this SELECT scope. */
+  outputs: Set<string>;
+  /** Derived-table aliases visible to this SELECT scope. */
+  derivedSources: Map<string, Set<string>>;
+  /** Virtual sources whose exported columns cannot be determined safely. */
+  unknownDerivedSources: Set<string>;
+  /** Token positions whose names are virtual outputs rather than entity columns. */
+  protectedTokens: Set<number>;
   tables: Set<string>;
   aliases: Map<string, string>;
   qualifiers: Map<string, string>;
@@ -195,6 +219,44 @@ function findReadScope_ACU(scopes: ReadScope_ACU[], values: Token_ACU[], index: 
     .sort((left, right) => right.depth - left.depth || right.start - left.start)[0];
 }
 
+function projectionOutputs_ACU(values: Token_ACU[], scope: ReadScope_ACU): Set<string> {
+  const outputs = new Set<string>();
+  let projectionEnd = scope.end;
+  for (let index = scope.start + 1; index < scope.end; index += 1) {
+    const token = values[index];
+    if (token.depth === scope.depth && keyword(token, 'FROM')) {
+      projectionEnd = index;
+      break;
+    }
+  }
+  for (let index = scope.start + 1; index < projectionEnd; index += 1) {
+    const token = values[index];
+    if (token.depth !== scope.depth || !keyword(token, 'AS')) continue;
+    const alias = values[index + 1];
+    if (alias?.depth === scope.depth) outputs.add(alias.value.toLowerCase());
+  }
+  return outputs;
+}
+
+function compoundScopeEnd_ACU(values: Token_ACU[], scope: ReadScope_ACU): number {
+  for (let index = scope.end; index < values.length; index += 1) {
+    if (values[index].depth < scope.depth) return index;
+  }
+  return values.length;
+}
+
+function isOutputAliasReference_ACU(values: Token_ACU[], scope: ReadScope_ACU, tokenIndex: number, key: string): boolean {
+  if (!scope.outputs.has(key)) return false;
+  let clause = '';
+  for (let index = scope.start + 1; index < tokenIndex; index += 1) {
+    const token = values[index];
+    if (token.depth !== scope.depth) continue;
+    if (keyword(token, 'ORDER') || keyword(token, 'GROUP') || keyword(token, 'HAVING')) clause = token.value.toUpperCase();
+    else if (READ_FROM_TERMINATORS_ACU.has(token.value.toUpperCase())) clause = token.value.toUpperCase();
+  }
+  return clause === 'ORDER' || clause === 'GROUP' || clause === 'HAVING';
+}
+
 function collectReadScopes_ACU(
   sql: string,
   values: Token_ACU[],
@@ -214,14 +276,72 @@ function collectReadScopes_ACU(
         break;
       }
     }
-    scopes.push({ start: index, end, depth: select.depth, tables: new Set(), aliases: new Map(), qualifiers: new Map(), tableTokens: [] });
+    scopes.push({
+      start: index,
+      end,
+      depth: select.depth,
+      outputs: new Set(),
+      derivedSources: new Map(),
+      unknownDerivedSources: new Set(),
+      protectedTokens: new Set(),
+      tables: new Set(),
+      aliases: new Map(),
+      qualifiers: new Map(),
+      tableTokens: [],
+    });
   }
 
-  for (const scope of scopes) {
+  for (const scope of scopes) scope.outputs = projectionOutputs_ACU(values, scope);
+  const cteOutputs = new Map<string, Set<string>>();
+  for (let withIndex = 0; withIndex < values.length; withIndex += 1) {
+    const withToken = values[withIndex];
+    if (!keyword(withToken, 'WITH')) continue;
+    const depth = withToken.depth;
+    let cursor = withIndex + 1;
+    if (keyword(values[cursor], 'RECURSIVE')) cursor += 1;
+    while (values[cursor]?.depth === depth) {
+      const name = values[cursor++];
+      const explicitOutputs = new Set<string>();
+      if (values[cursor]?.depth === depth + 1) {
+        const listDepth = values[cursor].depth;
+        while (values[cursor]?.depth >= listDepth) {
+          if (values[cursor].depth === listDepth) explicitOutputs.add(values[cursor].value.toLowerCase());
+          cursor += 1;
+        }
+      }
+      if (!keyword(values[cursor], 'AS')) break;
+      cursor += 1;
+      const definition = scopes.find(scope => scope.start === cursor && scope.depth === depth + 1);
+      if (!definition) break;
+      cteOutputs.set(name.value.toLowerCase(), explicitOutputs.size > 0 ? explicitOutputs : definition.outputs);
+      while (values[cursor] && values[cursor].depth >= depth + 1) cursor += 1;
+      if (!values[cursor]?.commaBefore || values[cursor].depth !== depth) break;
+    }
+  }
+
+  for (const scope of [...scopes].sort((left, right) => right.depth - left.depth || right.start - left.start)) {
     let inFrom = false;
     const addSource = (sourceIndex: number): void => {
       const source = values[sourceIndex];
-      if (!source || source.depth !== scope.depth || isFunctionCall_ACU(sql, values, sourceIndex) || isCteReference(values, source, cte)) return;
+      if (source?.depth === scope.depth + 1 && keyword(source, 'SELECT')) {
+        const nested = scopes.find(candidate => candidate.start === sourceIndex && candidate.depth === source.depth);
+        const aliasIndex = nested ? compoundScopeEnd_ACU(values, nested) : -1;
+        const marker = aliasIndex >= 0 ? values[aliasIndex] : undefined;
+        const alias = keyword(marker, 'AS') ? values[aliasIndex + 1] : marker;
+        if (nested && alias?.depth === scope.depth && !READ_ALIAS_STOP_WORDS_ACU.has(alias.value.toUpperCase())) {
+          const aliasKey = alias.value.toLowerCase();
+          scope.derivedSources.set(aliasKey, nested.outputs);
+          if (nested.outputs.size === 0) scope.unknownDerivedSources.add(aliasKey);
+        }
+        return;
+      }
+      if (!source || source.depth !== scope.depth || isFunctionCall_ACU(sql, values, sourceIndex)) return;
+      const cteOutput = cteOutputs.get(source.value.toLowerCase());
+      if (cteOutput && isCteReference(values, source, cte)) {
+        scope.derivedSources.set(source.value.toLowerCase(), cteOutput);
+        if (cteOutput.size === 0) scope.unknownDerivedSources.add(source.value.toLowerCase());
+        return;
+      }
       const tail = qualifiedTail(sql, values, sourceIndex);
       if (!tail || tail.depth !== scope.depth) return;
       onTableReference?.(tail.value.toLowerCase());
@@ -303,9 +423,23 @@ export function rebindSqlReadIdentifiers_ACU(
       const scope = findReadScope_ACU(scopes, values, index);
       if (!scope) continue;
       const key = token.value.toLowerCase();
+      if (isOutputAliasReference_ACU(values, scope, index, key)) {
+        scope.protectedTokens.add(token.start);
+        continue;
+      }
       const candidates = new Set<string>();
       const qualifier = previous && previous.depth === token.depth && /^\s*\.\s*$/.test(sql.slice(previous.end, token.start))
         ? previous : undefined;
+      const qualifierKey = qualifier?.value.toLowerCase();
+      const virtualOutputs = qualifierKey ? scope.derivedSources.get(qualifierKey) : undefined;
+      if (virtualOutputs || (qualifierKey && scope.unknownDerivedSources.has(qualifierKey))) {
+        scope.protectedTokens.add(token.start);
+        continue;
+      }
+      if (!qualifier && (scope.unknownDerivedSources.size > 0 || [...scope.derivedSources.values()].some(outputs => outputs.has(key))) ) {
+        scope.protectedTokens.add(token.start);
+        continue;
+      }
       const tableNames = qualifier
         ? [scope.aliases.get(qualifier.value.toLowerCase())].filter((value): value is string => !!value)
         : [...scope.tables];
@@ -329,7 +463,45 @@ export function rebindSqlReadIdentifiers_ACU(
       if (kind === 'table') tableRebindCount += 1;
       else columnRebindCount += 1;
     }
-    return { sql: result, tableRebindCount, columnRebindCount };
+    const protectedTokenStarts = new Set([...scopes].flatMap(scope => [...scope.protectedTokens]));
+    // CTE column lists are declarations, not entity-column references. They
+    // must be shielded from the legacy broad translator for the same reason as
+    // their downstream CTE references.
+    for (let withIndex = 0; withIndex < values.length; withIndex += 1) {
+      const withToken = values[withIndex];
+      if (!keyword(withToken, 'WITH')) continue;
+      const depth = withToken.depth;
+      let cursor = withIndex + 1;
+      if (keyword(values[cursor], 'RECURSIVE')) cursor += 1;
+      while (values[cursor]?.depth === depth) {
+        cursor += 1; // CTE name
+        if (values[cursor]?.depth === depth + 1) {
+          const listDepth = values[cursor].depth;
+          while (values[cursor]?.depth >= listDepth) {
+            if (values[cursor].depth === listDepth) protectedTokenStarts.add(values[cursor].start);
+            cursor += 1;
+          }
+        }
+        if (!keyword(values[cursor], 'AS')) break;
+        cursor += 1;
+        while (values[cursor] && values[cursor].depth >= depth + 1) cursor += 1;
+        if (!values[cursor]?.commaBefore || values[cursor].depth !== depth) break;
+      }
+    }
+    const protectedIdentifierSpans = [...protectedTokenStarts]
+      .map(start => {
+        const token = values.find(value => value.start === start)!;
+        const offset = [...replacements.values()]
+          .filter(replacement => replacement.token.start < token.start)
+          .reduce((total, replacement) => total + replacement.value.length - (replacement.token.end - replacement.token.start), 0);
+        return { start: token.start + offset, end: token.end + offset };
+      });
+    const rebound: SqlReadRebindResult_ACU = { sql: result, tableRebindCount, columnRebindCount };
+    Object.defineProperty(rebound, 'protectedIdentifierSpans', {
+      value: protectedIdentifierSpans,
+      enumerable: false,
+    });
+    return rebound;
   } catch (error) {
     if (options.lenient) return { sql, tableRebindCount: 0, columnRebindCount: 0 };
     throw error;

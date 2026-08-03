@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   guideContainer: null as any,
   setGuide: vi.fn(() => true),
   runTransaction: vi.fn(),
+  runCommit: vi.fn(),
   chatIdentity: 'chat-a',
 }));
 
@@ -111,7 +112,7 @@ import {
   persistTableMutationLogBatchV2_ACU,
   persistTableSheetCheckpointV2_ACU,
 } from '../../../src/service/table/storage-frame-v2-persist';
-import { buildSheetSchemaMigrationOperation_ACU } from '../../../src/service/table/table-schema-migration';
+import { buildSheetSchemaMigrationOperation_ACU, buildSheetSchemaMigrationOperationV2_ACU } from '../../../src/service/table/table-schema-migration';
 
 const sheetA = { uid: 'a', name: 'A', sourceData: {}, content: [['row_id', 'value'], ['1', 'new']], updateConfig: {}, exportConfig: {}, orderNo: 1 } as any;
 const sheetB = { uid: 'b', name: 'B', sourceData: {}, content: [['row_id', 'value']], updateConfig: {}, exportConfig: {}, orderNo: 2 } as any;
@@ -135,7 +136,12 @@ function seedFrame(frameOverrides: Record<string, any> = {}): any {
   };
   const message = { is_user: false, TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: frame } } };
   mocks.chat.splice(0, mocks.chat.length, message);
-  mocks.loadReplayState.mockResolvedValue(frame.checkpoint?.data ?? null);
+  const replayData = frame.checkpoint?.data ?? null;
+  mocks.loadReplayState.mockResolvedValue(replayData);
+  mocks.loadReplayDetailed.mockImplementation(async (...args: any[]) => {
+    const data = await mocks.loadReplayState(...args);
+    return data ? { baseKind: 'full_checkpoint', data } : null;
+  });
   return message;
 }
 
@@ -246,6 +252,44 @@ describe('manualRefillProgress V2 validation', () => {
     expect(mocks.saveChat).not.toHaveBeenCalled();
   });
 
+  it('拒绝写入位于最新 full checkpoint 之前的填表 artifact，且不产生副作用', async () => {
+    mocks.saveChat.mockClear();
+    mocks.saveChatStrict.mockClear();
+    const { persistTableMutationLogV2_ACU } = await import('../../../src/service/table/storage-frame-v2-persist');
+    const earlierMessage = { is_user: false, TavernDB_ACU_IsolatedData: {} as Record<string, any> };
+    const checkpointMessage = seedFrame({ logEntries: [], manualRefillProgress: undefined });
+    mocks.chat.splice(0, mocks.chat.length, earlierMessage, checkpointMessage);
+    const beforeEarlierMessage = JSON.parse(JSON.stringify(earlierMessage));
+
+    const result = await persistTableMutationLogV2_ACU({
+      targetMessageIndex: 0,
+      source: 'manual_fill',
+      afterData: { mate: { type: 'acu' }, sheet_a: sheetA, sheet_b: sheetB } as any,
+      filledSheetKeys: ['sheet_a'],
+      candidateChangedSheetKeys: ['sheet_a'],
+      operations: [{ kind: 'sheet_replace', sheetKey: 'sheet_a', sheet: sheetA, reason: 'system' }] as any,
+      manualRefillProgress: {
+        kind: 'manual_refill', version: 2, status: 'committed',
+        selectedSheetKeys: ['sheet_a'], contextMessageIndices: [0],
+        originalStartMessageIndex: 0, targetMessageIndex: 0, batchSize: 1,
+        completedUntilMessageIndex: 0, completedSheetMessageIndexByKey: { sheet_a: 0 },
+        runId: 'checkpoint-after-target', mode: 'catch_up', targetAiFloor: 1,
+        planSignature: 'plan-signature', waveIndex: 0, bucketIndex: 0,
+        totalWaves: 1, totalBuckets: 1, updatedAt: 2,
+      },
+      strictSave: true,
+      transactionContext: makeTransaction(), assumeCommitLock: true,
+    });
+
+    expect(result).toEqual({
+      saved: false,
+      error: 'V2 write target precedes the latest full checkpoint and would never replay: targetMessageIndex=0, latestFullCheckpointIndex=1.',
+    });
+    expect(earlierMessage).toEqual(beforeEarlierMessage);
+    expect(mocks.saveChatStrict).not.toHaveBeenCalled();
+    expect(mocks.saveChat).not.toHaveBeenCalled();
+  });
+
   it('progress-only 严格保存失败时恢复 frame metadata、headRevision 与 identity', async () => {
     mocks.saveChat.mockClear();
     mocks.saveChatStrict.mockReset().mockRejectedValueOnce(new Error('strict save failed'));
@@ -285,6 +329,8 @@ describe('persistTableMutationLogV2_ACU incremental replacement', () => {
     mocks.chat.length = 0;
     mocks.saveChat.mockReset().mockResolvedValue(undefined);
     mocks.saveChatStrict.mockReset().mockResolvedValue(undefined);
+    mocks.loadReplayState.mockReset();
+    mocks.loadReplayDetailed.mockReset();
     mocks.settings.dataIsolationEnabled = false;
     mocks.settings.dataIsolationCode = '';
   });
@@ -332,6 +378,35 @@ describe('persistTableMutationLogV2_ACU incremental replacement', () => {
     expect(mocks.saveChatStrict).not.toHaveBeenCalled();
   });
 
+  it('拒绝重复的非空 row_id，且不仲裁身份或修改聊天状态', async () => {
+    const message = seedFrame();
+    message.TavernDB_ACU_Identity = 'identity-before-rejection';
+    const isolatedDataBefore = message.TavernDB_ACU_IsolatedData;
+    const messageBefore = JSON.parse(JSON.stringify(message));
+    const { persistTableMutationLogV2_ACU } = await import('../../../src/service/table/storage-frame-v2-persist');
+
+    const result = await persistTableMutationLogV2_ACU({
+      targetMessageIndex: 0,
+      source: 'manual_fill',
+      afterData: {
+        mate: { type: 'acu' },
+        sheet_a: { ...sheetA, content: [['row_id', 'value'], ['stable-id', 'first'], [' stable-id ', 'second']] },
+        sheet_b: sheetB,
+      } as any,
+      filledSheetKeys: ['sheet_a'],
+      candidateChangedSheetKeys: ['sheet_a'],
+      operations: [{ kind: 'sheet_replace', sheetKey: 'sheet_a', sheet: sheetA, reason: 'system' }],
+      transactionContext: makeTransaction(),
+      assumeCommitLock: true,
+    });
+
+    expect(result).toEqual({ saved: false, error: expect.stringContaining('duplicate_row_id') });
+    expect(message).toEqual(messageBefore);
+    expect(message.TavernDB_ACU_IsolatedData).toBe(isolatedDataBefore);
+    expect(mocks.saveChat).not.toHaveBeenCalled();
+    expect(mocks.saveChatStrict).not.toHaveBeenCalled();
+  });
+
   it.each([
     { label: 'row_upsert 身份不一致', operations: [{ kind: 'row_upsert', sheetKey: 'sheet_a', rowId: '1', cells: ['2', 'new'] }] },
     { label: 'row_upsert 行宽不匹配', operations: [{ kind: 'row_upsert', sheetKey: 'sheet_a', rowId: '1', cells: ['1'] }] },
@@ -352,8 +427,37 @@ describe('persistTableMutationLogV2_ACU incremental replacement', () => {
 
     expect(result.saved).toBe(true);
     expect(message.TavernDB_ACU_IsolatedData[''].storageFrame.logEntries[0].operations).toEqual(operations);
-    expect(mocks.loadReplayState).not.toHaveBeenCalled();
+    expect(mocks.loadReplayDetailed).toHaveBeenCalledWith(mocks.chat, '', { maxMessageIndex: 0, updateRuntimeState: false });
     expect(mocks.saveChat).toHaveBeenCalledOnce();
+  });
+
+  it('已有 checkpoint 的单表增量只复制相关 afterData，不遍历未写入表', async () => {
+    const message = seedFrame({ logEntries: [] });
+    const untouchedToJson = vi.fn(() => {
+      throw new Error('未写入表不应被增量持久化复制');
+    });
+    const { persistTableMutationLogV2_ACU } = await import('../../../src/service/table/storage-frame-v2-persist');
+
+    const result = await persistTableMutationLogV2_ACU({
+      targetMessageIndex: 0,
+      source: 'manual_fill',
+      afterData: {
+        mate: { type: 'acu' },
+        sheet_a: sheetA,
+        sheet_b: { ...sheetB, toJSON: untouchedToJson },
+      } as any,
+      filledSheetKeys: ['sheet_a'],
+      candidateChangedSheetKeys: ['sheet_a'],
+      operations: [{ kind: 'row_upsert', sheetKey: 'sheet_a', rowId: '1', cells: ['1', 'updated'] }] as any,
+      transactionContext: makeTransaction(),
+      assumeCommitLock: true,
+    });
+
+    expect(result.saved).toBe(true);
+    expect(untouchedToJson).not.toHaveBeenCalled();
+    expect(message.TavernDB_ACU_IsolatedData[''].storageFrame.logEntries[0].operations).toEqual([
+      { kind: 'row_upsert', sheetKey: 'sheet_a', rowId: '1', cells: ['1', 'updated'] },
+    ]);
   });
 
   it('operation 可应用但结果与 afterData 分叉时仍保存（不再做 afterData 相等性阻断）', async () => {
@@ -425,7 +529,11 @@ describe('persistTableMutationLogV2_ACU incremental replacement', () => {
 
     expect(result.saved).toBe(true);
     expect(message.TavernDB_ACU_IsolatedData[''].storageFrame.logEntries).toHaveLength(1);
-    expect(mocks.loadReplayState).not.toHaveBeenCalled();
+    if (operation.kind === 'sql_sheet_batch') {
+      expect(mocks.loadReplayDetailed).toHaveBeenCalledWith(mocks.chat, '', { maxMessageIndex: 0, updateRuntimeState: false });
+    } else {
+      expect(mocks.loadReplayDetailed).not.toHaveBeenCalled();
+    }
     expect(message.TavernDB_ACU_IsolatedData[''].storageFrame.logEntries[0].operations).toEqual([operation]);
     expect(mocks.saveChat).toHaveBeenCalledOnce();
   });
@@ -826,13 +934,17 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
     mocks.scopeContainer = { version: 1, template: { '': { old: true } } };
     mocks.guideContainer = { version: 1, tags: { '': { data: { sheet_old: {} } } } };
     mocks.loadReplayState.mockReset();
-    mocks.loadReplayDetailed.mockReset();
+    mocks.loadReplayDetailed.mockReset().mockImplementation(async (...args: any[]) => {
+      const data = await mocks.loadReplayState(...args);
+      return data ? { baseKind: 'full_checkpoint', data } : null;
+    });
 
     mocks.setGuide.mockReset().mockImplementation(() => true);
+    mocks.runCommit.mockReset().mockImplementation(async (commitTask: () => any) => commitTask());
     mocks.runTransaction.mockReset().mockImplementation(async (_options: any, task: any) => task({
       baseRevision: 'runtime-v1:test',
       assertFresh: vi.fn(),
-      runCommit: async (commitTask: () => any) => commitTask(),
+      runCommit: mocks.runCommit,
     }));
   });
 
@@ -862,6 +974,7 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
       expect(mocks.runTransaction).toHaveBeenCalledWith(expect.objectContaining({
         source: 'template_assistant', isolationKey: 'scope-only', writeSet: [{ kind: 'all' }], maintenanceMode: 'exclusive',
       }), expect.any(Function));
+      expect(mocks.runCommit).toHaveBeenCalledWith(expect.any(Function), []);
       expect(mocks.setGuide).toHaveBeenCalledWith('scope-only', expect.any(Object), expect.objectContaining({
         syncTemplateScope: true, templateSource: scopeOnlyData, presetName: '预设A', source: 'test', updatedAt: 30,
       }));
@@ -1192,10 +1305,7 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
     expect(mocks.saveChatStrict).not.toHaveBeenCalled();
   });
 
-  it('更晚楼层已有 full checkpoint 时，对更早楼层填表不再写第二个初始基线', async () => {
-    // 回归：锚点判定若只看目标楼层之前，对更早楼层追平/重填时会误判为首次初始化，
-    // 又写一个 init full checkpoint。回放只认最后一个 full checkpoint，
-    // 于是它之前的所有增量全部失效，表现为“只有最后一层有数据”。
+  it('拒绝写入更晚 full checkpoint 之前的填表数据，避免产生不可回放增量', async () => {
     const { persistTableMutationLogV2_ACU } = await import('../../../src/service/table/storage-frame-v2-persist');
     const earlyMessage = { is_user: false } as any;
     const laterCheckpointMessage = {
@@ -1223,13 +1333,12 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
       transactionContext: makeTransaction(), assumeCommitLock: true,
     });
 
-    expect(result.error).toBeUndefined();
-    expect(result.saved).toBe(true);
-    const frame = earlyMessage.TavernDB_ACU_IsolatedData[''].storageFrame;
-    // 绝不能在更早楼层再造一个 full checkpoint。
-    expect(frame.checkpoint).toBeUndefined();
-    // 只追加增量。
-    expect(frame.logEntries).toHaveLength(1);
+    expect(result).toEqual({
+      saved: false,
+      error: 'V2 write target precedes the latest full checkpoint and would never replay: targetMessageIndex=0, latestFullCheckpointIndex=1.',
+    });
+    expect(earlyMessage.TavernDB_ACU_IsolatedData).toBeUndefined();
+    expect(mocks.saveChat).not.toHaveBeenCalled();
   });
 
 
@@ -1273,6 +1382,48 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
     expect(introduced?.timeline?.afterSeq).toBeLessThan(Number(appendedSeq));
     // 已锚定的 sheet_a 不应被重复补写。
     expect(frame.perSheetCheckpoints?.sheet_a).toBeUndefined();
+  });
+
+  it('历史曾存在但执行点已隐藏的目标表，按 bounded replay 判定为 inactive 并补 sheet_reveal', async () => {
+    const { persistTableMutationLogV2_ACU } = await import('../../../src/service/table/storage-frame-v2-persist');
+    const hiddenSheet = { ...sheetB, uid: 'hidden', name: '历史隐藏表', content: [['row_id', 'value'], ['1', '新数据']] };
+    const message = seedFrame({
+      checkpoint: {
+        kind: 'full', createdAt: 1, reason: 'init',
+        data: { mate: { type: 'acu' }, sheet_a: sheetA, sheet_hidden: hiddenSheet },
+      },
+      logEntries: [],
+      perSheetCheckpoints: {
+        sheet_hidden: {
+          kind: 'sheet_full', createdAt: 2, reason: 'schema_change', sheetKey: 'sheet_hidden', data: hiddenSheet,
+          timeline: { kind: 'sheet_hide', activateAtMessageIndex: 0, afterSeq: 0 },
+        },
+      },
+    });
+    mocks.loadReplayDetailed.mockResolvedValueOnce({
+      baseKind: 'full_checkpoint',
+      data: { mate: { type: 'acu' }, sheet_a: sheetA },
+    });
+
+    const result = await persistTableMutationLogV2_ACU({
+      targetMessageIndex: 0,
+      source: 'group_fill',
+      afterData: { mate: { type: 'acu' }, sheet_a: sheetA, sheet_hidden: hiddenSheet } as any,
+      operations: [{ kind: 'row_upsert', sheetKey: 'sheet_hidden', rowId: '1', cells: ['1', '新数据'] }] as any,
+      candidateChangedSheetKeys: ['sheet_hidden'],
+      filledSheetKeys: ['sheet_hidden'],
+      transactionContext: makeTransaction(), assumeCommitLock: true,
+    });
+
+    expect(result).toMatchObject({ saved: true });
+    expect(mocks.loadReplayDetailed).toHaveBeenCalledWith(mocks.chat, '', {
+      maxMessageIndex: 0,
+      updateRuntimeState: false,
+    });
+    expect(message.TavernDB_ACU_IsolatedData[''].storageFrame.perSheetCheckpoints.sheet_hidden).toMatchObject({
+      timeline: { kind: 'sheet_reveal', activateAtMessageIndex: 0, afterSeq: 0 },
+      data: { content: [['row_id', 'value']] },
+    });
   });
 
 
@@ -1728,16 +1879,16 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
       assumeCommitLock: true,
     });
 
-    expect(historicalImport.saved).toBe(true);
-    // 同一隔离键下同一时刻只能有一个 full checkpoint：
-    // 更晚楼层已有基线时，往更早楼层导入不得再新建一个初始基线，
-    // 否则回放只认最后一个 full checkpoint，它之前的增量全部失效。
-    expect(historicalImportMessage.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toBeUndefined();
-    expect(historicalImportMessage.TavernDB_ACU_IsolatedData[''].storageFrame.logEntries).toHaveLength(1);
+    expect(historicalImport).toEqual({
+      saved: false,
+      error: 'V2 write target precedes the latest full checkpoint and would never replay: targetMessageIndex=0, latestFullCheckpointIndex=1.',
+    });
+    // 回放只从最后一个 full checkpoint 开始；因此不能把导入伪装成已保存的历史增量。
+    expect(historicalImportMessage.TavernDB_ACU_IsolatedData).toBeUndefined();
     expect(futureCheckpointMessage.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data).toEqual({
       mate: { type: 'acu' }, sheet_a: sheetA, sheet_b: sheetB,
     });
-    expect(mocks.saveChat).toHaveBeenCalledOnce();
+    expect(mocks.saveChat).not.toHaveBeenCalled();
 
     const incrementalImportMessage = seedFrame({ logEntries: [] });
     mocks.loadReplayState.mockResolvedValue({ mate: { type: 'acu' }, sheet_a: sheetA, sheet_b: sheetB });
@@ -1837,6 +1988,13 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
         changedSheetKeys: ['sheet_a'],
         operations: [{ kind: 'row_upsert', sheetKey: 'sheet_a', rowId: '1', cells: ['1', '历史孤立数据'] }],
       })],
+      perSheetCheckpoints: {
+        sheet_a: {
+          kind: 'sheet_full', createdAt: 1, reason: 'manual', sheetKey: 'sheet_a',
+          data: sheetA,
+          timeline: { kind: 'sheet_rebase', activateAtMessageIndex: 0, afterSeq: 1 },
+        },
+      },
     };
     const message = seedFrame(orphanFrame);
     const replayedOrphanData = {
@@ -1851,7 +2009,8 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
     mocks.loadReplayDetailed.mockResolvedValueOnce({
       baseKind: 'temporary_template_baseline',
       data: replayedOrphanData,
-    });
+    }).mockResolvedValueOnce({ baseKind: 'full_checkpoint', data: afterData })
+      .mockResolvedValueOnce({ baseKind: 'full_checkpoint', data: afterData });
     mocks.saveChatStrict.mockClear();
 
     const result = await persistTableMutationLogV2_ACU({
@@ -1871,10 +2030,12 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
       checkpoint: { kind: 'full', reason: 'integrity_repair', data: afterData },
       logEntries: [],
     });
+    expect(tagData.storageFrame.perSheetCheckpoints).toBeUndefined();
     const expectedBackupFrame = {
       version: orphanFrame.version,
       headRevision: orphanFrame.headRevision,
       logEntries: orphanFrame.logEntries,
+      perSheetCheckpoints: orphanFrame.perSheetCheckpoints,
     };
     expect(tagData.recoveryBackup).toMatchObject({
       version: 1,
@@ -1927,7 +2088,9 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
     message.TavernDB_ACU_Identity = 'old-identity';
     const beforeIsolatedData = message.TavernDB_ACU_IsolatedData;
     const replayedData = { mate: { type: 'acu' }, sheet_a: sheetA, sheet_b: sheetB } as any;
-    mocks.loadReplayDetailed.mockResolvedValueOnce({ baseKind: 'temporary_template_baseline', data: replayedData });
+    mocks.loadReplayDetailed.mockResolvedValueOnce({ baseKind: 'temporary_template_baseline', data: replayedData })
+      .mockResolvedValueOnce({ baseKind: 'full_checkpoint', data: replayedData })
+      .mockResolvedValueOnce({ baseKind: 'full_checkpoint', data: replayedData });
     mocks.saveChatStrict.mockReset().mockRejectedValueOnce(new Error('upgrade save failed'));
 
     await expect(persistTableMutationLogV2_ACU({
@@ -2037,6 +2200,47 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
     });
     expect(frame.headRevision).toBe(frame.logEntries[1].commitRevision);
     expect(frame.perSheetCheckpoints.sheet_a).toBeUndefined();
+  });
+
+  it('contractVersion 2 migration 通过模板提交校验并原样写入日志', async () => {
+    const beforeSheet = {
+      uid: 'inventory', name: '背包', orderNo: 0,
+      content: [['row_id', '名称'], ['1', '铁剑']],
+      sourceData: { ddl: 'CREATE TABLE inventory (\n row_id INTEGER PRIMARY KEY, -- 行号\n item_name TEXT -- 名称\n);' },
+      updateConfig: {}, exportConfig: {},
+    } as any;
+    const targetSheet = {
+      ...beforeSheet,
+      content: [['row_id', '名称', '品质'], ['1', '铁剑', 'normal']],
+      sourceData: { ddl: "CREATE TABLE inventory (\n row_id INTEGER PRIMARY KEY, -- 行号\n item_name TEXT, -- 名称\n quality TEXT NOT NULL DEFAULT 'normal' -- 品质\n);" },
+    } as any;
+    const migration = await buildSheetSchemaMigrationOperationV2_ACU('sheet_a', beforeSheet, targetSheet, {
+      physicalColumnMappings: [],
+      fills: {
+        quality: { kind: 'ddl_literal_default', literal: { kind: 'string', sql: "'normal'", value: 'normal' } },
+      },
+      conversions: [],
+      migrationPolicy: { destructiveChangeConfirmed: false, lossyConversionConfirmed: false },
+    });
+    const message = seedFrame({
+      checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: { mate: { type: 'acu' }, sheet_a: beforeSheet, sheet_b: sheetB } },
+      logEntries: [],
+      perSheetCheckpoints: { sheet_b: { kind: 'sheet_full', createdAt: 2, reason: 'manual', sheetKey: 'sheet_b', data: sheetB } },
+    });
+    mocks.loadReplayState.mockResolvedValue({ mate: { type: 'acu' }, sheet_a: beforeSheet, sheet_b: sheetB });
+
+    const result = await commitCurrentFloorTemplateChanges_ACU({
+      isolationKey: '',
+      sheetChanges: [{ kind: 'operations', sheetKey: 'sheet_a', targetSheetData: targetSheet, operations: [migration] }],
+      guideData: { sheet_a: { name: '背包' }, sheet_b: { name: 'B' } },
+      createdAt: 30,
+    });
+
+    expect(result.saved).toBe(true);
+    const frame = message.TavernDB_ACU_IsolatedData[''].storageFrame;
+    expect(frame.logEntries).toHaveLength(1);
+    expect(frame.logEntries[0].operations).toEqual([migration]);
+    expect(frame.logEntries[0].operations[0]).toMatchObject({ contractVersion: 2, fills: { quality: expect.any(Object) } });
   });
 
   it('同批 introduction 与已有 Sheet migration 使用旧尾 seq 激活并将 operation 写入下一 seq', async () => {
@@ -2218,6 +2422,44 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
     expect(mocks.setGuide).not.toHaveBeenCalled();
     expect(message.TavernDB_ACU_IsolatedData).toBe(originalIsolatedData);
   });
+
+  it('模板结构提交遇到 compatibility-only replay 基线时阻断且零写入', async () => {
+    const message = seedFrame({ logEntries: [] });
+    const originalIsolatedData = message.TavernDB_ACU_IsolatedData;
+    mocks.loadReplayDetailed.mockResolvedValueOnce({
+      baseKind: 'full_checkpoint',
+      data: message.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data,
+      requiresCheckpointConvergence: true,
+      compatibilityRepairs: [{
+        kind: 'temporary_sheet_anchor',
+        sheetKey: 'sheet_a',
+        messageIndex: 384,
+        seq: 1,
+        operationIndex: 0,
+        templateFingerprint: 'test-fingerprint',
+        reason: 'missing_at_operation',
+      }],
+    });
+
+    const result = await commitCurrentFloorTemplateChanges_ACU({
+      isolationKey: '',
+      sheetChanges: [{
+        kind: 'operations',
+        sheetKey: 'sheet_a',
+        targetSheetData: sheetA,
+        operations: [{ kind: 'meta_update', sheetKey: 'sheet_a', meta: { name: 'A' } }],
+      }],
+      guideData: { sheet_a: { name: 'A' }, sheet_b: { name: 'B' } },
+      createdAt: 30,
+    });
+
+    expect(result).toMatchObject({ saved: false, error: expect.stringContaining('恢复收敛') });
+    expect(result.error).toContain('sheet_a');
+    expect(mocks.saveChatStrict).not.toHaveBeenCalled();
+    expect(mocks.setGuide).not.toHaveBeenCalled();
+    expect(message.TavernDB_ACU_IsolatedData).toBe(originalIsolatedData);
+  });
+
   it('同一楼 hide 过的表重新引入时自动转 reveal，恢复隐藏前数据（切回多表模板不再报错）', async () => {
     // 复现：切多表模板（introduce）→ 切回默认（hide）→ 再切回多表模板。
     // hide checkpoint 的语义是“该表已不活跃”，不能被当成“仍活跃”而拒绝重新引入。
@@ -2302,7 +2544,7 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
     });
 
     expect(result).toMatchObject({ saved: false, error: expect.stringContaining('genuinely new sheet') });
-    expect(mocks.loadReplayState).toHaveBeenCalledWith(mocks.chat, '', { maxMessageIndex: 0, updateRuntimeState: false });
+    expect(mocks.loadReplayDetailed).toHaveBeenCalledWith(mocks.chat, '', { maxMessageIndex: 0, updateRuntimeState: false });
     expect(mocks.saveChatStrict).not.toHaveBeenCalled();
     expect(mocks.setGuide).not.toHaveBeenCalled();
     expect(message.TavernDB_ACU_IsolatedData).toBe(originalIsolatedData);

@@ -261,6 +261,7 @@ beforeEach(() => {
   mockSettings.dataIsolationEnabled = false;
   mockSettings.dataIsolationCode = '';
   mockSettings.knownCustomEntryNames = [];
+  delete mockSettings.autoMergedOrder;
   mockCurrentJsonTableData.value = null;
   mockAllChatMessages.value = [];
   mockCoreApisAreReady.value = true;
@@ -1243,7 +1244,7 @@ describe('refreshMergedDataAndNotify_ACU', () => {
     expect(mergedData.sheet_0.content).toEqual([
       ['row_id', '数值'],
       ['2', 30],
-      ['3', 'AM-有效记录', 'auto_merged'],
+      ['3', 'AM-有效记录'],
     ]);
     expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('缺少 row_id'));
     expect(mockPersistNullRowCleanupShards).toHaveBeenCalledWith(expect.objectContaining({
@@ -1251,6 +1252,52 @@ describe('refreshMergedDataAndNotify_ACU', () => {
     }));
     expect(result).toMatchObject({ removedNullRowCount: 1, nullRowCleanupPersisted: 'persisted', nullRowCleanupMessageIndex: 3, degraded: false });
   });
+
+  it('刷新时迁移纪要历史尾标记状态并保持 canonical 等宽', async () => {
+    const mergedData = {
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_3NoMc1wI: {
+        name: '纪要表',
+        content: [
+          ['row_id', '内容'],
+          ['1', '历史合并纪要', 'auto_merged'],
+          ['2', 'AM-普通纪要'],
+        ],
+      },
+    };
+    mockMergeAllIndependentTables.mockResolvedValue(mergedData);
+    mockGetSortedSheetKeys.mockReturnValue(['sheet_3NoMc1wI']);
+    mockReorderDataBySheetKeys.mockImplementation((data: any) => data);
+
+    const result = await refreshMergedDataAndNotify_ACU();
+
+    expect(mockSettings.autoMergedOrder).toEqual({ sheet_3NoMc1wI: ['1'] });
+    expect(mockSaveSettings).toHaveBeenCalledTimes(1);
+    expect(mergedData.sheet_3NoMc1wI.content).toEqual([
+      ['row_id', '内容'],
+      ['1', '历史合并纪要'],
+      ['2', 'AM-普通纪要'],
+    ]);
+    expect(result).toMatchObject({ integrityFixed: true, canonicalIssues: [], degraded: false });
+  });
+
+  it('刷新不修复非精确历史尾标记，保留 canonical 拒绝证据', async () => {
+    const mergedData = {
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_3NoMc1wI: { name: '纪要表', content: [['row_id', '内容'], ['1', '坏行', 'manual'], ['2', '更坏', 'auto_merged', 'extra']] },
+    };
+    mockMergeAllIndependentTables.mockResolvedValue(mergedData);
+    mockGetSortedSheetKeys.mockReturnValue(['sheet_3NoMc1wI']);
+    mockReorderDataBySheetKeys.mockImplementation((data: any) => data);
+
+    const result = await refreshMergedDataAndNotify_ACU();
+
+    expect(mockSettings.autoMergedOrder).toBeUndefined();
+    expect(mockSaveSettings).not.toHaveBeenCalled();
+    expect(mergedData.sheet_3NoMc1wI.content).toEqual([['row_id', '内容'], ['1', '坏行', 'manual'], ['2', '更坏', 'auto_merged', 'extra']]);
+    expect(result).toMatchObject({ canonicalIssues: [], degraded: false });
+  });
+
 
   it('存在无法自动合并的 canonical issue 时只清理内存并跳过持久化', async () => {
     const mergedData = {

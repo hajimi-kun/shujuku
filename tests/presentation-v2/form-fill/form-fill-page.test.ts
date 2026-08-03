@@ -1107,6 +1107,74 @@ describe('FormFillPage · 手动填表面板', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it('terminal progress 保存失败时提示数据已提交，不误报为整次追平失败', async () => {
+    const { mount, orchestrateCatchUp } = await mountFormFillPage();
+    orchestrateCatchUp.mockResolvedValueOnce({
+      success: true,
+      outcome: 'progress_metadata_failed',
+      committedBucketCount: 2,
+      error: '终态进度保存失败：strict save failed',
+    });
+    const button = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(btn => btn.textContent?.includes('一键追平所选表未填楼层'))!;
+
+    button.click();
+    await new Promise(r => setTimeout(r, 0));
+    await clickDialogButton('确认追平');
+    await new Promise(r => setTimeout(r, 0));
+
+    const toastText = document.querySelector('.acu-toast-viewport')?.textContent || '';
+    expect(toastText).toContain('手动追平数据已提交，但完成状态记录失败');
+    expect(toastText).toContain('strict save failed');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('追平回放完整性失败时明确提示已回载持久化数据，不伪装成普通 AI 失败', async () => {
+    const { mount, orchestrateCatchUp } = await mountFormFillPage();
+    orchestrateCatchUp.mockResolvedValueOnce({
+      success: false,
+      outcome: 'integrity_failed',
+      committedBucketCount: 1,
+      error: 'V2 replay 未恢复所选表：sheet_a；已从聊天持久化状态回载运行时。',
+    });
+    const button = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(btn => btn.textContent?.includes('一键追平所选表未填楼层'))!;
+
+    button.click();
+    await new Promise(r => setTimeout(r, 0));
+    await clickDialogButton('确认追平');
+    await new Promise(r => setTimeout(r, 0));
+
+    const toastText = document.querySelector('.acu-toast-viewport')?.textContent || '';
+    expect(toastText).toContain('持久化完整性校验失败');
+    expect(toastText).toContain('已回载聊天中的已保存数据');
+    expect(toastText).toContain('V2 replay 未恢复所选表');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('追平锚点预检阻断时展示恢复指引而不伪装成 AI 执行失败', async () => {
+    const { mount, orchestrateCatchUp } = await mountFormFillPage();
+    orchestrateCatchUp.mockResolvedValueOnce({
+      success: false,
+      outcome: 'blocked',
+      committedBucketCount: 0,
+      error: '手动追平目标早于未知 V2 checkpoint；请先执行 V2 恢复诊断。',
+    });
+    const button = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(btn => btn.textContent?.includes('一键追平所选表未填楼层'))!;
+
+    button.click();
+    await new Promise(r => setTimeout(r, 0));
+    await clickDialogButton('确认追平');
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(document.querySelector('.acu-toast-viewport')?.textContent || '').toContain('请先执行 V2 恢复诊断');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
   it('sync_pending 提供仅同步重试，重试不再次调用追平编排', async () => {
     const { mount, orchestrateCatchUp, refreshMergedData } = await mountFormFillPage();
     orchestrateCatchUp.mockResolvedValueOnce({ success: true, outcome: 'sync_pending', committedBucketCount: 2 });

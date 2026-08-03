@@ -49,6 +49,8 @@ export interface RunTableUpdateCommitOptions_ACU {
   revisionWriteSet?: TableWriteConflictUnitV2_ACU[];
   isolationKey?: string;
   baseRevision?: string | null;
+  /** apply 已在事务外构建结果且不读取 workingData 时，可跳过事务工作副本克隆。 */
+  workingDataMode?: 'clone' | 'none';
   initialData?: TableDataObject_ACU | null;
   targetMessageIndex: number;
   targetSheetKeys: string[] | null;
@@ -59,6 +61,8 @@ export interface RunTableUpdateCommitOptions_ACU {
   manualRefillProgress?: ManualRefillProgressV2_ACU;
   replaceExistingIncremental?: ReplaceExistingIncrementalOptions_ACU;
   strictSave?: boolean;
+  performanceRunId?: string;
+  performanceParentSpanId?: string;
   skipChatSave?: boolean;
 }
 
@@ -93,9 +97,15 @@ function normalizeSqlBindParams_ACU(params: (string | number | null)[] | undefin
  * data. Identity allocation belongs to the row creation path; repairing here
  * would hide the origin of a corrupt row and could change persisted semantics.
  */
-function assertPersistableRowIdentities_ACU(data: TableDataObject_ACU, reason: string): void {
+function assertPersistableRowIdentities_ACU(
+  data: TableDataObject_ACU,
+  reason: string,
+  targetSheetKeys?: string[] | null,
+): void {
+  const scopedKeys = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0 ? new Set(targetSheetKeys) : null;
   for (const [sheetKey, sheet] of Object.entries(data)) {
     if (!sheetKey.startsWith('sheet_')) continue;
+    if (scopedKeys && !scopedKeys.has(sheetKey)) continue;
     const content = (sheet as any)?.content;
     if (!Array.isArray(content) || content.length === 0) continue;
     const headers = content[0];
@@ -161,6 +171,7 @@ export async function runTableUpdateCommit_ACU<T>(
       isolationKey: options.isolationKey ?? getCurrentIsolationKey_ACU(),
       writeSet: options.writeSet,
       baseRevision: options.baseRevision,
+      workingDataMode: options.workingDataMode,
       initialData: options.initialData !== undefined ? options.initialData : currentJsonTableData_ACU,
     }, async (transactionContext, workingData) => {
       let commitRevisionWriteSet = options.revisionWriteSet;
@@ -180,7 +191,7 @@ export async function runTableUpdateCommit_ACU<T>(
         commitRevisionWriteSet = revisionWriteSet;
         if (!options.skipChatSave) {
           assertExpectedCommitScope_ACU(options, '持久化前');
-          assertPersistableRowIdentities_ACU(applied.tableData, options.reason);
+          assertPersistableRowIdentities_ACU(applied.tableData, options.reason, targetSheetKeys);
           const saveResult = await persistTablesToChatMessage_ACU({
             targetMessageIndex: persistOptions.targetMessageIndex ?? options.targetMessageIndex,
             targetSheetKeys,
@@ -196,6 +207,8 @@ export async function runTableUpdateCommit_ACU<T>(
             manualRefillProgress: persistOptions.manualRefillProgress ?? options.manualRefillProgress,
             replaceExistingIncremental: persistOptions.replaceExistingIncremental ?? options.replaceExistingIncremental,
             strictSave: persistOptions.strictSave ?? options.strictSave,
+            performanceRunId: options.performanceRunId,
+            performanceParentSpanId: options.performanceParentSpanId,
             assumeCommitLock: true,
             transactionContext,
           });
@@ -228,11 +241,14 @@ export async function runTableUpdateCommit_ACU<T>(
       }
     }
     const message = error?.message || String(error);
+    const errorCategory: TableUpdateCommitErrorCategory_ACU = error instanceof TableUpdateCommitError_ACU
+      ? error.category
+      : 'infrastructure';
     logError_ACU(`[TableUpdateCommit] ${options.reason} failed:`, error);
     return {
       success: false,
       error: message,
-      errorCategory: error instanceof TableUpdateCommitError_ACU ? error.category : 'infrastructure',
+      errorCategory,
     };
   }
 }

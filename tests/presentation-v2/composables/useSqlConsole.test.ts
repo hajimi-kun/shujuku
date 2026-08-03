@@ -22,6 +22,7 @@ function mockSqlConsoleDeps(opts: {
     getCurrentData: vi.fn(() => ({ mate: { type: 'acu', version: 1 }, sheet_0: { name: 'T', content: [['row_id'], ['1']] } })),
   };
   const getStorageProvider = vi.fn(() => provider);
+  const resolveCurrentRuntimeReadSql = vi.fn((sql: string) => ({ sql, tableRebindCount: 0, columnRebindCount: 0 }));
   const ensureStorageProviderReady = vi.fn(async () => provider);
 
   vi.doMock('../../../src/service/table/storage-mode', () => ({
@@ -54,8 +55,11 @@ function mockSqlConsoleDeps(opts: {
       runCommit: async (commitTask: any) => commitTask(),
     }, _options.initialData || null)),
   }));
+  vi.doMock('../../../src/service/runtime/read-query-resolver', () => ({
+    resolveCurrentRuntimeReadSql_ACU: resolveCurrentRuntimeReadSql,
+  }));
 
-  return { executeQuery, executeMutation, getStorageProvider };
+  return { executeQuery, executeMutation, getStorageProvider, resolveCurrentRuntimeReadSql };
 }
 
 beforeEach(() => {
@@ -98,6 +102,7 @@ describe('useSqlConsole', () => {
     flow.sqlText.value = 'SELECT id, name FROM item;';
     await flow.executeCurrent();
 
+    expect(deps.resolveCurrentRuntimeReadSql).toHaveBeenCalledWith('SELECT id, name FROM item;');
     expect(deps.executeQuery).toHaveBeenCalledWith('SELECT id, name FROM item;');
     expect(flow.result.value.kind).toBe('query');
     expect(flow.result.value.columns).toEqual(['id', 'name']);

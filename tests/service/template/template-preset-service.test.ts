@@ -111,8 +111,15 @@ vi.mock('../../../src/service/table/storage-frame-v2-persist', () => ({
   commitCurrentFloorTemplateChanges_ACU: vi.fn(),
   commitCurrentFloorTemplateScopeOnly_ACU: vi.fn(),
 }));
+const replayMocks = vi.hoisted(() => ({
+  load: vi.fn(),
+}));
 vi.mock('../../../src/service/table/storage-frame-v2-replay', () => ({
-  loadTableStateFromFramesV2_ACU: vi.fn(),
+  loadTableStateFromFramesV2_ACU: replayMocks.load,
+  loadTableStateFromFramesV2Detailed_ACU: vi.fn(async (...args: any[]) => {
+    const data = await replayMocks.load(...args);
+    return data ? { baseKind: 'full_checkpoint', data } : null;
+  }),
 }));
 vi.mock('../../../src/service/table/storage-strategy-resolver', () => ({
   resolveTableStorageStrategy_ACU: vi.fn(() => ({ mode: 'v2' })),
@@ -164,8 +171,9 @@ import {
   commitCurrentFloorTemplateChanges_ACU,
   commitCurrentFloorTemplateScopeOnly_ACU,
 } from '../../../src/service/table/storage-frame-v2-persist';
-import { loadTableStateFromFramesV2_ACU } from '../../../src/service/table/storage-frame-v2-replay';
+import { loadTableStateFromFramesV2_ACU, loadTableStateFromFramesV2Detailed_ACU } from '../../../src/service/table/storage-frame-v2-replay';
 import { resolveTableStorageStrategy_ACU } from '../../../src/service/table/storage-strategy-resolver';
+import { captureTableRuntimeRevisionForWriteSet_ACU } from '../../../src/service/table/table-write-transaction';
 
 beforeEach(() => {
   // 清空 mockStore
@@ -375,14 +383,24 @@ describe('parseImportedTemplateData_ACU', () => {
     }));
     expect(template.sheet_legacy_random.content).toEqual([['名称']]);
   });
-  it('有数据的缺失 row_id 模板仍由严格校验拒绝', () => {
+  it('有数据的缺失 row_id 模板在严格校验前规范化，快照与输入对象契约保持一致', () => {
     const template = {
       mate: { type: 'chatSheets', version: 1 },
       sheet_legacy_random: { uid: 'sheet_legacy_random', name: '表1', content: [['名称'], ['铁剑']], sourceData: {} },
     };
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockImplementationOnce((value: any) => ({
+      templateStr: JSON.stringify(value), templateObj: value,
+    }));
 
-    expect(() => parseImportedTemplateData_ACU(template)).toThrow(TemplateImportValidationError_ACU);
-    expect(sanitizeTemplateSnapshotForChat_ACU).not.toHaveBeenCalled();
+    const result = parseImportedTemplateData_ACU(template);
+
+    expect(result.templateObj.sheet_legacy_random.content).toEqual([
+      ['row_id', '名称'], ['1', '铁剑'],
+    ]);
+    expect(sanitizeTemplateSnapshotForChat_ACU).toHaveBeenCalledWith(expect.objectContaining({
+      sheet_legacy_random: expect.objectContaining({ content: [['row_id', '名称'], ['1', '铁剑']] }),
+    }));
+    expect(template.sheet_legacy_random.content).toEqual([['名称'], ['铁剑']]);
   });
   it('无效 JSON 抛出错误', () => {
     expect(() => parseImportedTemplateData_ACU('not json')).toThrow('JSON解析错误');
@@ -454,6 +472,26 @@ describe('validateImportedTemplateObject_ACU', () => {
     expect(validateImportedTemplateObject_ACU(template)).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'duplicate_sheet_name', sheetKey: 'sheet_two' }),
       expect.objectContaining({ code: 'sheet_uid_mismatch', sheetKey: 'sheet_two' }),
+    ]));
+  });
+
+  it('拒绝与另一张表当前名称或历史名称规范化冲突的 tableAliases', () => {
+    const template = {
+      mate: { type: 'chatSheets' },
+      sheet_protagonist: validSheet({
+        uid: 'sheet_protagonist',
+        name: '主角信息表',
+        sourceData: { tableAliases: ['主角信息'] },
+      }),
+      sheet_other: validSheet({
+        uid: 'sheet_other',
+        name: '其他表',
+        sourceData: { tableAliases: [' Ｐｒｏｔａｇｏｎｉｓｔ＿Ｉｎｆｏ ', '主角信息'] },
+      }),
+    };
+
+    expect(validateImportedTemplateObject_ACU(template)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'table_alias_conflict', sheetKey: 'sheet_other', conflictsWith: 'sheet_protagonist' }),
     ]));
   });
 
@@ -693,7 +731,7 @@ describe('applyChatTemplateSnapshotWithReconciliation_ACU', () => {
     expect(commitCurrentFloorTemplateScopeOnly_ACU).not.toHaveBeenCalled();
   });
 
-  it('畸形 V2 被分类为 v2 时不重分配既有模板 key', async () => {
+  it('畸形 V2 被分类为 v2 且 replay 不可用时 fail-closed，不重分配也不协调', async () => {
     const legacyKeyTemplate = {
       mate: { type: 'chatSheets', version: 1 },
       sheet_random_history: { ...candidate.sheet_live, uid: 'sheet_random_history' },
@@ -705,11 +743,10 @@ describe('applyChatTemplateSnapshotWithReconciliation_ACU', () => {
 
     const result = await applyChatTemplateSnapshotWithReconciliation_ACU(legacyKeyTemplate);
 
-    expect(reconcileChatTemplate_ACU).toHaveBeenCalledWith(expect.objectContaining({
-      templateData: expect.objectContaining({ sheet_random_history: expect.objectContaining({ uid: 'sheet_random_history' }) }),
-    }));
-    expect(result).toMatchObject({ saved: false, blockers: ['V2 replay 不可用'] });
+    expect(result).toMatchObject({ saved: false, error: expect.stringContaining('V2 replay 基线不可用') });
+    expect(reconcileChatTemplate_ACU).not.toHaveBeenCalled();
     expect(commitCurrentFloorTemplateChanges_ACU).not.toHaveBeenCalled();
+    expect(commitCurrentFloorTemplateScopeOnly_ACU).not.toHaveBeenCalled();
   });
 
   it('已有持久化表格数据时保留模板既有 key，继续走严格协调', async () => {
@@ -753,6 +790,114 @@ describe('applyChatTemplateSnapshotWithReconciliation_ACU', () => {
       isolationKey: '', baseRevision: 'runtime-v1:test', sheetChanges: expect.any(Array), deletedSheetKeys: [], templateSource: candidate, storageMode: 'sqlite',
     }));
     expect(result).toMatchObject({ saved: true });
+  });
+
+  it('同一聊天已有模板协调进行中时拒绝第二个请求，避免产生并发结构计划', async () => {
+    let resolveBaseline!: (value: any) => void;
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({ templateObj: candidate, templateStr: JSON.stringify(candidate) } as any);
+    vi.mocked(loadTableStateFromFramesV2_ACU).mockImplementationOnce(() => new Promise(resolve => {
+      resolveBaseline = resolve;
+    }) as any);
+    vi.mocked(reconcileChatTemplate_ACU).mockResolvedValue({
+      candidateData: candidate, sheetChanges: [], deletedSheetKeys: [], blockers: [], audit: [],
+    } as any);
+    vi.mocked(commitCurrentFloorTemplateScopeOnly_ACU).mockResolvedValue({ saved: true, mode: 'scope_only' } as any);
+
+    const first = applyChatTemplateSnapshotWithReconciliation_ACU(candidate);
+    const second = await applyChatTemplateSnapshotWithReconciliation_ACU(candidate);
+
+    expect(second).toMatchObject({ saved: false, error: expect.stringContaining('正在进行中') });
+    expect(loadTableStateFromFramesV2_ACU).toHaveBeenCalledOnce();
+
+    resolveBaseline({ mate: { type: 'chatSheets', version: 1 }, sheet_live: candidate.sheet_live });
+    await expect(first).resolves.toMatchObject({ saved: true });
+  });
+
+  it('结构性切换将生成 baseline 的同一 revision 传给提交，不能在协调后另取新 revision', async () => {
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({ templateObj: candidate, templateStr: JSON.stringify(candidate) } as any);
+    vi.mocked(loadTableStateFromFramesV2_ACU).mockResolvedValue({ mate: { type: 'chatSheets', version: 1 } } as any);
+    vi.mocked(captureTableRuntimeRevisionForWriteSet_ACU).mockReturnValue('runtime-v1:baseline');
+    vi.mocked(reconcileChatTemplate_ACU).mockImplementation(async () => {
+      vi.mocked(captureTableRuntimeRevisionForWriteSet_ACU).mockReturnValue('runtime-v1:changed-after-plan');
+      return {
+        candidateData: candidate,
+        sheetChanges: [{ kind: 'introduction', sheetKey: 'sheet_live', sheetData: candidate.sheet_live }],
+        deletedSheetKeys: [], blockers: [], audit: [],
+      } as any;
+    });
+    vi.mocked(commitCurrentFloorTemplateChanges_ACU).mockResolvedValue({ saved: true, mode: 'v2_commit' } as any);
+
+    await applyChatTemplateSnapshotWithReconciliation_ACU(candidate);
+
+    expect(commitCurrentFloorTemplateChanges_ACU).toHaveBeenCalledWith(expect.objectContaining({
+      baseRevision: 'runtime-v1:baseline',
+    }));
+  });
+
+  it('读取 baseline 期间 revision 改变时丢弃旧快照并用一致快照协调', async () => {
+    const staleBaseline = { mate: { type: 'chatSheets', version: 1 } };
+    const currentBaseline = { mate: { type: 'chatSheets', version: 1 }, sheet_live: candidate.sheet_live };
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({ templateObj: candidate, templateStr: JSON.stringify(candidate) } as any);
+    vi.mocked(captureTableRuntimeRevisionForWriteSet_ACU)
+      .mockReturnValueOnce('runtime-v1:before-stale')
+      .mockReturnValueOnce('runtime-v1:after-stale')
+      .mockReturnValueOnce('runtime-v1:current')
+      .mockReturnValueOnce('runtime-v1:current');
+    vi.mocked(loadTableStateFromFramesV2_ACU)
+      .mockResolvedValueOnce(staleBaseline as any)
+      .mockResolvedValueOnce(currentBaseline as any);
+    vi.mocked(reconcileChatTemplate_ACU).mockResolvedValue({
+      candidateData: candidate,
+      sheetChanges: [{ kind: 'rebase', sheetKey: 'sheet_live', sheetData: candidate.sheet_live }],
+      deletedSheetKeys: [], blockers: [], audit: [],
+    } as any);
+    vi.mocked(commitCurrentFloorTemplateChanges_ACU).mockResolvedValue({ saved: true, mode: 'v2_commit' } as any);
+
+    await applyChatTemplateSnapshotWithReconciliation_ACU(candidate);
+
+    expect(loadTableStateFromFramesV2_ACU).toHaveBeenCalledTimes(2);
+    expect(reconcileChatTemplate_ACU).toHaveBeenCalledWith(expect.objectContaining({ baselineData: currentBaseline }));
+    expect(commitCurrentFloorTemplateChanges_ACU).toHaveBeenCalledWith(expect.objectContaining({ baseRevision: 'runtime-v1:current' }));
+  });
+
+  it('V2 replay 仍依赖临时 Sheet 补锚时阻断模板切换且零协调零提交', async () => {
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({ templateObj: candidate, templateStr: JSON.stringify(candidate) } as any);
+    vi.mocked(loadTableStateFromFramesV2Detailed_ACU).mockResolvedValueOnce({
+      baseKind: 'full_checkpoint',
+      data: candidate,
+      requiresCheckpointConvergence: true,
+      compatibilityRepairs: [{
+        kind: 'temporary_sheet_anchor',
+        sheetKey: 'sheet_live',
+        messageIndex: 384,
+        seq: 1,
+        operationIndex: 0,
+        templateFingerprint: 'test-fingerprint',
+        reason: 'missing_at_operation',
+      }],
+    } as any);
+
+    const result = await applyChatTemplateSnapshotWithReconciliation_ACU(candidate);
+
+    expect(result).toMatchObject({
+      saved: false,
+      error: expect.stringContaining('V2 恢复收敛'),
+    });
+    expect(result.error).toContain('sheet_live');
+    expect(reconcileChatTemplate_ACU).not.toHaveBeenCalled();
+    expect(commitCurrentFloorTemplateChanges_ACU).not.toHaveBeenCalled();
+    expect(commitCurrentFloorTemplateScopeOnly_ACU).not.toHaveBeenCalled();
+  });
+
+  it('已有 V2 聊天的 replay baseline 不可用时 fail-closed，不得使用运行时缓存生成结构计划', async () => {
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({ templateObj: candidate, templateStr: JSON.stringify(candidate) } as any);
+    vi.mocked(loadTableStateFromFramesV2_ACU).mockResolvedValue(null);
+
+    const result = await applyChatTemplateSnapshotWithReconciliation_ACU(candidate);
+
+    expect(result).toMatchObject({ saved: false, error: expect.stringContaining('V2 replay 基线不可用') });
+    expect(reconcileChatTemplate_ACU).not.toHaveBeenCalled();
+    expect(commitCurrentFloorTemplateChanges_ACU).not.toHaveBeenCalled();
   });
 
   it('协调器阻断时零提交', async () => {

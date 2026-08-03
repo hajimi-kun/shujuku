@@ -1,11 +1,11 @@
-import { allocateStableSheetKeys_ACU } from '../../shared/sheet-identity';
+import { allocateStableSheetKeys_ACU, canonicalizeDisplayName_ACU } from '../../shared/sheet-identity';
 import { mapSqlColumnIdentifiers_ACU, toSqlIdentifierBase_ACU } from '../../shared/sql-identifier-mapper';
 
 export type TemplateImportDiagnosticCode_ACU =
   | 'invalid_sheet_key' | 'duplicate_sheet_key' | 'missing_sheet_uid' | 'sheet_uid_mismatch'
   | 'empty_sheet_name' | 'duplicate_sheet_name' | 'missing_header_row' | 'invalid_header_row'
   | 'empty_header_cell' | 'missing_row_id' | 'misplaced_row_id' | 'duplicate_column_name'
-  | 'physical_column_name_collision';
+  | 'physical_column_name_collision' | 'table_alias_conflict';
 
 export interface TemplateImportDiagnostic_ACU {
   code: TemplateImportDiagnosticCode_ACU;
@@ -56,6 +56,7 @@ export function validateImportedTemplateObject_ACU(template: unknown): TemplateI
       diagnostics.push(issue_ACU('duplicate_sheet_name', sheetKey, names[diagnostic.index], `表名与「${String(names[diagnostic.conflictsWithIndex!])}」规范化后重复。`, undefined, diagnostic.conflictsWithIndex));
     }
   });
+  validateTableAliases_ACU(data, sheetKeys, diagnostics);
 
   const seenKeys = new Map<string, string>();
   sheetKeys.forEach(sheetKey => {
@@ -116,6 +117,40 @@ function validateHeaders_ACU(sheetKey: string, sheetName: string, content: unkno
       index, firstIndex,
     ));
   });
+}
+
+/**
+ * Table aliases are explicit identity claims. A claim colliding with another
+ * sheet's display name or alias would make later AI/SQL routing ambiguous, so
+ * reject it at the import boundary before any template is persisted.
+ */
+function validateTableAliases_ACU(data: Record<string, any>, sheetKeys: string[], diagnostics: TemplateImportDiagnostic_ACU[]): void {
+  const ownerByIdentity = new Map<string, { sheetKey: string; sheetName: string }>();
+  for (const sheetKey of sheetKeys) {
+    const sheet = data[sheetKey];
+    if (!sheet || typeof sheet !== 'object' || Array.isArray(sheet)) continue;
+    const sheetName = String(sheet.name ?? '');
+    const rawAliases = sheet.sourceData?.tableAliases;
+    const identities = [sheetName, ...(Array.isArray(rawAliases) ? rawAliases : [])];
+    const localClaims = new Set<string>();
+    for (const identity of identities) {
+      const canonical = canonicalizeDisplayName_ACU(identity);
+      if (!canonical || localClaims.has(canonical)) continue;
+      localClaims.add(canonical);
+      const owner = ownerByIdentity.get(canonical);
+      if (!owner) {
+        ownerByIdentity.set(canonical, { sheetKey, sheetName });
+        continue;
+      }
+      if (owner.sheetKey !== sheetKey) {
+        diagnostics.push(issue_ACU(
+          'table_alias_conflict', sheetKey, sheetName,
+          `表「${sheetName || sheetKey}」的名称或历史别名「${String(identity).trim()}」与表「${owner.sheetName || owner.sheetKey}」冲突。`,
+          undefined, owner.sheetKey,
+        ));
+      }
+    }
+  }
 }
 
 function issue_ACU(code: TemplateImportDiagnosticCode_ACU, sheetKey: string, sheetName: unknown, message: string, columnIndex?: number, conflictsWith?: string | number): TemplateImportDiagnostic_ACU {

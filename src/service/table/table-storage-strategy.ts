@@ -47,6 +47,35 @@ let initializationEpoch_ACU = 0;
 let activeReload_ACU: Promise<StorageRuntimeLoadResult_ACU> | null = null;
 let runtimeLifecycleEpoch_ACU = 0;
 
+function canonicalRuntimeData_ACU(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalRuntimeData_ACU).join(',')}]`;
+  if (!value || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map(key => `${JSON.stringify(key)}:${canonicalRuntimeData_ACU(record[key])}`)
+    .join(',')}}`;
+}
+
+function captureRuntimeIdentity_ACU(provider: ITableStorageProvider | null): { mode: StorageMode; data: string } | null {
+  if (!provider) return null;
+  try {
+    return {
+      mode: provider.mode,
+      data: canonicalRuntimeData_ACU(provider.getCurrentData()),
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+function runtimeIdentityChanged_ACU(
+  before: { mode: StorageMode; data: string } | null,
+  after: { mode: StorageMode; data: string } | null,
+): boolean {
+  return !before || !after || before.mode !== after.mode || before.data !== after.data;
+}
+
 function setRuntimeHealth_ACU(next: Omit<StorageRuntimeHealth_ACU, 'loadToken'>): void {
   runtimeHealth = { ...next, loadToken: runtimeHealth.loadToken + 1 };
 }
@@ -91,11 +120,61 @@ export function getActiveStorageProvider(): ITableStorageProvider | null {
   return currentProvider;
 }
 
-export async function ensureStorageProviderReady_ACU(): Promise<ITableStorageProvider> {
+function createStorageWaitAbortError_ACU(): Error {
+  const error = new Error('Storage runtime readiness wait aborted.');
+  error.name = 'AbortError';
+  return error;
+}
+
+async function awaitStorageFlight_ACU<T>(
+  promise: Promise<T>,
+  options: { signal?: AbortSignal; timeoutMs?: number },
+): Promise<T> {
+  const { signal, timeoutMs } = options;
+  if (signal?.aborted) throw createStorageWaitAbortError_ACU();
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const cleanup = () => {
+      if (timeout !== null) clearTimeout(timeout);
+      signal?.removeEventListener('abort', onAbort);
+    };
+    const finish = (task: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      task();
+    };
+    const onAbort = () => finish(() => reject(createStorageWaitAbortError_ACU()));
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (Number.isFinite(timeoutMs) && Number(timeoutMs) >= 0) {
+      timeout = setTimeout(() => finish(() => reject(new Error('Storage runtime readiness wait timed out.'))), Number(timeoutMs));
+    }
+    promise.then(
+      value => finish(() => resolve(value)),
+      error => finish(() => reject(error)),
+    );
+  });
+}
+
+export async function ensureStorageProviderReady_ACU(
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<ITableStorageProvider> {
   const expectedMode = getCurrentStorageMode();
-  const activeProvider = getActiveStorageProvider();
-  if (activeProvider?.mode === expectedMode && activeProvider.isReady() && runtimeHealth.status === 'ready') return activeProvider;
-  const loadResult = await initStorageProvider();
+  let activeProvider = getActiveStorageProvider();
+
+  // A reload owns the authoritative current-chat hydrate flight. Joining it is
+  // materially different from polling or starting a competing initialization:
+  // only the reload may publish the post-transition runtime.
+  let loadResult: StorageRuntimeLoadResult_ACU;
+  if (activeReload_ACU) {
+    loadResult = await awaitStorageFlight_ACU(activeReload_ACU, options);
+    activeProvider = getActiveStorageProvider();
+    if (activeProvider?.mode === expectedMode && activeProvider.isReady() && runtimeHealth.status === 'ready') return activeProvider;
+  } else {
+    if (activeProvider?.mode === expectedMode && activeProvider.isReady() && runtimeHealth.status === 'ready') return activeProvider;
+    loadResult = await awaitStorageFlight_ACU(initStorageProvider(), options);
+  }
   const initializedProvider = getActiveStorageProvider();
   if (!initializedProvider || initializedProvider.mode !== expectedMode || !initializedProvider.isReady()) {
     const reason = loadResult.failureCode || runtimeHealth.failureCode || 'unknown';
@@ -271,10 +350,17 @@ export async function reloadStorageProvider(): Promise<StorageRuntimeLoadResult_
     if (lifecycleEpoch !== runtimeLifecycleEpoch_ACU) {
       return { ok: false, degraded: false, failureCode: 'stale_load_discarded' as const };
     }
-    invalidateTableRuntimeRevision_ACU({ reason: 'reloadStorageProvider' });
+    const beforeIdentity = captureRuntimeIdentity_ACU(currentProvider);
     const mode = getCurrentStorageMode();
     logDebug_ACU(`[StorageStrategy] 重新加载数据: ${mode}`);
-    return initStorageProvider({ forceNewFlight: true });
+    const result = await initStorageProvider({ forceNewFlight: true });
+    const afterIdentity = captureRuntimeIdentity_ACU(currentProvider);
+    if (runtimeIdentityChanged_ACU(beforeIdentity, afterIdentity)) {
+      invalidateTableRuntimeRevision_ACU({ reason: 'reloadStorageProvider:data_changed' });
+    } else {
+      logDebug_ACU('[StorageStrategy] 重载前后运行时数据一致，不推进 RuntimeRevision。');
+    }
+    return result;
   });
   activeReload_ACU = promise;
   try {

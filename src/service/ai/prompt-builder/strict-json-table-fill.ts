@@ -1,5 +1,6 @@
 import { getSortedSheetKeys_ACU } from '../../template/chat-scope';
 import { getSheetColumnProjection_ACU } from '../../../shared/ddl-utils';
+import { rebindSheetKeysThroughTableAliases_ACU, SheetTableAliasResolutionError_ACU } from '../../../shared/sql-read-resolver';
 
 export type StrictJsonTableFillFormat_ACU = 'table_edit_ops_v1' | 'table_edit_sql_v1';
 
@@ -62,11 +63,23 @@ function buildSheetLookup(tableData: any, targetSheetKeys?: string[] | null) {
 function resolveSheet(sheet: any, tableData: any, targetSheetKeys?: string[] | null) {
   const name = String(sheet ?? '').trim();
   if (!name) throw new Error('sheet 不能为空。');
-  const { entries } = buildSheetLookup(tableData, targetSheetKeys);
-  const matches = entries.filter((entry) => entry.sheetKey === name || String(entry.table?.name || '').trim() === name || String(entry.table?.uid || '').trim() === name);
-  if (matches.length === 0) throw new Error(`sheet 未匹配到可编辑表格：${name}`);
-  if (matches.length > 1) throw new Error(`sheet 匹配到多个表格：${name}`);
-  return matches[0];
+  const { sortedKeys, entries } = buildSheetLookup(tableData);
+  let sheetKey: string;
+  try {
+    [sheetKey] = rebindSheetKeysThroughTableAliases_ACU([name], null, tableData);
+  } catch (error) {
+    if (error instanceof SheetTableAliasResolutionError_ACU) {
+      throw new Error(`sheet 名称无效：${error.message}`);
+    }
+    throw error;
+  }
+  if (!sheetKey) throw new Error(`sheet 未匹配到可编辑表格：${name}`);
+  const entry = entries.find(candidate => candidate.sheetKey === sheetKey);
+  if (!entry) throw new Error(`sheet 未匹配到可编辑表格：${name}`);
+  if (Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0 && !targetSheetKeys.includes(sheetKey)) {
+    throw new Error(`sheet 越权：${name} 解析为非目标表 ${sheetKey}。`);
+  }
+  return { ...entry, index: sortedKeys.indexOf(sheetKey) };
 }
 
 function getHeaderMap(table: any) {

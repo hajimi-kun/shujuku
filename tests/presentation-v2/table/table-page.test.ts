@@ -19,6 +19,8 @@ function createSettings() {
     autoUpdateTokenThreshold: 500,
     tableMaxRetries: 3,
     tableEditLastPairOnly: true,
+    strictJsonTableFillEnabled: false,
+    discardUnauthorizedTableEditsEnabled: true,
     tableContextExtractTags: '',
     tableContextExtractRules: [{ start: '<正文>', end: '</正文>' }],
     tableContextExcludeTags: '',
@@ -264,6 +266,26 @@ describe('TablePage', () => {
     const mobileNavItems = Array.from(page!.querySelectorAll('.acu-mobile-panel-nav__item'))
       .map(item => (item.textContent || '').trim());
     expect(mobileNavItems).toEqual(['附加世界书条目', '提示词', '标签筛选', '写入目标世界书']);
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('越权 SQL 降级开关默认开启，切换后立即保存设置', async () => {
+    const { mount, settings, saveSettings } = await mountTablePage();
+    const toggle = document.querySelector<HTMLButtonElement>(
+      '[data-acu-setting-key="discardUnauthorizedTableEditsEnabled"]',
+    );
+
+    expect(toggle).not.toBeNull();
+    expect(toggle!.getAttribute('role')).toBe('switch');
+    expect(toggle!.getAttribute('aria-checked')).toBe('true');
+
+    toggle!.click();
+    await nextTick();
+
+    expect(settings.discardUnauthorizedTableEditsEnabled).toBe(false);
+    expect(toggle!.getAttribute('aria-checked')).toBe('false');
+    expect(saveSettings).toHaveBeenCalledTimes(1);
 
     mount.__resetAcuV2MountForTests();
   });

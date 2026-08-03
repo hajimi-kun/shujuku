@@ -39,6 +39,7 @@ vi.mock('../../src/service/table/storage-mode', () => ({
 const mockExecuteQuery = vi.fn(() => ({ columns: ['id'], values: [[1]], rowCount: 1 }));
 const mockExecuteMutation = vi.fn(() => ({ errors: [], changes: 1 }));
 const mockExecuteSqlMutation = vi.fn(async (_options: any) => ({ errors: [], changes: 1 }));
+const mockResolveReadSql = vi.hoisted(() => vi.fn((sql: string) => ({ sql, tableRebindCount: 0, columnRebindCount: 0 })));
 vi.mock('../../src/service/table/table-storage-strategy', () => ({
   ensureStorageProviderReady_ACU: vi.fn(async () => ({
     executeQuery: mockExecuteQuery,
@@ -57,7 +58,7 @@ vi.mock('../../src/presentation/bootstrap/api-groups/sql-api', () => ({
 }));
 
 vi.mock('../../src/service/runtime/read-query-resolver', () => ({
-  resolveCurrentRuntimeReadSql_ACU: vi.fn((sql: string) => ({ sql, tableRebindCount: 0, columnRebindCount: 0 })),
+  resolveCurrentRuntimeReadSql_ACU: mockResolveReadSql,
 }));
 
 import {
@@ -169,6 +170,7 @@ describe('executeSql', () => {
   it('SELECT 查询调用 executeQuery', async () => {
     mockExecuteQuery.mockReturnValue({ columns: ['id'], values: [[1]], rowCount: 1 });
     await executeSql('SELECT * FROM t;', $resultArea, $execStatus);
+    expect(mockResolveReadSql).toHaveBeenCalledWith('SELECT * FROM t;');
     expect(mockExecuteQuery).toHaveBeenCalledWith('SELECT * FROM t;');
     expect($execStatus.html).toHaveBeenCalledWith(expect.stringContaining('1 行'));
   });

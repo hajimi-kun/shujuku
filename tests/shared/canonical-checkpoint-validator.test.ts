@@ -84,6 +84,33 @@ describe('canonical-checkpoint-validator', () => {
     expect(validateCanonicalCheckpoint_ACU(fullCheckpoint({ sheet_0: sheet() }))).toEqual({ valid: true, issues: [] });
   });
 
+  it('接受结构完整的手动重填模板临时根 provenance，并拒绝损坏结构', () => {
+    const fallbackProvenance = {
+      version: 1,
+      kind: 'manual_refill_template_root',
+      runId: 'manual-refill:test',
+      isolationKey: 'tag-a',
+      targetSheetKeys: ['sheet_0'],
+      rangeStartMessageIndex: 2,
+      rangeEndMessageIndex: 5,
+      templateFingerprint: 'fnv1a:abcd1234',
+      createdAt: 123,
+    };
+    const valid = validateCanonicalCheckpoint_ACU({
+      ...fullCheckpoint({ sheet_0: sheet() }),
+      fallbackProvenance,
+    });
+    const invalid = validateCanonicalCheckpoint_ACU({
+      ...fullCheckpoint({ sheet_0: sheet() }),
+      fallbackProvenance: { ...fallbackProvenance, rangeEndMessageIndex: 1 },
+    });
+
+    expect(valid).toEqual({ valid: true, issues: [] });
+    expect(invalid.issues).toEqual([
+      expect.objectContaining({ type: 'invalid_fallback_provenance' }),
+    ]);
+  });
+
   it.each([
     ['缺少 fingerprint', { legacyDataFingerprint: '' }, 'invalid_legacy_fingerprint'],
     ['未知版本', { version: 2 }, 'unsupported_provenance_version'],

@@ -114,6 +114,24 @@ describe('template-preset-api 结果契约', () => {
     expect(mocks.refreshUi).not.toHaveBeenCalled();
   });
 
+  it('importTemplateFromData 透传 DDL/表头预检阶段与列详情', async () => {
+    const error = '完整 replay candidate DDL/表头预检失败: sheet_battle: 第 5 列不匹配：DDL 列名为「hp_rp」，表头为「HP/RP」';
+    mocks.applyChatSnapshot.mockResolvedValueOnce({ saved: false, error });
+
+    const result = await createApi().importTemplateFromData({}, { scope: 'chat', presetName: 'battle' });
+
+    expect(result).toEqual({
+      success: false,
+      scope: 'chat',
+      message: `模板导入失败：${error}`,
+      error,
+    });
+    expect(result.message).toContain('DDL/表头预检失败');
+    expect(result.message).toContain('hp_rp');
+    expect(result.message).toContain('HP/RP');
+    expect(mocks.refreshUi).not.toHaveBeenCalled();
+  });
+
   it('聊天导入已保存但 runtime 不可用时透传 warning 三态', async () => {
     mocks.applyChatSnapshot.mockResolvedValueOnce({
       saved: true,

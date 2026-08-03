@@ -82,6 +82,23 @@
             <div class="acu-v2-table-page__toggle-row">
               <div class="acu-v2-table-page__toggle-head">
                 <span class="acu-v2-table-page__toggle-label">
+                  丢弃纯越权 SQL 语句
+                </span>
+                <AcuToggle
+                  :model-value="settings.discardUnauthorizedTableEditsEnabled.value"
+                  aria-label="丢弃纯越权 SQL 语句"
+                  data-acu-setting-key="discardUnauthorizedTableEditsEnabled"
+                  @update:model-value="settings.setDiscardUnauthorizedTableEditsEnabled($event)"
+                />
+              </div>
+              <p class="acu-v2-table-page__toggle-desc">
+                默认开启。仅丢弃可证明只影响非目标表的独立 SQL；跨目标表或无法归属的语句仍会拒绝并重试。
+              </p>
+            </div>
+
+            <div class="acu-v2-table-page__toggle-row">
+              <div class="acu-v2-table-page__toggle-head">
+                <span class="acu-v2-table-page__toggle-label">
                   仅识别最后一对 &lt;tableEdit&gt; 标签
                 </span>
                 <AcuToggle

@@ -116,6 +116,23 @@ describe('runTableUpdateCommit_ACU migration gate', () => {
     expect(mocks.setCurrentData).not.toHaveBeenCalled();
   });
 
+  it('RuntimeRevision 错误不再分类为 conflict，未知提交错误统一归为 infrastructure', async () => {
+    mocks.migration.mockResolvedValue({ success: true, migrated: false });
+    mocks.transaction.mockRejectedValueOnce(Object.assign(new Error('[RuntimeRevision] 表 sheet_0 已变化'), {
+      name: 'TableRuntimeRevisionConflictError',
+    }));
+
+    const result = await runTableUpdateCommit_ACU(options('test_runtime_conflict'), vi.fn());
+
+    expect(result).toEqual({
+      success: false,
+      error: '[RuntimeRevision] 表 sheet_0 已变化',
+      errorCategory: 'infrastructure',
+    });
+    expect(mocks.persist).not.toHaveBeenCalled();
+    expect(mocks.setCurrentData).not.toHaveBeenCalled();
+  });
+
   it('persist 前只读拒绝空 row_id，且不会调用持久化或修复数据', async () => {
     const invalidData: any = {
       mate: { type: 'acu', version: 1 },
@@ -161,6 +178,95 @@ describe('runTableUpdateCommit_ACU migration gate', () => {
     }));
 
     expect(result).toMatchObject({ success: false, error: expect.stringContaining('sheetKey=sheet_0, rowIndex=2 的 row_id 重复：stable') });
+    expect(mocks.persist).not.toHaveBeenCalled();
+  });
+
+  it('将 workingDataMode=none 透传给事务层，并允许 apply 使用预计算结果', async () => {
+    const precomputedData: any = {
+      mate: { type: 'acu', version: 1 },
+      sheet_target: { uid: 'sheet_target', name: '目标表', content: [['row_id'], ['r1']] },
+    };
+    mocks.migration.mockResolvedValue({ success: true, migrated: false });
+    mocks.transaction.mockImplementation(async (transactionOptions: any, task: any) => {
+      expect(transactionOptions.workingDataMode).toBe('none');
+      return task({ runCommit: async (commitTask: any) => commitTask() }, null);
+    });
+    mocks.persist.mockResolvedValue({ saved: true, messageIndex: 1 });
+
+    const result = await runTableUpdateCommit_ACU({
+      ...options('test_precomputed_commit'),
+      workingDataMode: 'none',
+      targetSheetKeys: ['sheet_target'],
+    }, async ({ workingData }) => ({ success: true, tableData: precomputedData, value: workingData }));
+
+    expect(result).toMatchObject({ success: true, value: null, tableData: precomputedData });
+  });
+
+  it('增量提交只校验目标表，不因未写入表的既有坏行重复扫描并阻断', async () => {
+    const data: any = {
+      mate: { type: 'acu', version: 1 },
+      sheet_target: {
+        uid: 'sheet_target',
+        name: '目标表',
+        content: [['row_id', '名称'], ['target-1', '正常']],
+      },
+      sheet_untouched: {
+        uid: 'sheet_untouched',
+        name: '未修改表',
+        content: [['row_id', '名称'], ['', '历史坏行']],
+      },
+    };
+    mocks.migration.mockResolvedValue({ success: true, migrated: false });
+    mocks.transaction.mockImplementation(async (_options: any, task: any) => task({
+      runCommit: async (commitTask: any) => commitTask(),
+    }, null));
+    mocks.persist.mockResolvedValue({ saved: true, messageIndex: 1 });
+
+    const result = await runTableUpdateCommit_ACU({
+      ...options('test_scoped_row_identity_guard'),
+      writeSet: [{ kind: 'sheet', sheetKey: 'sheet_target' }],
+      targetSheetKeys: ['sheet_target'],
+    }, async () => ({
+      success: true,
+      tableData: data,
+      value: 'saved',
+    }));
+
+    expect(result).toMatchObject({ success: true, value: 'saved', saved: true });
+    expect(mocks.persist).toHaveBeenCalledWith(expect.objectContaining({
+      targetSheetKeys: ['sheet_target'],
+      tableData: data,
+    }));
+  });
+
+  it('全量提交仍校验全部表，不能借范围收窄绕过坏行', async () => {
+    const data: any = {
+      mate: { type: 'acu', version: 1 },
+      sheet_target: {
+        uid: 'sheet_target',
+        name: '目标表',
+        content: [['row_id', '名称'], ['target-1', '正常']],
+      },
+      sheet_broken: {
+        uid: 'sheet_broken',
+        name: '损坏表',
+        content: [['row_id', '名称'], ['', '坏行']],
+      },
+    };
+    mocks.migration.mockResolvedValue({ success: true, migrated: false });
+    mocks.transaction.mockImplementation(async (_options: any, task: any) => task({
+      runCommit: async (commitTask: any) => commitTask(),
+    }, null));
+
+    const result = await runTableUpdateCommit_ACU({
+      ...options('test_full_row_identity_guard'),
+      targetSheetKeys: null,
+    }, async () => ({ success: true, tableData: data }));
+
+    expect(result).toMatchObject({
+      success: false,
+      error: expect.stringContaining('sheetKey=sheet_broken, rowIndex=1 的 row_id 为空'),
+    });
     expect(mocks.persist).not.toHaveBeenCalled();
   });
 });

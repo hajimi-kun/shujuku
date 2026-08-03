@@ -368,6 +368,7 @@ describe('buildDefaultSettings_ACU', () => {
     expect(defaults.autoUpdateThreshold).toBe(3);
     expect(defaults.autoUpdateEnabled).toBe(true);
     expect(defaults.maxConcurrentGroups).toBe(1);
+    expect(defaults.discardUnauthorizedTableEditsEnabled).toBe(true);
     expect(defaults.storageMode).toBe('native');
     expect(defaults.promptTemplateSettings).toBeDefined();
     expect(defaults.promptTemplateSettings.enabled).toBe(true);
@@ -550,6 +551,7 @@ describe('loadSettings_ACU', () => {
     const calledWith = mockSetSettings.mock.calls[0][0];
     expect(calledWith.autoUpdateEnabled).toBe(true);
     expect(calledWith.maxConcurrentGroups).toBe(1);
+    expect(calledWith.discardUnauthorizedTableEditsEnabled).toBe(true);
   });
 
   it('有保存设置时 deepMerge 合并', () => {
@@ -563,6 +565,7 @@ describe('loadSettings_ACU', () => {
     const calledWith = mockSetSettings.mock.calls[0][0];
     expect(calledWith.autoUpdateEnabled).toBe(false);
     expect(calledWith.customField).toBe('自定义值');
+    expect(calledWith.discardUnauthorizedTableEditsEnabled).toBe(true);
   });
 
   it('补齐缺失的 V2 rollout 开关与 allowlist，且持久化全局配置', () => {

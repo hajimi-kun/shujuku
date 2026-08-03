@@ -59,4 +59,30 @@ describe('useTemplateRecoveryGuard', () => {
     dialog.submitActive();
     await expect(pending).resolves.toEqual({ success: false, dataWasReset: false });
   });
+
+  it('回放仍依赖临时补锚时显示恢复收敛提示并阻止模板切换', async () => {
+    const {
+      ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU,
+      useDialogStore,
+      validateCurrentChatTableRecovery_ACU,
+    } = await importGuard();
+    validateCurrentChatTableRecovery_ACU.mockResolvedValueOnce({
+      success: false,
+      diagnosticCode: 'replay_requires_checkpoint_convergence',
+      affectedSheetKeys: ['sheet_global'],
+      error: '当前 V2 历史仍依赖临时 Sheet 补锚：sheet_global。请先在数据管理中完成恢复收敛。',
+    });
+
+    const pending = ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU({ sheet_global: {} }, 'switch-template');
+    await Promise.resolve();
+    const dialog = useDialogStore();
+
+    expect(dialog.active?.title).toBe('当前 V2 历史需要恢复收敛');
+    expect(dialog.active?.message).toContain('数据管理中诊断并完成恢复收敛');
+    expect(dialog.active?.message).toContain('sheet_global');
+    expect(dialog.active?.dangerMessage).toContain('不会保存或切换模板');
+
+    dialog.submitActive();
+    await expect(pending).resolves.toEqual({ success: false, dataWasReset: false });
+  });
 });

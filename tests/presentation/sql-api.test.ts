@@ -329,6 +329,34 @@ describe('createSqlApi', () => {
     expect(mocks.executeQuery).toHaveBeenCalledWith('SELECT content FROM jiyaobiao WHERE content = ?', ['记录']);
   });
 
+  it.each(['executeSqlQuery', 'querySql'] as const)('%s 保留派生输出显示列，而不将其改写为实体列', method => {
+    mockCurrentJsonTableData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: {
+        uid: 'sheet_0',
+        name: 'People',
+        sourceData: { ddl: 'CREATE TABLE people (row_id INTEGER PRIMARY KEY, name TEXT -- 姓名);' },
+        content: [['row_id', '姓名'], ['1', 'Ada']],
+      },
+    };
+    mocks.translateSql.mockImplementationOnce((sql: string) => sql.replaceAll('姓名', 'name'));
+    const sql = 'SELECT 姓名 FROM (SELECT name AS 姓名 FROM people) AS people_view ORDER BY 姓名';
+
+    const result = api[method](sql);
+
+    expect(result).not.toBeNull();
+    expect(mocks.executeQuery).toHaveBeenCalledWith(sql, undefined);
+  });
+
+  it('executeSql 的读取分支保留派生输出显示列', async () => {
+    mocks.translateSql.mockImplementationOnce((sql: string) => sql.replaceAll('姓名', 'name'));
+    const sql = 'SELECT 姓名 FROM (SELECT name AS 姓名 FROM people) AS people_view ORDER BY 姓名';
+
+    await api.executeSql(sql);
+
+    expect(mocks.executeQuery).toHaveBeenCalledWith(sql, undefined);
+  });
+
   it('querySql 拒绝写语句', () => {
     const result = api.querySql('UPDATE t SET name = 1');
 

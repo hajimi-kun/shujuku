@@ -134,10 +134,17 @@ vi.mock('../../../src/service/table/storage-mode', () => ({
 }));
 vi.mock('../../../src/service/table/storage-frame-v2-replay', () => ({
   validateCurrentChatTableRecoveryWithGuide_ACU: serviceMock.validateCurrentChatTableRecoveryWithGuide_ACU || vi.fn(async () => ({ success: true })),
-  loadTableStateFromFramesV2_ACU: vi.fn(async () => {
+  loadTableStateFromFramesV2Detailed_ACU: vi.fn(async () => {
     // Data-save now uses V2 replay as the write base before persist.
-    if (serviceMock.replayData) return JSON.parse(JSON.stringify(serviceMock.replayData));
-    return JSON.parse(JSON.stringify(runtimeMock.getCurrentData() || {}));
+    const data = serviceMock.replayData || runtimeMock.getCurrentData() || {};
+    return {
+      baseKind: 'full_checkpoint',
+      data: JSON.parse(JSON.stringify(data)),
+    };
+  }),
+  loadTableStateFromFramesV2_ACU: vi.fn(async () => {
+    const data = serviceMock.replayData || runtimeMock.getCurrentData() || {};
+    return JSON.parse(JSON.stringify(data));
   }),
 }));
 vi.mock('../../../src/service/table/storage-frame-v2-persist', () => ({
@@ -633,6 +640,265 @@ describe('useVisualizerSave', () => {
     });
     expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenNthCalledWith(1, expect.objectContaining({ destructiveChangeConfirmed: false }));
     expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenNthCalledWith(2, expect.objectContaining({ destructiveChangeConfirmed: true }));
+    expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).toHaveBeenCalledTimes(1);
+  });
+
+  it('schema migration 需要列身份选择时绑定当前快照二次预检并仅提交一次', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    store.loadSnapshot({ mate: { type: 'chatSheets', version: 1 }, sheet_test_vz2: sheet() }, ['sheet_test_vz2']);
+    store.currentSheet.content = [['row_id', '姓名', '状态'], ['1', 'A', '平静']];
+    store.currentSheet.sourceData.ddl = `CREATE TABLE sheet_test_vz2 (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  renamed_col TEXT, -- 姓名
+  col_2 TEXT -- 状态
+);`;
+    const selectedIntent = {
+      physicalColumnMappings: [{ fromPhysicalName: 'col_1', toPhysicalName: 'renamed_col' }],
+      fills: {}, conversions: [],
+      migrationPolicy: { destructiveChangeConfirmed: false, lossyConversionConfirmed: false },
+    };
+    const migration = { kind: 'sheet_schema_migrate', contractVersion: 2, sheetKey: 'sheet_test_vz2' };
+    serviceMock.preflightSchemaMigrations_ACU
+      .mockResolvedValueOnce({
+        changedSheetKeys: ['sheet_test_vz2'], blockers: ['sheet_test_vz2: 需要确认列身份。'], issues: [], operations: [],
+        decisions: [{
+          sheetKey: 'sheet_test_vz2', status: 'needs_choice', code: 'AMBIGUOUS_COLUMN_IDENTITY', message: '需要确认列身份。',
+          choices: [{ id: 'map:col_1->renamed_col', label: '姓名（col_1）→ 姓名（renamed_col）', intent: selectedIntent }],
+        }],
+      })
+      .mockResolvedValueOnce({ changedSheetKeys: ['sheet_test_vz2'], blockers: [], issues: [], operations: [migration], decisions: [] });
+    const requestSchemaMigrationChoice = vi.fn(async () => 'map:col_1->renamed_col');
+
+    const saved = await useVisualizerSave({ requestSchemaMigrationChoice }).saveTemplateToCurrentChat();
+
+    expect(saved).toBe(true);
+    expect(requestSchemaMigrationChoice).toHaveBeenCalledWith(expect.objectContaining({
+      sheetKey: 'sheet_test_vz2',
+      choices: [{ id: 'map:col_1->renamed_col', label: expect.stringContaining('renamed_col') }],
+    }));
+    expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      intents: { sheet_test_vz2: selectedIntent },
+    }));
+    expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).toHaveBeenCalledTimes(1);
+  });
+
+  it('取消 schema migration 列身份选择时没有提交或后置副作用', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    store.loadSnapshot({ mate: { type: 'chatSheets', version: 1 }, sheet_test_vz2: sheet() }, ['sheet_test_vz2']);
+    store.currentSheet.content = [['row_id', '姓名', '状态'], ['1', 'A', '平静']];
+    store.currentSheet.sourceData.ddl = 'CREATE TABLE sheet_test_vz2 (row_id INTEGER PRIMARY KEY, renamed_col TEXT, col_2 TEXT);';
+    store.setDirty(true);
+    serviceMock.preflightSchemaMigrations_ACU.mockResolvedValueOnce({
+      changedSheetKeys: ['sheet_test_vz2'], blockers: ['sheet_test_vz2: 需要确认列身份。'], issues: [], operations: [],
+      decisions: [{
+        sheetKey: 'sheet_test_vz2', status: 'needs_choice', code: 'AMBIGUOUS_COLUMN_IDENTITY', message: '需要确认列身份。',
+        choices: [{
+          id: 'map:col_1->renamed_col', label: '姓名（col_1）→ 姓名（renamed_col）',
+          intent: { physicalColumnMappings: [], fills: {}, conversions: [], migrationPolicy: { destructiveChangeConfirmed: false, lossyConversionConfirmed: false } },
+        }],
+      }],
+    });
+
+    const saved = await useVisualizerSave({ requestSchemaMigrationChoice: vi.fn(async () => null) }).saveTemplateToCurrentChat();
+
+    expect(saved).toBe(false);
+    expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenCalledTimes(1);
+    expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).not.toHaveBeenCalled();
+    expect(serviceMock.applyTemplateScopeForCurrentChat_ACU).not.toHaveBeenCalled();
+    expect(runtimeMock._set_currentJsonTableData_ACU).not.toHaveBeenCalled();
+    expect(store.dirty).toBe(true);
+  });
+
+  it('schema migration 选择期间草稿变化时拒绝陈旧 intent', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    store.loadSnapshot({ mate: { type: 'chatSheets', version: 1 }, sheet_test_vz2: sheet() }, ['sheet_test_vz2']);
+    store.currentSheet.content = [['row_id', '姓名', '状态'], ['1', 'A', '平静']];
+    store.currentSheet.sourceData.ddl = 'CREATE TABLE sheet_test_vz2 (row_id INTEGER PRIMARY KEY, renamed_col TEXT, col_2 TEXT);';
+    store.setDirty(true);
+    const selectedIntent = {
+      physicalColumnMappings: [{ fromPhysicalName: 'col_1', toPhysicalName: 'renamed_col' }],
+      fills: {}, conversions: [],
+      migrationPolicy: { destructiveChangeConfirmed: false, lossyConversionConfirmed: false },
+    };
+    serviceMock.preflightSchemaMigrations_ACU.mockResolvedValueOnce({
+      changedSheetKeys: ['sheet_test_vz2'], blockers: ['sheet_test_vz2: 需要确认列身份。'], issues: [], operations: [],
+      decisions: [{
+        sheetKey: 'sheet_test_vz2', status: 'needs_choice', code: 'AMBIGUOUS_COLUMN_IDENTITY', message: '需要确认列身份。',
+        choices: [{ id: 'map:col_1->renamed_col', label: '姓名（col_1）→ 姓名（renamed_col）', intent: selectedIntent }],
+      }],
+    });
+    const requestSchemaMigrationChoice = vi.fn(async () => {
+      store.currentSheet.name = '选择期间变更';
+      return 'map:col_1->renamed_col';
+    });
+
+    const saved = await useVisualizerSave({ requestSchemaMigrationChoice }).saveTemplateToCurrentChat();
+
+    expect(saved).toBe(false);
+    expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenCalledTimes(1);
+    expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).not.toHaveBeenCalled();
+    expect(toastMock.warning).toHaveBeenCalledWith('模板结构在 schema migration 选择期间已变化；请重新保存。', { muteable: false });
+  });
+
+  it('schema migration 选择器返回未知 ID 时 fail-closed 且不提交', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    store.loadSnapshot({ mate: { type: 'chatSheets', version: 1 }, sheet_test_vz2: sheet() }, ['sheet_test_vz2']);
+    store.currentSheet.sourceData.ddl = 'CREATE TABLE sheet_test_vz2 (row_id INTEGER PRIMARY KEY, renamed_col TEXT, col_2 TEXT);';
+    serviceMock.preflightSchemaMigrations_ACU.mockResolvedValueOnce({
+      changedSheetKeys: ['sheet_test_vz2'], blockers: ['sheet_test_vz2: 需要确认列身份。'], issues: [], operations: [],
+      decisions: [{
+        sheetKey: 'sheet_test_vz2', status: 'needs_choice', code: 'AMBIGUOUS_COLUMN_IDENTITY', message: '需要确认列身份。',
+        choices: [{
+          id: 'map:col_1->renamed_col', label: '姓名（col_1）→ 姓名（renamed_col）',
+          intent: { physicalColumnMappings: [], fills: {}, conversions: [], migrationPolicy: { destructiveChangeConfirmed: false, lossyConversionConfirmed: false } },
+        }],
+      }],
+    });
+
+    const saved = await useVisualizerSave({ requestSchemaMigrationChoice: vi.fn(async () => 'unknown-choice') }).saveTemplateToCurrentChat();
+
+    expect(saved).toBe(false);
+    expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenCalledTimes(1);
+    expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).not.toHaveBeenCalled();
+    expect(serviceMock.applyTemplateScopeForCurrentChat_ACU).not.toHaveBeenCalled();
+    expect(runtimeMock._set_currentJsonTableData_ACU).not.toHaveBeenCalled();
+    expect(toastMock.error).toHaveBeenCalledWith('schema migration 返回了无效选择：sheet_test_vz2。', { muteable: false });
+  });
+
+  it('缺少 schema migration 选择 interaction 时保留 blocker 并 fail-closed', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    store.loadSnapshot({ mate: { type: 'chatSheets', version: 1 }, sheet_test_vz2: sheet() }, ['sheet_test_vz2']);
+    store.currentSheet.sourceData.ddl = 'CREATE TABLE sheet_test_vz2 (row_id INTEGER PRIMARY KEY, renamed_col TEXT, col_2 TEXT);';
+    serviceMock.preflightSchemaMigrations_ACU.mockResolvedValueOnce({
+      changedSheetKeys: ['sheet_test_vz2'], blockers: ['sheet_test_vz2: 需要确认列身份。'], issues: [], operations: [],
+      decisions: [{
+        sheetKey: 'sheet_test_vz2', status: 'needs_choice', code: 'AMBIGUOUS_COLUMN_IDENTITY', message: '需要确认列身份。',
+        choices: [{
+          id: 'map:col_1->renamed_col', label: '姓名（col_1）→ 姓名（renamed_col）',
+          intent: { physicalColumnMappings: [], fills: {}, conversions: [], migrationPolicy: { destructiveChangeConfirmed: false, lossyConversionConfirmed: false } },
+        }],
+      }],
+    });
+
+    const saved = await useVisualizerSave().saveTemplateToCurrentChat();
+
+    expect(saved).toBe(false);
+    expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenCalledTimes(1);
+    expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).not.toHaveBeenCalled();
+    expect(toastMock.error).toHaveBeenCalledWith(
+      '模板结构未通过 schema migration preflight：sheet_test_vz2: 需要确认列身份。',
+      { muteable: false },
+    );
+  });
+
+  it('多 Sheet 列身份选择全部绑定后只执行一次二次 preflight', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    const secondSheet = {
+      ...sheet('第二张表'), uid: 'sheet_second_vz2',
+      sourceData: { ddl: 'CREATE TABLE sheet_second_vz2 (row_id INTEGER PRIMARY KEY, col_1 TEXT, col_2 TEXT);' },
+    };
+    store.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 }, sheet_test_vz2: sheet(), sheet_second_vz2: secondSheet,
+    }, ['sheet_test_vz2', 'sheet_second_vz2']);
+    store.tempData.sheet_test_vz2.sourceData.ddl = `CREATE TABLE sheet_test_vz2 (
+  row_id INTEGER PRIMARY KEY, -- row_id
+  renamed_one TEXT, -- 姓名
+  col_2 TEXT -- 状态
+);`;
+    store.tempData.sheet_second_vz2.sourceData.ddl = `CREATE TABLE sheet_second_vz2 (
+  row_id INTEGER PRIMARY KEY, -- row_id
+  renamed_two TEXT, -- 姓名
+  col_2 TEXT -- 状态
+);`;
+    const firstIntent = {
+      physicalColumnMappings: [{ fromPhysicalName: 'col_1', toPhysicalName: 'renamed_one' }], fills: {}, conversions: [],
+      migrationPolicy: { destructiveChangeConfirmed: false, lossyConversionConfirmed: false },
+    };
+    const secondIntent = {
+      physicalColumnMappings: [{ fromPhysicalName: 'col_1', toPhysicalName: 'renamed_two' }], fills: {}, conversions: [],
+      migrationPolicy: { destructiveChangeConfirmed: false, lossyConversionConfirmed: false },
+    };
+    serviceMock.preflightSchemaMigrations_ACU
+      .mockResolvedValueOnce({
+        changedSheetKeys: ['sheet_test_vz2', 'sheet_second_vz2'], blockers: ['first', 'second'], issues: [], operations: [],
+        decisions: [
+          { sheetKey: 'sheet_test_vz2', status: 'needs_choice', message: 'first', choices: [{ id: 'first', label: 'first', intent: firstIntent }] },
+          { sheetKey: 'sheet_second_vz2', status: 'needs_choice', message: 'second', choices: [{ id: 'second', label: 'second', intent: secondIntent }] },
+        ],
+      })
+      .mockResolvedValueOnce({
+        changedSheetKeys: ['sheet_test_vz2', 'sheet_second_vz2'], blockers: [], issues: [], decisions: [],
+        operations: [
+          { kind: 'sheet_schema_migrate', sheetKey: 'sheet_test_vz2' },
+          { kind: 'sheet_schema_migrate', sheetKey: 'sheet_second_vz2' },
+        ],
+      });
+    const requestSchemaMigrationChoice = vi.fn(async ({ sheetKey }: { sheetKey: string }) => (
+      sheetKey === 'sheet_test_vz2' ? 'first' : 'second'
+    ));
+
+    const saved = await useVisualizerSave({ requestSchemaMigrationChoice }).saveTemplateToCurrentChat();
+
+    expect(saved).toBe(true);
+    expect(requestSchemaMigrationChoice).toHaveBeenCalledTimes(2);
+    expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenCalledTimes(2);
+    expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      intents: { sheet_test_vz2: firstIntent, sheet_second_vz2: secondIntent },
+    }));
+    expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).toHaveBeenCalledTimes(1);
+  });
+
+  it('列身份选择后二次 preflight 仍要求删列确认时保留 intent 到确认预检', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    store.loadSnapshot({ mate: { type: 'chatSheets', version: 1 }, sheet_test_vz2: sheet() }, ['sheet_test_vz2']);
+    store.currentSheet.content = [['row_id', '姓名'], ['1', 'A']];
+    store.currentSheet.sourceData.ddl = `CREATE TABLE sheet_test_vz2 (
+  row_id INTEGER PRIMARY KEY, -- row_id
+  renamed_col TEXT -- 姓名
+);`;
+    const selectedIntent = {
+      physicalColumnMappings: [{ fromPhysicalName: 'col_1', toPhysicalName: 'renamed_col' }], fills: {}, conversions: [],
+      migrationPolicy: { destructiveChangeConfirmed: false, lossyConversionConfirmed: false },
+    };
+    const destructiveIssue = {
+      code: 'DESTRUCTIVE_COLUMN_DROP_CONFIRMATION_REQUIRED', sheetKey: 'sheet_test_vz2', tableName: '角色状态',
+      droppedColumns: [{ physicalName: 'col_2', displayHeader: '状态', index: 2 }], affectedRowCount: 1, message: '删除状态需要显式确认。',
+    };
+    serviceMock.preflightSchemaMigrations_ACU
+      .mockResolvedValueOnce({
+        changedSheetKeys: ['sheet_test_vz2'], blockers: ['choice'], issues: [], operations: [],
+        decisions: [{ sheetKey: 'sheet_test_vz2', status: 'needs_choice', message: 'choice', choices: [{ id: 'mapping', label: 'mapping', intent: selectedIntent }] }],
+      })
+      .mockResolvedValueOnce({ changedSheetKeys: ['sheet_test_vz2'], blockers: ['drop'], issues: [destructiveIssue], operations: [], decisions: [] })
+      .mockResolvedValueOnce({
+        changedSheetKeys: ['sheet_test_vz2'], blockers: [], issues: [], decisions: [],
+        operations: [{ kind: 'sheet_schema_migrate', contractVersion: 2, sheetKey: 'sheet_test_vz2' }],
+      });
+
+    const saved = await useVisualizerSave({
+      requestSchemaMigrationChoice: vi.fn(async () => 'mapping'),
+      confirmDestructiveSchemaChange: vi.fn(async () => true),
+    }).saveTemplateToCurrentChat();
+
+    expect(saved).toBe(true);
+    expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenCalledTimes(3);
+    expect(serviceMock.preflightSchemaMigrations_ACU).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      intents: { sheet_test_vz2: selectedIntent }, destructiveChangeConfirmed: true,
+    }));
     expect(serviceMock.commitCurrentFloorTemplateChanges_ACU).toHaveBeenCalledTimes(1);
   });
 

@@ -74,6 +74,19 @@ export interface TableMigrationProvenanceV1_ACU {
   migratedAt: number;
 }
 
+/** 手动重填在历史缺少正式根时写入的可升级临时根来源。 */
+export interface ManualRefillTemplateRootProvenanceV1_ACU {
+  version: 1;
+  kind: 'manual_refill_template_root';
+  runId: string;
+  isolationKey: string;
+  targetSheetKeys: string[];
+  rangeStartMessageIndex: number;
+  rangeEndMessageIndex: number;
+  templateFingerprint: string;
+  createdAt: number;
+}
+
 export interface TableCheckpointV2_ACU {
   kind: 'full';
   createdAt: number;
@@ -83,6 +96,7 @@ export interface TableCheckpointV2_ACU {
   event?: TableMutationEventV2_ACU;
   manualRefillProgress?: ManualRefillProgressV2_ACU;
   migrationProvenance?: TableMigrationProvenanceV1_ACU;
+  fallbackProvenance?: ManualRefillTemplateRootProvenanceV1_ACU;
 }
 
 /** 同一 V2 frame 内的单表恢复基底；不承担 mate 或其他根级元数据。 */
@@ -391,7 +405,7 @@ export interface TableMutationLogEntryV2_ACU extends TableMutationEventV2_ACU {
 export interface TableV2RecoveryBackup_ACU {
   version: 1;
   createdAt: number;
-  recoveryKind: 'repaired_full_checkpoint' | 'confirmed_orphan_data_replace' | 'temporary_template_baseline_upgrade';
+  recoveryKind: 'repaired_full_checkpoint' | 'confirmed_orphan_data_replace' | 'temporary_template_baseline_upgrade' | 'temporary_sheet_anchor_convergence';
   sourceMessageIndex: number | null;
   failedMessageIndex?: number;
   failedSeq?: number;

@@ -109,9 +109,7 @@ interface SqlMutationIdentifierToken_ACU {
 }
 
 function isSqlMutationIdentifierStart_ACU(char: string): boolean {
-  if (char.length !== 1) return false;
-  const code = char.charCodeAt(0);
-  return char === '_' || (code >= 65 && code <= 90) || (code >= 97 && code <= 122);
+  return /^[A-Za-z_\u0080-\uFFFF]$/.test(char);
 }
 
 function isSqlMutationIdentifierPart_ACU(char: string): boolean {
@@ -347,19 +345,21 @@ export function rebindSqlMutationTableIdentifiers_ACU(
   statements: string[],
   tableData: TableDataObject_ACU,
   supplementalData?: TableDataObject_ACU | Record<string, unknown> | null,
+  options: { requireKnownTables?: boolean } = {},
 ): string[] {
   // 建表权威是模板（_ensureTablesFromTemplate），运行时快照在新卡首次填表时还没有该表。
   // 未显式传入补充源时默认取当前聊天模板，保证别名覆盖与实际建表一致。
   const templateSource = supplementalData === undefined
     ? resolveCurrentChatTemplateForAliases_ACU()
     : supplementalData;
-  // Generation keeps its narrower DDL/physical-name contract, while conflict
-  // arbitration is shared with the read path to prevent semantic drift.
+  // 生成路径和 Strict JSON/调度使用同一份显式身份别名契约。SQL token 一旦
+  // 被唯一解析，必须立即替换为物理名；不能因 AI 使用显示名或历史名称而
+  // 原样交给 SQLite，再在提交阶段误判为未知/跨表。
   const { aliases } = buildSheetTableAliasMap_ACU(
     [templateSource, tableData],
-    { includeExtendedAliases: false, skipInvalidSources: true },
+    { includeExtendedAliases: true, skipInvalidSources: true },
   );
-  return rebindSqlMutationTableReferences_ACU(statements, aliases);
+  return rebindSqlMutationTableReferences_ACU(statements, aliases, options);
 }
 
 /**
@@ -652,22 +652,17 @@ export function assertNoHiddenPhysicalColumnMutations_ACU(
 
 export function mapSqlTableNamesToSheetKeys_ACU(tableData: TableDataObject_ACU | null | undefined, tableNames: string[]): string[] {
   if (!tableData || !Array.isArray(tableNames) || tableNames.length === 0) return [];
+  const { aliases, conflicts } = buildSheetTableAliasMap_ACU([tableData], { includeExtendedAliases: true });
+  const sheetKeyByPhysicalName = new Map(
+    [...resolvePhysicalTableNames_ACU(tableData)].map(([sheetKey, physicalName]) => [physicalName.toLowerCase(), sheetKey]),
+  );
   const matchedKeys = new Set<string>();
-  for (const [sheetKey, value] of Object.entries(tableData)) {
-    if (!sheetKey.startsWith('sheet_')) continue;
-    const sheet = value as any;
-    const tableNameFromUid = typeof sheet?.uid === 'string' ? sheet.uid.trim() : '';
-    const tableNameFromName = typeof sheet?.name === 'string' ? sheet.name.trim() : '';
-    const tableNameFromDDL = typeof sheet?.sourceData?.ddl === 'string' ? parseDDLTableName(sheet.sourceData.ddl) : '';
-    const runtimeTableName = getPhysicalTableNameForSheet_ACU(tableData, sheetKey);
-    if (
-      (tableNameFromUid && tableNames.includes(tableNameFromUid))
-      || (tableNameFromName && tableNames.includes(tableNameFromName))
-      || (tableNameFromDDL && tableNames.includes(tableNameFromDDL))
-      || tableNames.includes(runtimeTableName)
-    ) {
-      matchedKeys.add(sheetKey);
-    }
+  for (const rawName of tableNames) {
+    const normalized = String(rawName || '').normalize('NFKC').trim().toLocaleLowerCase('en-US');
+    if (!normalized || conflicts.has(normalized)) continue;
+    const physicalName = aliases.get(normalized);
+    const sheetKey = physicalName ? sheetKeyByPhysicalName.get(physicalName.toLowerCase()) : undefined;
+    if (sheetKey) matchedKeys.add(sheetKey);
   }
   return [...matchedKeys];
 }
@@ -748,7 +743,7 @@ export function buildSqlSheetBatchOperations_ACU(
       appendSqlSheetBatchOperation_ACU(operations, sheetKey, statement, param, reason, getPhysicalTableNameForSheet_ACU(tableData, sheetKey));
       return;
     }
-    if (sheetKeys.length === 0 && allowFallback) {
+    if (sheetKeys.length === 0 && tableNames.length === 0 && allowFallback) {
       const sheetKey = fallbackTargetSheetKeys[0];
       classifiedSheetKeys.add(sheetKey);
       unknownStatements.push(statement);
@@ -1104,6 +1099,7 @@ export class SqlTableService implements ITableStorageProvider {
         normalizedStatements,
         (currentJsonTableData_ACU || { mate: DEFAULT_MATE_ACU }) as TableDataObject_ACU,
         scope?.templateData,
+        { requireKnownTables: Boolean(scope?.templateData) },
       );
     });
     const userStatements = normalizedGroups.flat();
@@ -1724,9 +1720,12 @@ export async function applySqlEditsToTableDataSnapshot_ACU(
     }
 
     const snapshotCopy = JSON.parse(JSON.stringify(tableData || {})) as TableDataObject_ACU;
+    const requireKnownTables = operationOptions.requireSheetScopedOperations === true;
     const reboundStatements = rebindSqlMutationTableIdentifiers_ACU(
       rawStatements.map(stmt => normalizeStatementValues(normalizeSqlStructure(stmt))),
       snapshotCopy,
+      snapshotCopy,
+      { requireKnownTables },
     );
     const statements = materializeSystemRowIdsForSqlInserts_ACU(reboundStatements, snapshotCopy);
     await engine.init();

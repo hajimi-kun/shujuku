@@ -26,6 +26,12 @@ interface ResolveTableHistoryOptions_ACU {
     settings: any;
 }
 
+interface MutableTableHistoryState_ACU {
+    latestDataMessageIndex: number;
+    lastTrackedUpdateMessageIndex: number;
+    lastTrackedUpdateAiFloor: number;
+}
+
 function isLegacyMatchForMessage_ACU(msg: any, settings: any): boolean {
     const msgIdentity = msg?.TavernDB_ACU_Identity;
     if (settings?.dataIsolationEnabled) {
@@ -260,42 +266,93 @@ export function resolveTableHistoryStateFromChat_ACU(
     chat: ACUMessage[] | any[],
     options: ResolveTableHistoryOptions_ACU,
 ): TableHistoryState_ACU {
-    const latestAiMessageIndex = getLatestAiMessageIndexFromChat_ACU(chat);
-    let latestDataMessageIndex = -1;
-    let lastTrackedUpdateMessageIndex = -1;
-    let lastTrackedUpdateAiFloor = 0;
+    return resolveTableHistoryStatesFromChat_ACU(chat, [options]).get(options.sheetKey) || {
+        latestAiMessageIndex: getLatestAiMessageIndexFromChat_ACU(chat),
+        latestDataMessageIndex: -1,
+        lastTrackedUpdateMessageIndex: -1,
+        latestDataAiFloor: 0,
+        lastTrackedUpdateAiFloor: 0,
+        hasAnyData: false,
+        hasTrackedUpdate: false,
+    };
+}
 
-    if (Array.isArray(chat)) {
-        for (let i = chat.length - 1; i >= 0; i -= 1) {
-            const msg = chat[i];
-            if (!msg || msg.is_user) continue;
-            const messageAiFloor = countAiMessagesUpToIndex_ACU(chat, i);
+/**
+ * 单次扫描聊天记录，批量解析多张表的历史状态。
+ *
+ * 旧调用路径会为每张表分别逆序扫描聊天，并在扫描中的每个 AI 楼层再次从头计数，
+ * 最坏形成 O(sheetCount * messageCount²)。这里先构建 AI 楼层前缀，再用一次逆序扫描
+ * 同时解析所有请求，使调度主路径收敛为 O(messageCount * sheetCount)。
+ */
+export function resolveTableHistoryStatesFromChat_ACU(
+    chat: ACUMessage[] | any[],
+    optionsList: ResolveTableHistoryOptions_ACU[],
+): Map<string, TableHistoryState_ACU> {
+    const safeChat = Array.isArray(chat) ? chat : [];
+    const uniqueOptions = new Map<string, ResolveTableHistoryOptions_ACU>();
+    for (const options of optionsList || []) {
+        if (!options?.sheetKey || uniqueOptions.has(options.sheetKey)) continue;
+        uniqueOptions.set(options.sheetKey, options);
+    }
 
-            if (latestDataMessageIndex === -1 && hasTableDataInMessage_ACU(msg, options)) {
-                latestDataMessageIndex = i;
+    const aiFloorByMessageIndex = new Array<number>(safeChat.length).fill(0);
+    let aiFloor = 0;
+    let latestAiMessageIndex = -1;
+    for (let index = 0; index < safeChat.length; index += 1) {
+        if (safeChat[index] && !safeChat[index].is_user) {
+            aiFloor += 1;
+            latestAiMessageIndex = index;
+        }
+        aiFloorByMessageIndex[index] = aiFloor;
+    }
+
+    const mutable = new Map<string, MutableTableHistoryState_ACU>();
+    for (const sheetKey of uniqueOptions.keys()) {
+        mutable.set(sheetKey, {
+            latestDataMessageIndex: -1,
+            lastTrackedUpdateMessageIndex: -1,
+            lastTrackedUpdateAiFloor: 0,
+        });
+    }
+
+    let unresolvedCount = mutable.size;
+    for (let index = safeChat.length - 1; index >= 0 && unresolvedCount > 0; index -= 1) {
+        const message = safeChat[index];
+        if (!message || message.is_user) continue;
+        const messageAiFloor = aiFloorByMessageIndex[index];
+
+        for (const [sheetKey, options] of uniqueOptions) {
+            const state = mutable.get(sheetKey)!;
+            const wasResolved = state.latestDataMessageIndex !== -1 && state.lastTrackedUpdateMessageIndex !== -1;
+            if (wasResolved) continue;
+
+            if (state.latestDataMessageIndex === -1 && hasTableDataInMessage_ACU(message, options)) {
+                state.latestDataMessageIndex = index;
             }
-
-            if (lastTrackedUpdateMessageIndex === -1) {
-                const trackedFloor = getTrackedUpdateFloorInMessage_ACU(msg, options, messageAiFloor);
+            if (state.lastTrackedUpdateMessageIndex === -1) {
+                const trackedFloor = getTrackedUpdateFloorInMessage_ACU(message, options, messageAiFloor);
                 if (trackedFloor > 0) {
-                    lastTrackedUpdateMessageIndex = i;
-                    lastTrackedUpdateAiFloor = trackedFloor;
+                    state.lastTrackedUpdateMessageIndex = index;
+                    state.lastTrackedUpdateAiFloor = trackedFloor;
                 }
             }
-
-            if (latestDataMessageIndex !== -1 && lastTrackedUpdateMessageIndex !== -1) {
-                break;
+            if (state.latestDataMessageIndex !== -1 && state.lastTrackedUpdateMessageIndex !== -1) {
+                unresolvedCount -= 1;
             }
         }
     }
 
-    return {
-        latestAiMessageIndex,
-        latestDataMessageIndex,
-        lastTrackedUpdateMessageIndex,
-        latestDataAiFloor: countAiMessagesUpToIndex_ACU(chat, latestDataMessageIndex),
-        lastTrackedUpdateAiFloor,
-        hasAnyData: latestDataMessageIndex !== -1,
-        hasTrackedUpdate: lastTrackedUpdateAiFloor > 0,
-    };
+    const result = new Map<string, TableHistoryState_ACU>();
+    for (const [sheetKey, state] of mutable) {
+        result.set(sheetKey, {
+            latestAiMessageIndex,
+            latestDataMessageIndex: state.latestDataMessageIndex,
+            lastTrackedUpdateMessageIndex: state.lastTrackedUpdateMessageIndex,
+            latestDataAiFloor: state.latestDataMessageIndex >= 0 ? aiFloorByMessageIndex[state.latestDataMessageIndex] : 0,
+            lastTrackedUpdateAiFloor: state.lastTrackedUpdateAiFloor,
+            hasAnyData: state.latestDataMessageIndex !== -1,
+            hasTrackedUpdate: state.lastTrackedUpdateAiFloor > 0,
+        });
+    }
+    return result;
 }

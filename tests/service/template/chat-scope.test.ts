@@ -397,7 +397,7 @@ describe('sanitizeSheetForStorage_ACU', () => {
       uid: 's0',
       name: '物品表',
       content: [['row_id', '物品名']],
-      sourceData: { note: '' },
+      sourceData: { note: '', tableAliases: ['物品旧名'] },
       updateConfig: { contextDepth: 5 },
       orderNo: 1,
       domain: '应被丢弃',
@@ -410,6 +410,7 @@ describe('sanitizeSheetForStorage_ACU', () => {
     expect(result.name).toBe('物品表');
     expect(result.content).toEqual([['row_id', '物品名']]);
     expect(result.updateConfig).toEqual({ contextDepth: 5 });
+    expect(result.sourceData).toEqual({ note: '', tableAliases: ['物品旧名'] });
     expect(result.orderNo).toBe(1);
     // 非白名单键不应存在
     expect(result.domain).toBeUndefined();

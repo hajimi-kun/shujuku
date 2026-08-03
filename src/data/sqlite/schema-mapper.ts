@@ -27,6 +27,7 @@ export {
   rebindCreateTableName_ACU,
 } from '../../shared/ddl-utils';
 import {
+  matchesDDLColumnHeader_ACU,
   parseDDLColumnInfos_ACU,
   parseDDLTableName,
   parseDDLColumnNames,
@@ -310,7 +311,7 @@ function resolveInsertColumnMappings(sheet: Sheet_ACU, headers: readonly string[
   for (const column of columns) {
     const candidates = normalizedHeaders
       .map((header, index) => ({ header, index }))
-      .filter(({ header }) => matchesSheetHeader(column.sqlName, column.comment, header));
+      .filter(({ header }) => matchesDDLColumnHeader_ACU(column.sqlName, column.comment, header));
 
     if (candidates.length > 1) {
       throw new Error(`DDL 列「${column.sqlName}」匹配到多个表头，无法安全 hydrate`);
@@ -350,11 +351,6 @@ function resolveInsertColumnMappings(sheet: Sheet_ACU, headers: readonly string[
   }
 
   return mappings;
-}
-
-function matchesSheetHeader(sqlName: string, comment: string | null, header: string): boolean {
-  if (!header) return false;
-  return header === sqlName || (sqlName === 'row_id' && header === '行号') || header === comment;
 }
 
 // ═══════════════════════════════════════════════════════════════

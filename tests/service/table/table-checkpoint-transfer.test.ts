@@ -6,7 +6,11 @@ const h = vi.hoisted(() => ({
   peekScope: vi.fn(), peekGuide: vi.fn(),
   setScope: vi.fn(), setGuideContainer: vi.fn(), setScopeState: vi.fn(), setGuideData: vi.fn(), applyScope: vi.fn(), reload: vi.fn(), deleteGenerated: vi.fn(), refreshMerged: vi.fn(), sanitizeTemplate: vi.fn(), sqliteMode: false, storageMode: 'native' as 'native' | 'sqlite',
 }));
-vi.mock('../../../src/shared/utils', () => ({ hashUserInput_ACU: () => 'hash', logDebug_ACU: vi.fn(), parseTableTemplateJson_ACU: () => h.templateData }));
+vi.mock('../../../src/shared/utils', () => ({ hashUserInput_ACU: (input: string) => {
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) hash = Math.imul(hash ^ input.charCodeAt(index), 16777619);
+  return (hash >>> 0).toString(16);
+}, logDebug_ACU: vi.fn(), parseTableTemplateJson_ACU: () => h.templateData }));
 vi.mock('../../../src/data/storage/chat-history', () => ({
   peekChatScopedConfigContainer_ACU: h.peekScope, peekChatSheetGuideContainer_ACU: h.peekGuide,
   setChatScopedConfigContainer_ACU: (_: any, value: any) => { h.scope = value; h.setScope(value); },
@@ -32,13 +36,21 @@ vi.mock('../../../src/service/table/table-write-transaction', () => ({ runTableW
 import { buildCurrentTableCheckpoint_ACU, parseTableCheckpointFile_ACU, restoreTableCheckpointToLatestAi_ACU } from '../../../src/service/table/table-checkpoint-transfer';
 
 const data = { mate: { type: 'acu', version: 1 }, sheet_0: { name: '表', content: [['row_id'], ['1']] } };
-const checkpoint = { format: 'acu-table-checkpoint', version: 1, createdAt: 1, source: { storageMode: 'native' }, tableSnapshot: data, templateSnapshot: { data, presetName: '预设' }, guideSnapshot: { data }, integrity: { algorithm: 'fnv1a', payloadHash: 'hash' } } as any;
+const canonicalize = (value: any): any => Array.isArray(value) ? value.map(canonicalize) : value && typeof value === 'object' ? Object.keys(value).sort().reduce((out: any, key) => ({ ...out, [key]: canonicalize(value[key]) }), {}) : value;
+const payloadHash = (payload: any) => {
+  const input = JSON.stringify(canonicalize(payload));
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) hash = Math.imul(hash ^ input.charCodeAt(index), 16777619);
+  return (hash >>> 0).toString(16);
+};
+const signCheckpoint = (payload: any) => ({ ...payload, integrity: { algorithm: 'fnv1a', payloadHash: payloadHash(payload) } });
+const checkpoint = signCheckpoint({ format: 'acu-table-checkpoint', version: 1, createdAt: 1, source: { storageMode: 'native' }, tableSnapshot: data, templateSnapshot: { data, presetName: '预设' }, guideSnapshot: { data } }) as any;
 
 describe('table checkpoint transfer', () => {
   beforeEach(() => { vi.clearAllMocks(); h.chat = [{ is_user: true }, { is_user: false, TavernDB_ACU_Data: { old: true } }]; h.providerData = null; h.templateData = data; h.guideData = data; h.runtimeSnapshot = undefined; h.snapshotError = null; h.hasClearRuntime = true; h.hasRestoreRuntime = true; h.sqliteMode = false; h.storageMode = 'native'; h.scope = { version: 1, old: true }; h.guide = { version: 1, tags: {} }; h.peekScope.mockImplementation(() => h.scope); h.peekGuide.mockImplementation(() => h.guide); h.sanitizeTemplate.mockImplementation((source: any) => { const templateObj = typeof source === 'string' ? JSON.parse(source) : JSON.parse(JSON.stringify(source)); return { templateObj, templateStr: JSON.stringify(templateObj) }; }); h.replace.mockImplementation(async (next: any) => { h.providerData = next; return { success: true }; }); h.persist.mockResolvedValue({ saved: true, messageIndex: 1 }); h.clear.mockImplementation(async () => { delete h.chat[1].TavernDB_ACU_Data; return { clearedCount: 1, vectorManifestsToDeleteAfterCommit: [] }; }); h.setScopeState.mockImplementation((state: any) => { h.scope = state; return true; }); });
   it('在解析阶段拒绝非法 JSON、危险键与完整性不匹配', () => { expect(parseTableCheckpointFile_ACU('{')).toMatchObject({ success: false }); expect(parseTableCheckpointFile_ACU('{"format":"acu-table-checkpoint","__proto__":{}}')).toMatchObject({ success: false }); expect(parseTableCheckpointFile_ACU(JSON.stringify({ ...checkpoint, integrity: { algorithm: 'fnv1a', payloadHash: 'bad' } }))).toMatchObject({ success: false }); });
   it('在解析阶段拒绝与运行时表头不一致的指导表', () => { const mismatched = { ...checkpoint, guideSnapshot: { data: { ...data, sheet_0: { ...data.sheet_0, content: [['row_id', '额外列']] } } } }; expect(parseTableCheckpointFile_ACU(JSON.stringify(mismatched))).toMatchObject({ success: false }); });
-  it('允许模板和指导表包含尚未物化到运行时的表', () => { const deferredSheet = { name: '未物化表', content: [['row_id', '名称']] }; const valid = { ...checkpoint, templateSnapshot: { ...checkpoint.templateSnapshot, data: { ...data, sheet_1: deferredSheet } }, guideSnapshot: { data: { ...data, sheet_1: deferredSheet } } }; expect(parseTableCheckpointFile_ACU(JSON.stringify(valid))).toMatchObject({ success: true }); });
+  it('允许模板和指导表包含尚未物化到运行时的表', () => { const deferredSheet = { name: '未物化表', content: [['row_id', '名称']] }; const valid = signCheckpoint({ ...checkpoint, integrity: undefined, templateSnapshot: { ...checkpoint.templateSnapshot, data: { ...data, sheet_1: deferredSheet } }, guideSnapshot: { data: { ...data, sheet_1: deferredSheet } } }); expect(parseTableCheckpointFile_ACU(JSON.stringify(valid))).toMatchObject({ success: true }); });
   it('在解析阶段拒绝模板与指导表未知的运行时表', () => { const invalid = { ...checkpoint, tableSnapshot: { ...data, sheet_1: { name: '运行时孤儿表', content: [['row_id', '名称'], ['1', '孤儿数据']] } } }; expect(parseTableCheckpointFile_ACU(JSON.stringify(invalid))).toMatchObject({ success: false }); });
   it('在解析阶段拒绝模板与指导表的 sheet 集合分裂', () => { const invalid = { ...checkpoint, templateSnapshot: { ...checkpoint.templateSnapshot, data: { ...data, sheet_1: { name: '模板独有表', content: [['row_id']] } } } }; expect(parseTableCheckpointFile_ACU(JSON.stringify(invalid))).toMatchObject({ success: false }); });
   it('恢复预检使用纯读取快照，不通过 getter 隐式迁移 metadata', async () => { h.snapshotError = new Error('snapshot failed'); await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(h.peekScope).not.toHaveBeenCalled(); expect(h.peekGuide).not.toHaveBeenCalled(); h.snapshotError = null; h.hasClearRuntime = false; await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(h.peekScope).not.toHaveBeenCalled(); expect(h.peekGuide).not.toHaveBeenCalled(); h.hasClearRuntime = true; await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(h.peekScope).toHaveBeenCalledWith(h.chat); expect(h.peekGuide).toHaveBeenCalledWith(h.chat); });
@@ -58,4 +70,42 @@ describe('table checkpoint transfer', () => {
   it('构建 checkpoint 保留 SQLite provider 来源', () => { h.providerData = data; h.storageMode = 'sqlite'; expect(buildCurrentTableCheckpoint_ACU().source).toEqual({ storageMode: 'sqlite' }); });
   it('在构建阶段允许模板与指导表包含尚未物化的表', () => { const deferredSheet = { name: '未物化表', content: [['row_id', '名称']] }; h.providerData = data; h.templateData = { ...data, sheet_1: deferredSheet }; h.guideData = { ...data, sheet_1: deferredSheet }; const built = buildCurrentTableCheckpoint_ACU(); expect(parseTableCheckpointFile_ACU(JSON.stringify(built))).toMatchObject({ success: true }); });
   it('构建成功的 Checkpoint 能重新通过解析校验', () => { h.providerData = data; const built = buildCurrentTableCheckpoint_ACU(); expect(parseTableCheckpointFile_ACU(JSON.stringify(built))).toMatchObject({ success: true }); });
+  it('原哈希通过后修复历史尾标记、重签并保持 parse 到 restore 幂等', async () => {
+    const legacyData = { mate: { type: 'acu', version: 1 }, sheet_3NoMc1wI: { name: '纪要表', content: [['row_id', '内容'], ['1', '旧纪要', 'auto_merged']] } };
+    const legacy = signCheckpoint({ format: 'acu-table-checkpoint', version: 1, createdAt: 1, source: { storageMode: 'native' }, tableSnapshot: legacyData, templateSnapshot: { data: legacyData, presetName: '旧预设' }, guideSnapshot: { data: legacyData } });
+
+    const parsed = parseTableCheckpointFile_ACU(JSON.stringify(legacy));
+    expect(parsed).toMatchObject({ success: true });
+    if (!parsed.success) throw new Error(parsed.error);
+    expect(parsed.checkpoint.tableSnapshot.sheet_3NoMc1wI.content).toEqual([['row_id', '内容'], ['1', '旧纪要']]);
+    expect(parsed.checkpoint.integrity.payloadHash).not.toBe(legacy.integrity.payloadHash);
+    expect(parseTableCheckpointFile_ACU(JSON.stringify(parsed.checkpoint))).toMatchObject({ success: true });
+    await expect(restoreTableCheckpointToLatestAi_ACU(parsed.checkpoint)).resolves.toMatchObject({ success: true });
+  });
+
+  it('原哈希不匹配或非目标行宽错误仍拒绝导入', () => {
+    const legacyData = { mate: { type: 'acu', version: 1 }, sheet_3NoMc1wI: { name: '纪要表', content: [['row_id', '内容'], ['1', '旧纪要', 'auto_merged']] } };
+    const validLegacy = signCheckpoint({ format: 'acu-table-checkpoint', version: 1, createdAt: 1, source: { storageMode: 'native' }, tableSnapshot: legacyData, templateSnapshot: { data: legacyData, presetName: '旧预设' }, guideSnapshot: { data: legacyData } });
+    const nonMarkerData = { mate: { type: 'acu', version: 1 }, sheet_3NoMc1wI: { name: '纪要表', content: [['row_id', '内容'], ['1', '旧纪要', 'manual']] } };
+    const nonMarker = signCheckpoint({ format: 'acu-table-checkpoint', version: 1, createdAt: 1, source: { storageMode: 'native' }, tableSnapshot: nonMarkerData, templateSnapshot: { data: nonMarkerData, presetName: '旧预设' }, guideSnapshot: { data: nonMarkerData } });
+
+    expect(parseTableCheckpointFile_ACU(JSON.stringify({ ...validLegacy, tableSnapshot: nonMarkerData }))).toMatchObject({ success: false, error: expect.stringContaining('完整性校验失败') });
+    expect(parseTableCheckpointFile_ACU(JSON.stringify(nonMarker))).toMatchObject({ success: false, error: expect.stringContaining('row_width_mismatch') });
+  });
+
+  it.each(['native', 'sqlite'] as const)('目标 %s 模板异构时仍完全以 checkpoint 快照恢复', async (storageMode) => {
+    h.sqliteMode = storageMode === 'sqlite';
+    h.storageMode = storageMode;
+    h.providerData = { mate: { type: 'acu', version: 1 }, sheet_target: { name: '目标旧表', content: [['row_id', '旧列', '多余列'], ['1', '旧数据', 'x']] } };
+    h.templateData = h.providerData;
+    h.guideData = h.providerData;
+
+    const result = await restoreTableCheckpointToLatestAi_ACU(checkpoint);
+
+    expect(result).toMatchObject({ success: true, postCondition: { providerMode: storageMode, templateMatches: true, guideMatches: true } });
+    expect(h.providerData).toEqual(data);
+    expect(JSON.parse(h.scope.templateStr)).toEqual(data);
+    expect(h.guideData).toEqual(data);
+  });
+
 });

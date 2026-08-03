@@ -406,10 +406,6 @@ function purgeManualRefillProgressV2_ACU(progress: any, sheetKeys: Set<string>):
     return changed;
 }
 
-function hasRemainingDataReplacePayload_ACU(data: any): boolean {
-    return isObjectRecord_ACU(data) && Object.keys(data).length > 0;
-}
-
 function purgeSqlBatchOperationV2_ACU(operation: any, targetSqlTableNames: Set<string>): { operation: any | null; changed: boolean } {
     if (!Array.isArray(operation.statements) || targetSqlTableNames.size === 0) {
         return { operation, changed: false };
@@ -447,13 +443,10 @@ function purgeOperationV2_ACU(operation: any, sheetKeys: Set<string>, targetSqlT
         return { operation: null, changed: true };
     }
 
-    if (operation.kind === 'data_replace' && isObjectRecord_ACU(operation.data)) {
-        const changed = deleteSheetKeysFromRecord_ACU(operation.data, sheetKeys);
-        if (!changed) return { operation, changed: false };
-        return {
-            operation: hasRemainingDataReplacePayload_ACU(operation.data) ? operation : null,
-            changed: true,
-        };
+    if (operation.kind === 'data_replace') {
+        // data_replace 是整库替换：仅裁掉目标表 payload 会让回放状态缺失该表，
+        // 也会伪造并不存在的历史。调用方若需要覆盖目标表，必须写入末端 rebase。
+        return { operation, changed: false };
     }
 
     if (operation.kind === 'sql_batch') {
@@ -476,13 +469,9 @@ function purgePatchV2_ACU(patch: any, sheetKeys: Set<string>, targetSqlTableName
         return { patch: null, changed: true };
     }
 
-    if (patch.kind === 'data_replace' && isObjectRecord_ACU(patch.data)) {
-        const changed = deleteSheetKeysFromRecord_ACU(patch.data, sheetKeys);
-        if (!changed) return { patch, changed: false };
-        return {
-            patch: hasRemainingDataReplacePayload_ACU(patch.data) ? patch : null,
-            changed: true,
-        };
+    if (patch.kind === 'data_replace') {
+        // 旧 derived patch 同样可能承载整库替换，不能按 sheetKey 伪造局部历史。
+        return { patch, changed: false };
     }
 
     if (patch.kind === 'sql_batch') {

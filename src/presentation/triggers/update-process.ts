@@ -189,6 +189,7 @@ export async function proceedWithCardUpdate_ACU(
     targetSheetKeys: string[] | null = null,
     requestOptions: Record<string, any> | null = null,
     progressContext: BatchUpdateProgressContext | null = null,
+    showFinalErrorToast = true,
 ): Promise<CardUpdateResult> {
     logDebug_ACU(`[更新流程] proceedWithCardUpdate: 消息数=${messagesToUse.length}, 模式=${updateMode}, 静默=${isSilentMode}, 目标表=${targetSheetKeys?.join(',') || '全部'}`);
     const localAbortController = new AbortController();
@@ -245,11 +246,7 @@ export async function proceedWithCardUpdate_ACU(
             setTimeout(() => {
                 notifyTableUpdate();
             }, 250);
-        } else if (result.skippedNoSql && !isSilentMode) {
-            // [SQL假保存修复] AI 本轮未产出可执行 SQL：静默跳过，不报成功/失败，仅提示未写入。
-            showToastr_ACU('warning', '未写入：AI 本轮未产出可执行 SQL，已跳过（门禁未推进）。');
-            updateStatusText('未写入：AI 未产出可执行 SQL。', false);
-        } else if (!result.success && !result.aborted && !isSilentMode) {
+        } else if (!result.success && !result.aborted && !isSilentMode && showFinalErrorToast) {
             showToastr_ACU('error', `更新失败: ${result.error || '未知错误'}`);
             updateStatusText('错误：更新失败。', false);
         }
@@ -281,7 +278,7 @@ export async function processUpdates_ACU(indicesToUpdate: number[], mode = 'auto
             requestOptions: Record<string, any> | null,
             progressContext: BatchUpdateProgressContext
         ): Promise<CardUpdateResult> => {
-            return proceedWithCardUpdate_ACU(messagesToUse, '', saveTargetIndex, false, updateMode, isSilentMode, targetSheetKeys, requestOptions, progressContext);
+            return proceedWithCardUpdate_ACU(messagesToUse, '', saveTargetIndex, false, updateMode, isSilentMode, targetSheetKeys, requestOptions, progressContext, false);
         }
     );
 

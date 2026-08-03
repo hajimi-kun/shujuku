@@ -10,14 +10,14 @@ import { getImportBatchPrefix_ACU, getImportStablePrefix_ACU } from '../../share
 import { logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
 import { isEntryBlocked_ACU } from '../../shared/utils';
 import { formatJsonToReadable_ACU, maybeLiftWorldbookSuppression_ACU, mergeAllIndependentTables_ACU, shouldSuppressWorldbookInjection_ACU } from '../runtime/helpers-remaining';
-import { normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
+import { normalizeCanonicalTableRows_ACU, repairLegacyAutoMergedRowTails_ACU } from '../../shared/canonical-row-normalizer';
 import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
 import { persistNullRowCleanupShards_ACU, type NullRowCleanupPersistStatus_ACU } from '../table/storage-frame-v2-persist';
 import { allocConsecutiveOrderBlock_ACU, applyPlacementToEntry_ACU, buildDefaultGlobalInjectionConfig_ACU, buildUsedOrderSet_ACU, ensureExportConfigDefaults_ACU, ensureGlobalInjectionConfigDefaults_ACU, getEntryOrderNumber_ACU, getFixedPlacementDefaultsForTable_ACU, getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU, isEntryPlacementMatched_ACU, normalizeLorebookPosition_ACU, normalizePlacementConfig_ACU, updateCustomTableExports_ACU, updateImportantPersonsRelatedEntries_ACU, updateOutlineTableEntry_ACU, updateSummaryTableEntries_ACU } from './injection-engine';
 // pipeline.ts
 // 从 05_core_tail.js 迁入
 
-export async function updateReadableLorebookEntry_ACU(createIfNeeded = false, isImport = false, targetLorebookOverride: string | null = null, dataOverride: Record<string, any> | null = null) { // [外部导入] 添加 targetLorebookOverride 参数，避免临时修改 worldbookConfig 被兜底补齐逻辑覆盖
+export   async function updateReadableLorebookEntry_ACU(createIfNeeded = false, isImport = false, targetLorebookOverride: string | null = null, dataOverride: Record<string, any> | null = null) { // [外部导入] 添加 targetLorebookOverride 参数，避免临时修改 worldbookConfig 被兜底补齐逻辑覆盖
     // [健全性] 新对话开场白阶段：禁止自动创建/更新世界书条目
     // - 仅影响非导入流程（isImport=false）
     // - 仅在“无任何用户消息”的开场白阶段生效
@@ -444,7 +444,7 @@ export async function updateReadableLorebookEntry_ACU(createIfNeeded = false, is
   }
 
 
-export async function deleteAllGeneratedEntries_ACU(targetLorebook: string | null = null) {
+export   async function deleteAllGeneratedEntries_ACU(targetLorebook: string | null = null) {
     const primaryLorebookName = targetLorebook || (await getInjectionTargetLorebook_ACU());
     if (!primaryLorebookName) return;
 
@@ -560,7 +560,27 @@ export async function deleteAllGeneratedEntries_ACU(targetLorebook: string | nul
   }
 
 
-export async function refreshMergedDataAndNotify_ACU() {
+function migrateLegacyAutoMergedOrderBeforeTailRepair_ACU(data: Record<string, any>): boolean {
+    let changed = false;
+    Object.entries(data).forEach(([sheetKey, sheet]) => {
+        if (!sheetKey.startsWith('sheet_') || !sheet || typeof sheet !== 'object') return;
+        const content = (sheet as any).content;
+        const header = Array.isArray(content) ? content[0] : null;
+        if (!Array.isArray(header) || !['纪要表', '总结表'].includes(String((sheet as any).name || ''))) return;
+        content.slice(1).forEach((row: unknown) => {
+            if (!Array.isArray(row) || row.length !== header.length + 1 || row[row.length - 1] !== 'auto_merged') return;
+            const rowId = String(row[0] ?? '').trim();
+            const autoMergedOrder = ((settings_ACU as any).autoMergedOrder ||= {}) as Record<string, any[]>;
+            const order = Array.isArray(autoMergedOrder[sheetKey]) ? autoMergedOrder[sheetKey] : (autoMergedOrder[sheetKey] = []);
+            if (!rowId || order.some(id => String(id) === rowId)) return;
+            order.push(rowId);
+            changed = true;
+        });
+    });
+    return changed;
+}
+
+export   async function refreshMergedDataAndNotify_ACU() {
       // 重新加载聊天记录
     await loadAllChatMessages_ACU();
     let removedNullRowCount = 0;
@@ -599,8 +619,18 @@ export async function refreshMergedDataAndNotify_ACU() {
         }
         // UI 选择器刷新由 presentation 层调用方负责
     } else {
-        // 更新内存中的数据
-        // [新增] 数据完整性检查：在加载数据时为AM编码的条目自动添加auto_merged标记
+        // 旧版本把自动合并状态错误地追加为无表头的业务单元格；只修复精确的
+        // 历史尾标记形态，其他行宽错误仍由后续 canonical/V2 校验拒绝。
+        if (migrateLegacyAutoMergedOrderBeforeTailRepair_ACU(mergedData)) {
+            // 先迁移状态再剥离尾标记，避免下一轮自动合并重复处理历史纪要。
+            saveSettings_ACU();
+            integrityFixed = true;
+        }
+        const repairedAutoMergedSheetKeys = repairLegacyAutoMergedRowTails_ACU(mergedData);
+        if (repairedAutoMergedSheetKeys.length > 0) {
+            integrityFixed = true;
+            logDebug_ACU(`[数据修复] 已移除历史 auto_merged 越界尾列：${repairedAutoMergedSheetKeys.join('、')}`);
+        }
         const normalization = normalizeCanonicalTableRows_ACU(mergedData);
         removedNullRowCount = normalization.removedRows.length;
         canonicalIssues = normalization.errors.map(issue => ({ ...issue }));
@@ -617,19 +647,6 @@ export async function refreshMergedDataAndNotify_ACU() {
             degraded = true;
             logWarn_ACU(`[数据修复] 发现 ${normalization.errors.length} 条无法自动合并的表格行问题。`);
         }
-        Object.keys(mergedData).forEach((sheetKey: string) => {
-            if (mergedData[sheetKey] && mergedData[sheetKey].content && Array.isArray(mergedData[sheetKey].content)) {
-                const table = mergedData[sheetKey];
-                table.content.slice(1).forEach((row: any, idx: number) => {
-                    if (Array.isArray(row) && row.length > 1 && typeof row[1] === 'string' && row[1].startsWith('AM') && row[row.length - 1] !== 'auto_merged') {
-                        // 发现AM开头的条目缺少auto_merged标记，自动修复
-                        row.push('auto_merged');
-                        integrityFixed = true;
-                        logDebug_ACU(`[数据修复] 为表格${sheetKey}的第${idx + 1}条AM开头的条目添加auto_merged标记`);
-                    }
-                });
-            }
-        });
 
         if (normalization.removedRows.length > 0) {
             if (normalization.errors.length > 0) {
@@ -652,7 +669,7 @@ export async function refreshMergedDataAndNotify_ACU() {
         }
 
         if (integrityFixed) {
-            logDebug_ACU('数据完整性已自动修复，添加了缺失的auto_merged标记');
+            logDebug_ACU('数据完整性已完成受控修复。');
         }
 
         // [修复] 强制稳定顺序（用户手动顺序优先，否则模板顺序）
@@ -686,7 +703,7 @@ export async function refreshMergedDataAndNotify_ACU() {
   }
 
 
-export async function loadAllChatMessages_ACU() {
+export   async function loadAllChatMessages_ACU() {
     if (!coreApisAreReady_ACU || !isWorldbookApiAvailable_ACU()) return;
     try {
       const chatLen = getChatLength_ACU();
@@ -719,7 +736,7 @@ function normalizeWorldbookListNames_ACU(bookList: unknown): string[] {
           .filter(Boolean);
 }
 
-export async function getWorldbookNames_ACU() {
+export   async function getWorldbookNames_ACU() {
       const bookNames = await listLorebooks_ACU();
       return normalizeWorldbookListNames_ACU(bookNames);
   }
@@ -959,7 +976,7 @@ export async function getLorebookEntriesStrict_ACU(bookNames: string[] = [], opt
 }
 
 
-export async function getLorebookEntriesByNames_ACU(bookNames: string[] = []) {
+export   async function getLorebookEntriesByNames_ACU(bookNames: string[] = []) {
       const uniqueNames = [...new Set((Array.isArray(bookNames) ? bookNames : []).map((name: string) => String(name || '').trim()).filter(Boolean))];
       let readTargets = uniqueNames.map(requestedName => ({ requestedName, hostName: requestedName }));
       const entriesMap: Record<string, any[]> = {};
@@ -1021,7 +1038,7 @@ export async function getLorebookEntriesByNames_ACU(bookNames: string[] = []) {
   }
 
 
-export async function getWorldBooks_ACU() {
+export   async function getWorldBooks_ACU() {
       const bookNames = await getWorldbookNames_ACU();
       const entriesMap = await getLorebookEntriesByNames_ACU(bookNames);
       return bookNames.map((name: string) => ({
@@ -1031,7 +1048,7 @@ export async function getWorldBooks_ACU() {
   }
 
 
-export function isImportTaggedLorebookEntry_ACU(entry: Record<string, any>) {
+export   function isImportTaggedLorebookEntry_ACU(entry: Record<string, any>) {
     const rawComment = String(entry?.comment || entry?.name || '').trim();
     if (!rawComment) return false;
     const normalizedComment = rawComment.replace(/^ACU-\[[^\]]+\]-/, '');
@@ -1039,7 +1056,7 @@ export function isImportTaggedLorebookEntry_ACU(entry: Record<string, any>) {
   }
 
 
-export function getWorldbookCommentInfo_ACU(entry: Record<string, any>) {
+export   function getWorldbookCommentInfo_ACU(entry: Record<string, any>) {
       const rawComment = String(entry?.comment || entry?.name || '').trim();
       let normalizedComment = rawComment.replace(/^ACU-\[[^\]]+\]-/, '');
       normalizedComment = normalizedComment.replace(/^外部导入-(?:[^-]+-)?/, '');
@@ -1047,7 +1064,7 @@ export function getWorldbookCommentInfo_ACU(entry: Record<string, any>) {
   }
 
 
-export function getWorldbookEntryKeywords_ACU(entry: Record<string, any>) {
+export   function getWorldbookEntryKeywords_ACU(entry: Record<string, any>) {
       const toStrArray = (v: any) => {
           if (Array.isArray(v)) return v.filter(x => typeof x === 'string' && x.trim());
           if (typeof v === 'string' && v.trim()) return [v];
@@ -1057,7 +1074,7 @@ export function getWorldbookEntryKeywords_ACU(entry: Record<string, any>) {
   }
 
 
-export function getWorldbookEntryPlaceholderSortKey_ACU(entry: Record<string, any>) {
+export   function getWorldbookEntryPlaceholderSortKey_ACU(entry: Record<string, any>) {
       const position = normalizeLorebookPosition_ACU(entry?.position, 'at_depth_as_system');
       const order = getEntryOrderNumber_ACU(entry);
       const normalizedOrder = order === null ? Number.MAX_SAFE_INTEGER : order;
@@ -1074,7 +1091,7 @@ export function getWorldbookEntryPlaceholderSortKey_ACU(entry: Record<string, an
   }
 
 
-export function compareWorldbookEntriesForPlaceholder_ACU(a: Record<string, any>, b: Record<string, any>) {
+export   function compareWorldbookEntriesForPlaceholder_ACU(a: Record<string, any>, b: Record<string, any>) {
       const keyA = getWorldbookEntryPlaceholderSortKey_ACU(a);
       const keyB = getWorldbookEntryPlaceholderSortKey_ACU(b);
 
@@ -1140,7 +1157,7 @@ function decorateWorldbookEntryStateView_ACU(
 }
 
 
-export async function collectCombinedWorldbookEntriesByStrategy_ACU(options: any = {}) {
+export   async function collectCombinedWorldbookEntriesByStrategy_ACU(options: any = {}) {
       const logPrefix = String(options?.logPrefix || '[Worldbook]');
       const bookNames: string[] = [...new Set<string>((Array.isArray(options?.bookNames) ? options.bookNames : []).map((name: any) => String(name || '').trim()).filter(Boolean))];
       const excludeEntry = typeof options?.excludeEntry === 'function' ? options.excludeEntry : () => false;
@@ -1298,7 +1315,7 @@ export async function collectCombinedWorldbookEntriesByStrategy_ACU(options: any
   }
 
 
-export function formatCombinedWorldbookEntries_ACU(entries: any[], formatEntry?: (entry: any) => string) {
+export   function formatCombinedWorldbookEntries_ACU(entries: any[], formatEntry?: (entry: any) => string) {
       const effectiveFormatEntry = typeof formatEntry === 'function'
           ? formatEntry
           : ((entry: any) => `# ${entry.comment || `Entry from ${entry.bookName}`}\n${entry.content}`);
@@ -1310,7 +1327,7 @@ export function formatCombinedWorldbookEntries_ACU(entries: any[], formatEntry?:
   }
 
 
-export async function buildCombinedWorldbookContentByStrategy_ACU(options: any = {}) {
+export   async function buildCombinedWorldbookContentByStrategy_ACU(options: any = {}) {
       const logPrefix = String(options?.logPrefix || '[Worldbook]');
       const finalEntries = await collectCombinedWorldbookEntriesByStrategy_ACU(options);
       const combinedContent = formatCombinedWorldbookEntries_ACU(finalEntries, options?.formatEntry);
@@ -1325,7 +1342,7 @@ export async function buildCombinedWorldbookContentByStrategy_ACU(options: any =
   }
 
 
-export async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', options: any = {}) {
+export   async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', options: any = {}) {
     logDebug_ACU('Starting to get combined worldbook content with advanced logic...');
     const worldbookConfig = getCurrentWorldbookConfig_ACU();
     const excludeImportTaggedEntries = options?.excludeImportTaggedEntries === true;

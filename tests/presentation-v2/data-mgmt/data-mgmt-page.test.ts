@@ -103,8 +103,8 @@ async function mountDataMgmtPage(chatFileIdentifier = 'chat-data', initialMixedD
     v2: { filename: 'TavernDB_mixed_v2_chat_alpha_decision.json', payload: { storage: 'storage-frame-v2' } },
   }));
   const commitMixedDecision = vi.fn(async () => ({ status: 'committed', decisionId: 'decision-test' }));
-  const prepareV2Recovery = vi.fn(() => ({ planId: 'recovery-plan', status: 'recoverable_orphan_data_replace', isolationKey: 'alpha', requiresConfirmation: true, message: 'orphan candidate' }));
-  const scanV2IsolationDiagnostics = vi.fn(() => [
+  const prepareV2Recovery = vi.fn(async () => ({ planId: 'recovery-plan', status: 'recoverable_orphan_data_replace', isolationKey: 'alpha', requiresConfirmation: true, message: 'orphan candidate' }));
+  const scanV2IsolationDiagnostics = vi.fn(async () => [
     { isolationKey: 'alpha', status: 'recoverable_orphan_data_replace', requiresConfirmation: true, message: 'alpha candidate', isCurrentIsolation: true },
     { isolationKey: 'beta', status: 'unrecoverable_no_base', requiresConfirmation: false, message: 'beta has no base', isCurrentIsolation: false },
   ]);
@@ -986,6 +986,26 @@ describe('DataMgmtPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it('mixed V2 仍需 checkpoint 收敛时展示稳定诊断且不提供清理或合并动作', async () => {
+    const { mount } = await mountDataMgmtPage('chat-data', {
+      decisionId: 'decision-convergence',
+      kind: 'blocked_checkpoint_convergence',
+      diagnosticCodes: ['v2_requires_checkpoint_convergence'],
+      allowedActions: ['noop', 'download_snapshots'],
+      createdAt: 1,
+    });
+
+    const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
+      .find(item => item.textContent?.includes('混合存储决议'))!;
+
+    expect(section.textContent).toContain('blocked_checkpoint_convergence');
+    expect(section.textContent).toContain('v2_requires_checkpoint_convergence');
+    expect(section.textContent).not.toContain('保留 V2 并清理 legacy');
+    expect(section.textContent).not.toContain('提交受限合并候选');
+    expect(section.textContent).toContain('导出 legacy/V2 快照');
+    mount.__resetAcuV2MountForTests();
+  });
+
   it('mixed 合并候选必须经两次确认，且页面将 decisionId 与固定 action 交给服务', async () => {
     const { mount, commitMixedDecision } = await mountDataMgmtPage('chat-data', {
       decisionId: 'decision-test',
@@ -1081,6 +1101,7 @@ describe('DataMgmtPage', () => {
       .find(button => button.textContent?.includes('诊断 V2 数据恢复'))!;
     diagnosticButton.click();
     await Promise.resolve();
+    await Promise.resolve();
     expect(prepareV2Recovery).toHaveBeenCalledTimes(1);
     const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
       .find(item => item.textContent?.includes('V2 数据恢复诊断'))!;
@@ -1116,6 +1137,7 @@ describe('DataMgmtPage', () => {
       .find(button => button.textContent?.includes('诊断 V2 数据恢复'))!;
     diagnosticButton.click();
     await Promise.resolve();
+    await Promise.resolve();
     expect(prepareV2Recovery).toHaveBeenCalledTimes(1);
     const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
       .find(item => item.textContent?.includes('V2 数据恢复诊断'))!;
@@ -1129,6 +1151,37 @@ describe('DataMgmtPage', () => {
     expect(URL.createObjectURL).not.toHaveBeenCalled();
     const warningToasts = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-toast--warning'));
     expect(warningToasts.at(-1)?.textContent).toContain('当前隔离标识没有可导出的 V2 恢复原始 frame 备份。');
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('temporary Sheet anchor 恢复诊断展示受影响 Sheet、位置与自动收敛入口', async () => {
+    const { mount, prepareV2Recovery } = await mountDataMgmtPage();
+    prepareV2Recovery.mockResolvedValueOnce({
+      planId: 'recovery-anchor-plan',
+      status: 'recoverable_temporary_sheet_anchor',
+      isolationKey: 'alpha',
+      sourceMessageIndex: 384,
+      affectedSheetKeys: ['sheet_global'],
+      compatibilityRepairs: [{
+        kind: 'temporary_sheet_anchor', sheetKey: 'sheet_global', messageIndex: 384, seq: 1, operationIndex: 0,
+        templateFingerprint: 'fingerprint', reason: 'missing_at_operation',
+      }],
+      requiresConfirmation: false,
+      message: '检测到历史回放依赖临时 Sheet 补锚（sheet_global，位置 #384/seq=1/op=0）；可通过 integrity_repair full checkpoint 自动收敛。',
+    });
+    const diagnosticButton = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(button => button.textContent?.includes('诊断 V2 数据恢复'))!;
+
+    diagnosticButton.click();
+    await new Promise(r => setTimeout(r, 0));
+    const section = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-data-mgmt-page__checkpoint-section'))
+      .find(item => item.textContent?.includes('V2 数据恢复诊断'))!;
+
+    expect(section.textContent).toContain('sheet_global');
+    expect(section.textContent).toContain('#384/seq=1/op=0');
+    expect(section.textContent).toContain('自动收敛');
+    expect(section.textContent).toContain('应用 Checkpoint 修复/收敛');
+    expect(section.textContent).not.toContain('确认无锚点 data_replace 恢复');
     mount.__resetAcuV2MountForTests();
   });
 

@@ -17,6 +17,7 @@ const mockReplaceDbSqlVariables = vi.fn((content: string) => content);
 const mockGetWorldBooks = vi.fn().mockResolvedValue([]);
 let mockCurrentJsonTableData: any = null;
 let mockSettings: any = {};
+const mockApplyContextTagFilters = vi.fn((content: string) => content);
 const mockResolvePreTakeoverSnapshot = vi.fn(async () => ({
   snapshot: { active: false, selectionSignature: '', createdAt: 0, books: {} },
   expectedSignature: 'signature:["Agent书"]',
@@ -62,7 +63,7 @@ vi.mock('../../../src/service/agent/agent-worldbook-takeover', () => ({
 }));
 
 vi.mock('../../../src/service/runtime/helpers-remaining', () => ({
-  applyContextTagFilters_ACU: vi.fn((c: string) => c),
+  applyContextTagFilters_ACU: (...args: any[]) => mockApplyContextTagFilters(...args),
 }));
 
 vi.mock('../../../src/service/runtime/template-vars/sql-query-var', () => ({
@@ -130,9 +131,7 @@ describe('formatTableForSqliteMode', () => {
     expect(result).toContain('CREATE TABLE inventory');
   });
 
-  it('传入 runtimeTableName 时把 DDL 表名重绑定为运行时物理名', () => {
-    // AI 必须看到真实的 runtime 表名（显示名拼音），否则会照抄 DDL 原文英文名，
-    // 生成的 SQL 打到不存在的表上 → no such table。
+  it('作者英文表名覆盖内部 runtime 名，供 AI 作为写入契约使用', () => {
     const table = {
       name: '主角信息',
       sourceData: {
@@ -142,9 +141,14 @@ describe('formatTableForSqliteMode', () => {
       content: [['row_id', 'character_name']],
       updateConfig: {},
     };
-    const result = formatTableForSqliteMode(table, 0, 'sheet_zhujue', null, { runtimeTableName: 'zhujuexinxi' });
-    expect(result).toContain('CREATE TABLE zhujuexinxi');
-    expect(result).not.toContain('protagonist_info');
+    const result = formatTableForSqliteMode(table, 0, 'sheet_zhujue', null, {
+      runtimeTableName: 'zhujuexinxi',
+      authoredTableName: 'protagonist_info',
+    });
+
+    expect(result).toContain('CREATE TABLE protagonist_info');
+    expect(result).not.toContain('CREATE TABLE zhujuexinxi');
+    expect(result).toContain('SQL 写入必须使用表名 protagonist_info；系统会在执行时映射到内部表。');
   });
 
   it('未传 runtimeTableName 时保持原 DDL 表名（向后兼容）', () => {
@@ -462,6 +466,73 @@ describe('prepareAIInput_ACU — 显式 tableData 模式', () => {
     expect(result!.tableDataText).not.toContain('全局表');
     expect(result!.tableDataText).not.toContain('全局值');
   });
+
+  it('if seed 使用本次填表消息范围内的全部 AI 上下文，不越界读取用户消息', async () => {
+    const explicitTableData = {
+      sheet_0: {
+        uid: 'sheet_0',
+        name: '显式表',
+        content: [['row_id', 'name']],
+        updateConfig: {},
+      },
+    };
+    const messages = [
+      { is_user: true, mes: '用户关键词不应进入 seed' },
+      { is_user: false, mes: '范围内 AI 第一层' },
+      { is_user: true, mes: '用户补充仍不应进入 seed' },
+      { is_user: false, mes: '范围内 AI 第二层' },
+    ];
+
+    const result = await prepareAIInput_ACU(messages, 'standard', null, { tableData: explicitTableData });
+
+    expect(result?.conditionalSeedContent).toBe('范围内 AI 第一层\n范围内 AI 第二层');
+    expect(result?.conditionalSeedContent).not.toContain('用户关键词');
+    expect(result?.messagesText).toContain('用户关键词不应进入 seed');
+  });
+
+  it('if seed 复用 $1 的 extract/exclude 过滤结果，被移除的 AI 关键词不进入 seed', async () => {
+    const explicitTableData = {
+      sheet_0: {
+        uid: 'sheet_0',
+        name: '显式表',
+        content: [['row_id', 'name']],
+        updateConfig: {},
+      },
+    };
+    // 模拟 extract/exclude 规则：AI 内容中的“被排除关键词”被过滤掉。
+    mockApplyContextTagFilters.mockImplementation((content: string) =>
+      content.replace(/被排除关键词/g, '').trim());
+    mockSettings.tableContextExtractTags = 'tag'; // 触发过滤分支
+    mockSettings.tableContextExtractRules = '';
+    mockSettings.tableContextExcludeTags = 'exclude';
+    mockSettings.tableContextExcludeRules = '';
+    const messages = [
+      { is_user: false, mes: '包含被排除关键词的 AI 内容' },
+    ];
+
+    const result = await prepareAIInput_ACU(messages, 'standard', null, { tableData: explicitTableData });
+
+    expect(result?.conditionalSeedContent).toBe('包含的 AI 内容');
+    expect(result?.conditionalSeedContent).not.toContain('被排除关键词');
+    expect(result?.messagesText).not.toContain('被排除关键词');
+  });
+
+  it('本次填表范围内没有 AI 消息时 conditionalSeedContent 为空字符串', async () => {
+    const explicitTableData = {
+      sheet_0: {
+        uid: 'sheet_0',
+        name: '显式表',
+        content: [['row_id', 'name']],
+        updateConfig: {},
+      },
+    };
+
+    const result = await prepareAIInput_ACU([], 'standard', null, { tableData: explicitTableData });
+
+    expect(result?.conditionalSeedContent).toBe('');
+    expect(result?.messagesText).toContain('(无最新对话内容)');
+  });
+
 
   it('SQLite prompt 明确标注 DDL 仅用于结构参考并禁止复制 CREATE', async () => {
     mockIsSqliteMode = true;

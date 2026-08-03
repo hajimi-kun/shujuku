@@ -154,8 +154,12 @@ import { cloneStrictPromptSegments_ACU } from './strict-json-table-fill';
         finalContent = replaceDbSqlVariables(finalContent);
 
         if (settings_ACU.promptTemplateSettings?.enabled !== false) {
+          // 填表条件必须与本次 $1 实际读取的 AI 上下文一致，不能越过批次边界读取聊天最新层。
+          const conditionalSeedContent = typeof dynamicContent?.conditionalSeedContent === 'string'
+            ? dynamicContent.conditionalSeedContent
+            : getLatestAIMessageContent_ACU();
           const templateContext = {
-            seedContent: getLatestAIMessageContent_ACU(),
+            seedContent: conditionalSeedContent,
             allTablesJson: currentJsonTableData_ACU,
             plotContent: lastPlotContent || ''
           };

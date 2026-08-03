@@ -151,6 +151,27 @@ describe('useTableTemplatePresets', () => {
     expect(applyTemplatePresetToCurrent_ACU).not.toHaveBeenCalled();
   });
 
+  it('聊天模板切换进行中拒绝第二次重入，不并发生成第二个协调请求', async () => {
+    const { useTableTemplatePresets, applyTemplatePresetToCurrent_ACU } = await importComposable();
+    const presets = useTableTemplatePresets();
+    let resolveFirst!: (value: any) => void;
+    applyTemplatePresetToCurrent_ACU.mockImplementationOnce(() => new Promise(resolve => {
+      resolveFirst = resolve;
+    }));
+
+    const first = presets.selectChatPreset('chat-A');
+    await vi.waitFor(() => expect(applyTemplatePresetToCurrent_ACU).toHaveBeenCalledOnce());
+    const second = presets.selectChatPreset('global-A');
+    await second;
+
+    expect(applyTemplatePresetToCurrent_ACU).toHaveBeenCalledOnce();
+    expect(presets.busy.value).toBe(true);
+
+    resolveFirst({ saved: true, mode: 'v2_commit' });
+    await first;
+    expect(presets.busy.value).toBe(false);
+  });
+
   it('聊天模板切换被破坏性变更阻断时，经明确确认后以 destructiveChangeConfirmed 重试', async () => {
     const { useTableTemplatePresets, dialog, applyTemplatePresetToCurrent_ACU } = await importComposable();
     const presets = useTableTemplatePresets();

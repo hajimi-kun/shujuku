@@ -103,6 +103,7 @@ beforeEach(() => {
   mockSettings.autoMergeEnabled = true;
   mockSettings.autoMergeThreshold = 5;
   mockSettings.autoMergeReserve = 0;
+  delete mockSettings.autoMergedOrder;
   mockCurrentJsonTableData.sheet_0.name = '纪要表';
   mockCurrentJsonTableData.sheet_0.content = [
     ['row_id', '事件', '时间', '状态'],
@@ -149,6 +150,14 @@ describe('checkAutoMergeTrigger_ACU', () => {
     // triggerThreshold = 5 + 3 = 8, summaryCount = 7 < 8
     const result = checkAutoMergeTrigger_ACU();
     expect(result.shouldTrigger).toBe(false);
+  });
+  it('autoMergedOrder 中的 row_id 不计入，普通 AM 行仍参与合并', () => {
+    mockSettings.autoMergedOrder = { sheet_0: ['1', '2', '3', '4', '5', '6'] };
+    mockCurrentJsonTableData.sheet_0.content[7][1] = 'AM-普通纪要';
+    const result = checkAutoMergeTrigger_ACU();
+    expect(result).toEqual({ shouldTrigger: false });
+    mockSettings.autoMergeThreshold = 1;
+    expect(checkAutoMergeTrigger_ACU()).toMatchObject({ shouldTrigger: true, mergeCount: 1, summaryCount: 1 });
   });
   it('已合并行不计入', () => {
     // 标记所有行为已合并
@@ -256,7 +265,8 @@ describe('executeAutoMergeBatch_ACU', () => {
     const promise = executeAutoMergeBatch_ACU(prepared, prepared.batches[0], []);
     for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(6000);
     const result = await promise;
-    expect(result.accumulatedSummary.length).toBeGreaterThan(0);
+    expect(result.accumulatedSummary).toHaveLength(1);
+    expect(result.accumulatedSummary[0]).toEqual(['8', '合并纪要', '', '']);
   }, 30000);
 
   it('AI 返回无效内容时抛出错误', async () => {
@@ -301,8 +311,8 @@ describe('finalizeAutoMerge_ACU', () => {
     mockRunTableUpdateCommit.mockClear();
 
     const accumulatedSummary = [
-      [null, '合并纪要1', 'auto_merged'],
-      [null, '合并纪要2', 'auto_merged'],
+      ['8', '合并纪要1', '', ''],
+      ['9', '合并纪要2', '', ''],
     ];
     const result = await finalizeAutoMerge_ACU(
       { summaryKey: 'sheet_0', endIndex: 3 } as any,
@@ -314,6 +324,9 @@ describe('finalizeAutoMerge_ACU', () => {
       targetSheetKeys: ['sheet_0'],
     }), expect.any(Function));
     expect(updateReadableLorebookEntry_ACU).toHaveBeenCalled();
+    expect(mockCurrentJsonTableData.sheet_0.content.slice(1, 3)).toEqual(accumulatedSummary);
+    expect(mockCurrentJsonTableData.sheet_0.content.slice(1).every((row: any[]) => row.length === 4)).toBe(true);
+    expect(mockSettings.autoMergedOrder.sheet_0).toEqual(['8', '9']);
   });
 });
 

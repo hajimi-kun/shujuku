@@ -21,7 +21,7 @@ import { getLatestTableAppendMessageIndexFromChat_ACU } from '../../../service/t
 import { enqueueSummaryVectorIndexFlush_ACU } from '../../../service/vector/summary-vector-index-flush-queue';
 import { getCurrentWorldbookConfig_ACU } from '../../../service/settings/settings-readers';
 import { runSqliteRuntimeMutationCommit_ACU, runTableUpdateCommit_ACU } from '../../../service/table/table-update-commit';
-import { getActiveStorageProvider } from '../../../service/table/table-storage-strategy';
+import { ensureStorageProviderReady_ACU, getActiveStorageProvider } from '../../../service/table/table-storage-strategy';
 import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../../shared/stable-row-id-allocator';
 
 /**
@@ -158,6 +158,24 @@ export function findTargetSheet(
     tableName: string,
 ): { sheet: any; sheetKey: string; englishTableName: string } | null {
     return findTargetSheetInData_ACU(currentJsonTableData_ACU, tableName);
+}
+
+/**
+ * 公共 CRUD 不能在 SQLite hydrate/reload 尚未发布 runtime 前，用过期快照解析表名。
+ * 写前加入现有 readiness flight，随后重新读取 canonical 数据并以 active provider
+ * 的 owner-aware mapper 解析目标。commit 内仍会再次检查 readiness 和 revision；
+ * 这里仅消除「还没等运行时就先找不到模板表」的时序窗口。
+ */
+async function prepareTableMutationTarget_ACU(
+    tableName: string,
+): Promise<{ sheet: any; sheetKey: string; englishTableName: string } | null> {
+    if (isSqliteMode()) {
+        await ensureStorageProviderReady_ACU();
+    }
+
+    const latestData = currentJsonTableData_ACU;
+    if (!latestData) return null;
+    return findTargetSheetInData_ACU(latestData, tableName);
 }
 
 /**
@@ -465,11 +483,6 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
     return {
         updateCell: async function(tableNameOrOptions: any, rowIndex?: any, colIdentifier?: any, value?: any) {
             try {
-                if (!currentJsonTableData_ACU) {
-                    logError_ACU('updateCell: No table data loaded.');
-                    return false;
-                }
-
                 const args = parseUpdateCellArgs_ACU(tableNameOrOptions, rowIndex, colIdentifier, value);
                 if (!args) return false;
                 const {
@@ -481,7 +494,7 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
                     skipNotify,
                 } = args;
 
-                const target = findTargetSheet(tableName);
+                const target = await prepareTableMutationTarget_ACU(tableName);
                 if (!target) {
                     logError_ACU(`updateCell: Table "${tableName}" not found.`);
                     return false;
@@ -623,11 +636,6 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
 
         updateRow: async function(tableNameOrOptions: any, rowIndex?: any, data?: any) {
             try {
-                if (!currentJsonTableData_ACU) {
-                    logError_ACU('updateRow: No table data loaded.');
-                    return false;
-                }
-
                 const args = parseUpdateRowArgs_ACU(tableNameOrOptions, rowIndex, data);
                 if (!args) return false;
                 const {
@@ -643,7 +651,7 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
                     return false;
                 }
 
-                const target = findTargetSheet(tableName);
+                const target = await prepareTableMutationTarget_ACU(tableName);
                 if (!target) {
                     logError_ACU(`updateRow: Table "${tableName}" not found.`);
                     return false;
@@ -777,11 +785,6 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
 
         insertRow: async function(tableNameOrOptions: any, data?: any) {
             try {
-                if (!currentJsonTableData_ACU) {
-                    logError_ACU('insertRow: No table data loaded.');
-                    return -1;
-                }
-
                 const args = parseInsertRowArgs_ACU(tableNameOrOptions, data);
                 if (!args) return -1;
                 const {
@@ -791,7 +794,7 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
                     skipNotify,
                 } = args;
 
-                const target = findTargetSheet(tableName);
+                const target = await prepareTableMutationTarget_ACU(tableName);
                 if (!target) {
                     logError_ACU(`insertRow: Table "${tableName}" not found.`);
                     return -1;
@@ -919,11 +922,6 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
 
         deleteRow: async function(tableNameOrOptions: any, rowIndex?: any) {
             try {
-                if (!currentJsonTableData_ACU) {
-                    logError_ACU('deleteRow: No table data loaded.');
-                    return false;
-                }
-
                 const args = parseDeleteRowArgs_ACU(tableNameOrOptions, rowIndex);
                 if (!args) return false;
                 const {
@@ -938,7 +936,7 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
                     return false;
                 }
 
-                const target = findTargetSheet(tableName);
+                const target = await prepareTableMutationTarget_ACU(tableName);
                 if (!target) {
                     logError_ACU(`deleteRow: Table "${tableName}" not found.`);
                     return false;

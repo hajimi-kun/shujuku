@@ -3,7 +3,7 @@ import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU, _set_currentJsonT
 import { getLatestV2FullCheckpointMessageIndex_ACU, getLatestV2SheetReplayMessageIndex_ACU } from '../table/table-history';
 import { ensureLegacyStorageMigratedBeforeWrite_ACU } from '../table/table-service';
 import { persistTableMutationLogBatchV2_ACU } from '../table/storage-frame-v2-persist';
-import { loadTableStateFromFramesV2_ACU } from '../table/storage-frame-v2-replay';
+import { loadTableStateFromFramesV2Detailed_ACU } from '../table/storage-frame-v2-replay';
 import { reloadStorageProvider } from '../table/table-storage-strategy';
 import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
 import { isSqliteMode } from '../table/storage-mode';
@@ -231,9 +231,9 @@ export function replaceVisualizerTemporaryRowIds_ACU(state: any, insertedRowIds:
 }
 
 async function refreshVisualizerRuntimeFromReplay_ACU(isolationKey: string): Promise<void> {
-    const replayedData = await loadTableStateFromFramesV2_ACU(getChatArray_ACU(), isolationKey);
-    if (!replayedData) throw new Error('V2 replay 未产生表格数据，已阻止刷新运行时。');
-    _set_currentJsonTableData_ACU(replayedData);
+    const replay = await loadTableStateFromFramesV2Detailed_ACU(getChatArray_ACU(), isolationKey);
+    if (!replay) throw new Error('V2 replay 未产生表格数据，已阻止刷新运行时。');
+    _set_currentJsonTableData_ACU(replay.data);
     if (isSqliteMode()) await reloadStorageProvider();
 }
 
@@ -266,16 +266,19 @@ export async function applyVisualizerPendingDataOps_ACU(state: any): Promise<{ s
         }
         // afterData must be ops(V2 replay base). Runtime snapshots can carry seedRows /
         // type drift / unrelated fields and falsely fail batch candidate validation.
-        const replayBase = await loadTableStateFromFramesV2_ACU(chat, isolationKey, { updateRuntimeState: false });
-        if (!replayBase) {
+        const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, { updateRuntimeState: false });
+        if (!replay) {
             return { success: false, changed: false, error: 'V2 replay 未产生表格数据，已阻止可视化编辑器保存。' };
+        }
+        if (replay.requiresCheckpointConvergence || replay.compatibilityRepairs?.length) {
+            return { success: false, changed: false, error: '当前 V2 回放仍依赖临时 Sheet 补锚，请先在数据管理中完成恢复收敛，再使用可视化编辑器保存。' };
         }
         const result = await runTableWriteTransaction_ACU({
             source: 'manual_crud',
             reason: 'visualizer_save_v2_replay',
             isolationKey,
             writeSet,
-            initialData: replayBase,
+            initialData: replay.data,
         }, async (transactionContext, workingData) => {
             if (!workingData) throw new Error('运行时表格数据为空，已阻止可视化编辑器保存。');
             const data = workingData as any;

@@ -546,6 +546,18 @@ const save = useVisualizerSave({
       confirmVariant: "primary",
     });
   },
+  requestSchemaMigrationChoice(summary) {
+    return dialogStore.choose({
+      title: "确认历史列对应关系",
+      message: `${summary.message}。选择只绑定当前模板草稿；草稿变化后必须重新选择。`,
+      actions: summary.choices.map(choice => ({
+        value: choice.id,
+        label: choice.label,
+        variant: "primary" as const,
+      })),
+      cancelLabel: "取消保存",
+    });
+  },
   confirmDestructiveSchemaChange(summary) {
     const details = summary.sheets.map(sheet => {
       const columns = sheet.droppedColumns

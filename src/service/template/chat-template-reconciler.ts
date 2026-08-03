@@ -4,6 +4,7 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
 import { getSheetColumnProjection_ACU, parseDDLColumnInfos_ACU, parseDDLTableConstraints_ACU, parseDDLTableName, parseDDLTableSuffix_ACU, parseDDLSafeDefaultLiteral_ACU, validateDDLTextAgainstHeaders_ACU } from '../../shared/ddl-utils';
 import type { TemplateSheetChange_ACU } from '../table/storage-frame-v2-persist';
 import { hydrateTableDataStrict_ACU } from '../table/sqlite-template-validation';
+import { normalizeTemplateRowIds_ACU } from './template-row-id-normalizer';
 import type { StorageMode } from '../../shared/table-storage-provider';
 
 export interface ChatTemplateReconcileInput_ACU {
@@ -56,22 +57,29 @@ export interface ChatTemplateReconcilePlan_ACU {
  */
 export async function reconcileChatTemplate_ACU(input: ChatTemplateReconcileInput_ACU): Promise<ChatTemplateReconcilePlan_ACU> {
   const baselineData = clone_ACU(input.baselineData);
-  const templateData = clone_ACU(input.templateData);
+  const rawTemplateData = clone_ACU(input.templateData);
   const blockers: string[] = [];
   const deletedSheetKeys: string[] = [];
   const hiddenSheetKeys: string[] = [];
   const audit: ChatTemplateReconcileAudit_ACU[] = [];
+  const normalization = normalizeTemplateRowIds_ACU(rawTemplateData, {
+    syncDdl: input.storageMode !== 'native',
+    rejectCrossSourceDuplicateRowIds: false,
+    validateExistingDdl: false,
+  });
+  if (normalization.blockers.length > 0) {
+    return emptyPlan_ACU(baselineData, audit, normalization.blockers.map(item => item.message));
+  }
+  const templateData = normalization.templateData;
   const candidateData = stripRuntimeSeedRows_ACU(baselineData);
   candidateData.mate = clone_ACU(templateData.mate || baselineData.mate);
-  for (const [key, sheet] of listSheets_ACU(templateData)) {
-    normalizeTemplateSheetRowIdColumn_ACU(sheet, key, blockers, input.storageMode !== 'native');
-  }
-  if (blockers.length > 0) return emptyPlan_ACU(baselineData, audit, blockers);
   for (const [key, sheet] of listSheets_ACU(baselineData)) {
     try { validateBaselineSheetRows_ACU(sheet); } catch (error: any) { blockers.push(`当前聊天表「${sheet.name || key}」历史数据无效：${error?.message || String(error)}`); }
   }
   const baselineByName = indexSheetsByName_ACU(baselineData, '当前聊天', blockers);
   const templateByName = indexSheetsByName_ACU(templateData, '导入模板', blockers);
+  validateTableAliasDeclarations_ACU(baselineData, '当前聊天', blockers);
+  validateTableAliasDeclarations_ACU(templateData, '导入模板', blockers);
   if (blockers.length > 0) return emptyPlan_ACU(baselineData, audit, blockers);
 
   const matchedKeys = new Set<string>();
@@ -84,6 +92,14 @@ export async function reconcileChatTemplate_ACU(input: ChatTemplateReconcileInpu
       continue;
     }
     let previous = matchedByName;
+    if (!previous) {
+      const aliasMatches = findExplicitTableAliasMatches_ACU(templateEntry.sheet, baselineData);
+      if (aliasMatches.length > 1) {
+        blockers.push(`表「${templateEntry.sheet.name || templateEntry.key}」的显式历史别名同时匹配多张当前聊天表，无法唯一协调。`);
+        continue;
+      }
+      previous = aliasMatches[0];
+    }
     // 早期内置模板曾在保持稳定 key 的同时混用“主角信息”与“主角信息表”。
     // 兼容范围绑定已知稳定 key 与明确名称对，禁止把任意“名称/名称表”推断成同一张用户表。
     if (!previous && occupiedByKey && areLegacyEquivalentSheetNames_ACU(templateEntry.key, occupiedByKey.name, templateEntry.sheet.name)) {
@@ -153,15 +169,36 @@ export async function reconcileChatTemplate_ACU(input: ChatTemplateReconcileInpu
   }
   candidateData.mate = clone_ACU(candidateData.mate);
   if (input.storageMode !== 'native') {
-    try {
-      for (const [key, sheet] of listSheets_ACU(candidateData)) {
+    for (const [key, sheet] of listSheets_ACU(candidateData)) {
+      try {
         const validation = validateDDLTextAgainstHeaders_ACU(String(sheet.sourceData?.ddl || ''), headers_ACU(sheet));
-        if (!validation.valid) throw new Error(`${key}: ${validation.message}`);
-        getSheetColumnProjection_ACU(sheet);
+        if (validation.valid) continue;
+        return emptyPlan_ACU(baselineData, audit, [
+          `完整 replay candidate DDL/表头预检失败: ${key}: ${validation.message}`,
+        ]);
+      } catch (error: any) {
+        return emptyPlan_ACU(baselineData, audit, [
+          `完整 replay candidate DDL/表头预检失败: ${key}: ${error?.message || String(error)}`,
+        ]);
       }
+    }
+
+    for (const [key, sheet] of listSheets_ACU(candidateData)) {
+      try {
+        getSheetColumnProjection_ACU(sheet);
+      } catch (error: any) {
+        return emptyPlan_ACU(baselineData, audit, [
+          `完整 replay candidate 列投影预检失败: ${key}: ${error?.message || String(error)}`,
+        ]);
+      }
+    }
+
+    try {
       await hydrateTableDataStrict_ACU(candidateData);
     } catch (error: any) {
-      return emptyPlan_ACU(baselineData, audit, [`完整 replay candidate SQLite hydrate 失败: ${error?.message || String(error)}`]);
+      return emptyPlan_ACU(baselineData, audit, [
+        `完整 replay candidate SQLite hydrate 失败: ${error?.message || String(error)}`,
+      ]);
     }
   }
   for (const key of deletedSheetKeys) audit.find(item => item.sheetKey === key)?.operations.push({ kind: 'delete' });
@@ -216,6 +253,66 @@ function indexSheetsByName_ACU(data: TableDataObject_ACU, label: string, blocker
   return entries;
 }
 
+/**
+ * tableAliases 是显式身份声明。它可以和同表的当前名称重合，但不能被另一张
+ * 表的当前名称或历史别名占用；否则后续 SQL/AI 路由会扩大写入目标。
+ */
+function validateTableAliasDeclarations_ACU(data: TableDataObject_ACU, label: string, blockers: string[]): void {
+  const ownerByIdentity = new Map<string, SheetEntry_ACU>();
+  for (const entry of listSheets_ACU(data).map(([key, sheet]) => ({ key, sheet }))) {
+    const identities = [entry.sheet.name, ...getExplicitTableAliases_ACU(entry.sheet)];
+    for (const identity of identities) {
+      const canonical = canonicalizeDisplayName_ACU(identity);
+      if (!canonical) continue;
+      const owner = ownerByIdentity.get(canonical);
+      if (!owner) {
+        ownerByIdentity.set(canonical, entry);
+        continue;
+      }
+      if (owner.key !== entry.key) {
+        blockers.push(`${label}表别名规范化重复：「${owner.sheet.name || owner.key}」与「${entry.sheet.name || entry.key}」都声明了「${String(identity).trim()}」。`);
+      }
+    }
+  }
+}
+
+function getExplicitTableAliases_ACU(sheet: Sheet_ACU): string[] {
+  const raw = (sheet.sourceData as unknown as Record<string, unknown> | undefined)?.tableAliases;
+  if (!Array.isArray(raw)) return [];
+  return raw.map(value => String(value ?? '').trim()).filter(Boolean);
+}
+
+function findExplicitTableAliasMatches_ACU(template: Sheet_ACU, baselineData: TableDataObject_ACU): SheetEntry_ACU[] {
+  const aliases = new Set(getExplicitTableAliases_ACU(template).map(canonicalizeDisplayName_ACU).filter(Boolean));
+  if (aliases.size === 0) return [];
+  return listSheets_ACU(baselineData)
+    .map(([key, sheet]) => ({ key, sheet }))
+    .filter(entry => {
+      const identities = [entry.sheet.name, ...getExplicitTableAliases_ACU(entry.sheet)]
+        .map(canonicalizeDisplayName_ACU);
+      return identities.some(identity => aliases.has(identity));
+    });
+}
+
+function accumulateTableAliases_ACU(sheet: Sheet_ACU, before: Sheet_ACU, template: Sheet_ACU): void {
+  if (!sheet.sourceData || typeof sheet.sourceData !== 'object') sheet.sourceData = {} as Sheet_ACU['sourceData'];
+  const currentName = canonicalizeDisplayName_ACU(sheet.name);
+  const aliases = [
+    ...getExplicitTableAliases_ACU(before),
+    ...getExplicitTableAliases_ACU(template),
+    before.name,
+  ];
+  const seen = new Set<string>();
+  const normalized = aliases.filter(alias => {
+    const canonical = canonicalizeDisplayName_ACU(alias);
+    if (!canonical || canonical === currentName || seen.has(canonical)) return false;
+    seen.add(canonical);
+    return true;
+  });
+  if (normalized.length > 0) sheet.sourceData.tableAliases = normalized;
+  else delete sheet.sourceData.tableAliases;
+}
+
 function areLegacyEquivalentSheetNames_ACU(sheetKey: string, left: unknown, right: unknown): boolean {
   const knownAliases = new Map<string, ReadonlySet<string>>([
     ['sheet_DpKcVGqg', new Set(['主角信息', '主角信息表'])],
@@ -231,38 +328,6 @@ function headers_ACU(sheet: Sheet_ACU): string[] {
   const headers = sheet?.content?.[0];
   if (!Array.isArray(headers) || headers[0] !== 'row_id') throw new Error('缺少 row_id 首列表头。');
   return headers.map(value => String(value ?? ''));
-}
-
-/**
- * 仅作用于模板侧 sheet：缺失 row_id 首列时自动注入（表头 + 顺序行号 + row_id PRIMARY KEY DDL 兜底）；
- * row_id 错位（出现在非首列）或 content 结构非法则记录带表名/key 的 blocker，绝不裸抛。
- */
-function normalizeTemplateSheetRowIdColumn_ACU(sheet: Sheet_ACU, sheetKey: string, blockers: string[], syncDdl: boolean): void {
-  const label = `表「${sheet?.name || sheetKey}」(${sheetKey})`;
-  const content = sheet?.content;
-  if (!Array.isArray(content) || !Array.isArray(content[0])) {
-    blockers.push(`${label} content 结构非法，无法解析表头。`);
-    return;
-  }
-  const headers = content[0];
-  if (headers[0] === 'row_id') return;
-  if (headers.some(name => String(name ?? '') === 'row_id')) {
-    blockers.push(`${label} 的 row_id 列不在首列，无法自动修复，请调整模板列顺序。`);
-    return;
-  }
-  content[0] = ['row_id', ...headers.map(value => String(value ?? ''))];
-  for (let index = 1; index < content.length; index += 1) {
-    if (!Array.isArray(content[index])) { blockers.push(`${label} 第 ${index + 1} 行不是数组。`); return; }
-    content[index] = [String(index), ...content[index].map((value: any) => (value === null ? null : String(value ?? '')))];
-  }
-  const ddl = syncDdl ? String(sheet.sourceData?.ddl || '').trim() : '';
-  if (ddl) {
-    const tableName = parseDDLTableName(ddl);
-    if (tableName && !/\brow_id\b/i.test(ddl)) {
-      if (!sheet.sourceData || typeof sheet.sourceData !== 'object') sheet.sourceData = {} as any;
-      sheet.sourceData.ddl = ddl.replace(/\(/, '(\n  row_id INTEGER PRIMARY KEY,');
-    }
-  }
 }
 
 /**
@@ -390,6 +455,7 @@ function reconcileMatchedSheetNative_ACU(before: Sheet_ACU, template: Sheet_ACU,
     delete sheet.sourceData.hiddenPhysicalColumns;
     delete sheet.sourceData.columnAliases;
   }
+  accumulateTableAliases_ACU(sheet, before, template);
   validateBaselineSheetRows_ACU(sheet);
   const meta = buildPersistentMetadataUpdate_ACU(before, sheet);
   const beforeProjection = clone_ACU(before); delete beforeProjection.seedRows;
@@ -590,6 +656,7 @@ function reconcileMatchedSheet_ACU(before: Sheet_ACU, template: Sheet_ACU, sheet
     renamedColumns,
     new Set([...effectiveTargetColumns, ...retainedHiddenColumns].map(column => column.sqlName.toLowerCase())),
   );
+  accumulateTableAliases_ACU(sheet, before, template);
   delete sheet.seedRows;
   const meta = buildPersistentMetadataUpdate_ACU(before, sheet);
   const beforeProjection = clone_ACU(before); delete beforeProjection.seedRows;

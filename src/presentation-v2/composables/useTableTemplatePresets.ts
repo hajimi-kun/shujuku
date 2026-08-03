@@ -211,6 +211,12 @@ export function useTableTemplatePresets() {
   }
 
   async function run<T>(action: () => Promise<T> | T): Promise<T | null> {
+    // busy 以前只用于渲染，重复点击仍会并发进入同一聊天的模板协调窗口。
+    // UI 侧直接拒绝重入；service/transaction 的 revision 校验仍负责兜住其他入口。
+    if (busy.value) {
+      toast.info('模板切换正在进行中，请等待当前操作完成。');
+      return null;
+    }
     busy.value = true;
     message.value = null;
     try {

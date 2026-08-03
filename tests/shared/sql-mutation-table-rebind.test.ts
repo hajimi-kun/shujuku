@@ -69,6 +69,29 @@ describe('sql mutation table rebind', () => {
     expect(result).toBe('INSERT INTO missing_table VALUES (1)');
   });
 
+  it('严格写入模式在执行前拒绝未知目标表与关联表', () => {
+    expect(() => rebindSqlMutationTableReferences_ACU(
+      ['INSERT INTO missing_table VALUES (1)'],
+      new Map([['known', 'runtime_known']]),
+      { requireKnownTables: true },
+    )).toThrow('无法识别的目标表「missing_table」');
+    expect(() => rebindSqlMutationTableReferences_ACU(
+      ['UPDATE known SET row_id = row_id WHERE EXISTS (SELECT 1 FROM missing_table)'],
+      new Map([['known', 'runtime_known']]),
+      { requireKnownTables: true },
+    )).toThrow('无法识别的关联表「missing_table」');
+  });
+
+  it('严格写入模式仍允许已知表的 CTE，并重绑定真实表引用', () => {
+    const [result] = rebindSqlMutationTableReferences_ACU(
+      ['WITH known AS (SELECT 1 AS row_id) UPDATE old_target SET row_id = row_id WHERE row_id IN (SELECT row_id FROM known)'],
+      new Map([['old_target', 'runtime_target']]),
+      { requireKnownTables: true },
+    );
+    expect(result).toContain('UPDATE runtime_target');
+    expect(result).toContain('FROM known');
+  });
+
   it('只读查询重绑定表和单表列名，且不触碰字面量与注释', () => {
     const result = rebindSqlReadIdentifiers_ACU(
       "SELECT item_name, inventory_count, 'inventory' /* inventory */ FROM inventory WHERE item_name = '铁剑' -- inventory",
@@ -140,6 +163,61 @@ describe('sql mutation table rebind', () => {
 
     expect(cte.sql).toBe('WITH items AS (SELECT physical_item AS item_name FROM runtime_inventory) SELECT item_name FROM items');
     expect(derived.sql).toBe('SELECT sub.item_name FROM runtime_other JOIN (SELECT physical_item AS item_name FROM runtime_inventory) AS sub ON 1 = 1');
+  });
+
+  it('将派生表和 CTE 输出视为虚拟列，而不是实体列别名', () => {
+    const aliases = new Map([['people', 'runtime_people'], ['other', 'runtime_other']]);
+    const columns = new Map([
+      ['runtime_people', new Map([['姓名', 'physical_name']])],
+      ['runtime_other', new Map([['姓名', 'other_name']])],
+    ]);
+    const derived = rebindSqlReadIdentifiers_ACU(
+      'SELECT 姓名, d.姓名 FROM other JOIN (SELECT physical_name AS 姓名 FROM people) AS d ON 1 = 1 ORDER BY 姓名',
+      aliases,
+      columns,
+    );
+    const cte = rebindSqlReadIdentifiers_ACU(
+      'WITH people_view(姓名) AS (SELECT physical_name FROM people) SELECT 姓名 FROM people_view ORDER BY 姓名',
+      aliases,
+      columns,
+    );
+
+    expect(derived.sql).toBe('SELECT 姓名, d.姓名 FROM runtime_other JOIN (SELECT physical_name AS 姓名 FROM runtime_people) AS d ON 1 = 1 ORDER BY 姓名');
+    expect(cte.sql).toBe('WITH people_view(姓名) AS (SELECT physical_name FROM runtime_people) SELECT 姓名 FROM people_view ORDER BY 姓名');
+  });
+
+  it('以 UNION 第一分支的输出别名保护派生表外层引用', () => {
+    const result = rebindSqlReadIdentifiers_ACU(
+      'SELECT d.姓名 FROM (SELECT name_a AS 姓名 FROM first_source UNION ALL SELECT name_b AS 别名 FROM second_source) AS d ORDER BY d.姓名',
+      new Map([['first_source', 'runtime_first'], ['second_source', 'runtime_second']]),
+      new Map([
+        ['runtime_first', new Map([['姓名', 'name_a']])],
+        ['runtime_second', new Map([['别名', 'name_b']])],
+      ]),
+    );
+
+    expect(result.sql).toBe('SELECT d.姓名 FROM (SELECT name_a AS 姓名 FROM runtime_first UNION ALL SELECT name_b AS 别名 FROM runtime_second) AS d ORDER BY d.姓名');
+  });
+
+  it('在输出别名排序及未知派生输出场景保守地保留列标识符', () => {
+    const aliases = new Map([['people', 'runtime_people'], ['other', 'runtime_other']]);
+    const columns = new Map([
+      ['runtime_people', new Map([['姓名', 'physical_name']])],
+      ['runtime_other', new Map([['姓名', 'other_name']])],
+    ]);
+    const outputAlias = rebindSqlReadIdentifiers_ACU(
+      'SELECT physical_name AS 姓名 FROM people ORDER BY 姓名',
+      aliases,
+      columns,
+    );
+    const unknownDerived = rebindSqlReadIdentifiers_ACU(
+      'SELECT 姓名, d.姓名 FROM other JOIN (SELECT * FROM people) AS d ON 1 = 1',
+      aliases,
+      columns,
+    );
+
+    expect(outputAlias.sql).toBe('SELECT physical_name AS 姓名 FROM runtime_people ORDER BY 姓名');
+    expect(unknownDerived.sql).toBe('SELECT 姓名, d.姓名 FROM runtime_other JOIN (SELECT * FROM runtime_people) AS d ON 1 = 1');
   });
 
   it('不将函数名视为列标识符', () => {

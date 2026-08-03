@@ -181,6 +181,61 @@ describe('rebindSqlMutationTableIdentifiers_ACU · 模板别名补充', () => {
     expect(rebound).toContain('zhujuexinxibiao');
     expect(rebound).not.toContain('protagonist_info');
   });
+
+  it('将显式 tableAliases、sheetKey、uid 和显示名重绑定到同一物理表', () => {
+    const aliasTemplate = {
+      ...templateData,
+      sheet_zhujue: {
+        ...templateData.sheet_zhujue,
+        sourceData: { ...templateData.sheet_zhujue.sourceData, tableAliases: ['主角信息'] },
+      },
+    } as any;
+
+    for (const alias of ['sheet_zhujue', 'protagonist', '主角信息表', '主角信息']) {
+      const [rebound] = rebindSqlMutationTableIdentifiers_ACU(
+        [`UPDATE ${alias} SET name = '阿不思' WHERE row_id = 1`],
+        aliasTemplate,
+        null,
+        { requireKnownTables: true },
+      );
+      expect(rebound).toContain('UPDATE zhujuexinxibiao');
+    }
+  });
+
+  it('按共享别名注册表将 SQL 表名分类为权威 sheetKey', () => {
+    const aliasTemplate = {
+      ...templateData,
+      sheet_zhujue: {
+        ...templateData.sheet_zhujue,
+        sourceData: { ...templateData.sheet_zhujue.sourceData, tableAliases: ['主角信息'] },
+      },
+    } as any;
+
+    expect(buildSqlSheetBatchOperations_ACU(
+      ["UPDATE 主角信息 SET name = '阿不思' WHERE row_id = 1"],
+      aliasTemplate,
+    ).classifiedSheetKeys).toEqual(['sheet_zhujue']);
+  });
+
+  it('AI 严格写入重绑定拒绝未知或冲突的作者 DDL 名，不保留原 SQL 交给 SQLite 猜测', () => {
+    expect(() => rebindSqlMutationTableIdentifiers_ACU(
+      ['INSERT INTO missing_contract (row_id, name) VALUES (1, \'不应写入\')'],
+      templateData,
+      null,
+      { requireKnownTables: true },
+    )).toThrow('无法识别的目标表「missing_contract」');
+
+    const conflictingTemplate = {
+      ...templateData,
+      sheet_duplicate: { ...templateData.sheet_zhujue, uid: 'duplicate', name: '重复表' },
+    } as any;
+    expect(() => rebindSqlMutationTableIdentifiers_ACU(
+      ['INSERT INTO protagonist_info (row_id, name) VALUES (1, \'不应写入\')'],
+      conflictingTemplate,
+      null,
+      { requireKnownTables: true },
+    )).toThrow('无法识别的目标表「protagonist_info」');
+  });
 });
 
 
@@ -390,18 +445,49 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
     expect(mockCurrentJsonTableData).toBeNull();
   });
 
-  it('generation 链不接受 replay 专属 sheetKey 或 uid alias', async () => {
+  it('generation 链将 sheetKey 和 uid alias 重绑定到权威物理表', async () => {
     const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
     inputSnapshot.sheet_0.uid = 'inventory_uid';
 
     const sheetKeyResult = await applySqlEditsToTableDataSnapshot_ACU('UPDATE sheet_0 SET quantity = 9 WHERE row_id = 1;', inputSnapshot);
     const uidResult = await applySqlEditsToTableDataSnapshot_ACU('UPDATE inventory_uid SET quantity = 9 WHERE row_id = 1;', inputSnapshot);
 
-    expect(sheetKeyResult.success).toBe(false);
-    expect(sheetKeyResult.error).toMatch(/no such table: sheet_0/i);
-    expect(uidResult.success).toBe(false);
-    expect(uidResult.error).toMatch(/no such table: inventory_uid/i);
+    expect(sheetKeyResult.success).toBe(true);
+    expect(sheetKeyResult.modifiedKeys).toEqual(['sheet_0']);
+    expect(uidResult.success).toBe(true);
+    expect(uidResult.modifiedKeys).toEqual(['sheet_0']);
     expect(inputSnapshot.sheet_0.content).toEqual([['row_id', 'item_name', 'quantity'], ['1', '铁剑', '3']]);
+  });
+
+  it('严格单表范围下拒绝显式未知 SQL 表名，不能回退映射到唯一目标表', async () => {
+    const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+
+    const result = await applySqlEditsToTableDataSnapshot_ACU(
+      'UPDATE missing_contract SET quantity = 9 WHERE row_id = 1;',
+      inputSnapshot,
+      'auto_standard',
+      { targetSheetKeys: ['sheet_0'], requireSheetScopedOperations: true, allowSingleTargetFallback: true },
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('无法识别的目标表「missing_contract」');
+    expect(inputSnapshot.sheet_0.content).toEqual([['row_id', 'item_name', 'quantity'], ['1', '铁剑', '3']]);
+  });
+
+  it('构建 V2 SQL operation 时不把显式未知表名归属给唯一回退目标', () => {
+    const result = buildSqlSheetBatchOperations_ACU(
+      ['UPDATE missing_contract SET quantity = 9 WHERE row_id = 1'],
+      snapshotTableData,
+      {
+        fallbackTargetSheetKeys: ['sheet_0'],
+        allowSingleTargetFallback: true,
+        keepLegacyForUnclassified: true,
+      },
+    );
+
+    expect(result.classifiedSheetKeys).toEqual([]);
+    expect(result.unknownStatements).toEqual(['UPDATE missing_contract SET quantity = 9 WHERE row_id = 1']);
+    expect(result.operations).toEqual([{ kind: 'sql_batch', statements: ['UPDATE missing_contract SET quantity = 9 WHERE row_id = 1'] }]);
   });
 
   it('SQL 失败时返回错误且不污染输入快照与全局状态', async () => {
@@ -1321,6 +1407,7 @@ describe('SqlTableService', () => {
         templateStr: JSON.stringify(chat === originalChat ? originalTemplate : switchedTemplate),
       }));
 
+      mockGetEffectiveSeedRows.mockReturnValue([]);
       const capturedScope = captureSqlTableApplyScope_ACU({ chat: originalChat, isolationKey: 'scope-a' });
       // 模拟 AI await 期间全局聊天已切到 chat-b。若提交仍走隐式全局 fallback，
       // memory_summary 不会建表，下面的 INSERT 会以 no such table 失败。

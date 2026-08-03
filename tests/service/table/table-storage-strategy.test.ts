@@ -6,7 +6,7 @@
  * 验证 initStorageProvider/switchStorageMode/reloadStorageProvider 的编排逻辑
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { _resetTableWriteTransactionLocksForTest_ACU, runTableWriteTransaction_ACU } from '../../../src/service/table/table-write-transaction';
+import { _resetTableWriteTransactionLocksForTest_ACU, captureTableRuntimeRevisionForWriteSet_ACU, runTableWriteTransaction_ACU } from '../../../src/service/table/table-write-transaction';
 
 // ═══════════════════════════════════════════════════════════════
 // Mock 设置
@@ -45,6 +45,7 @@ let nativeReloadStarted: (() => void) | null = null;
 let allCreatedProviders: Array<ReturnType<typeof createMockProvider>> = [];
 
 function createMockProvider(mode: 'native' | 'sqlite') {
+  let currentData: any = { mate: {} };
   const provider = {
     mode,
     loadFromChat: vi.fn(async () => {
@@ -60,10 +61,11 @@ function createMockProvider(mode: 'native' | 'sqlite') {
       }
       return { loaded: true, source: 'merged' as const };
     }),
-    loadFromData: vi.fn(async () => {
+    loadFromData: vi.fn(async (data?: any) => {
       if (mode === 'sqlite' && sqliteLoadShouldThrow) {
         throw sqliteLoadShouldThrow;
       }
+      currentData = data || null;
       if (mode === 'sqlite') {
         return { ...sqliteLoadResult };
       }
@@ -71,7 +73,7 @@ function createMockProvider(mode: 'native' | 'sqlite') {
     }),
     saveToChat: vi.fn().mockResolvedValue({ saved: true }),
     isReady: vi.fn().mockReturnValue(true),
-    getCurrentData: vi.fn().mockReturnValue({ mate: {} }),
+    getCurrentData: vi.fn(() => currentData),
     applyEdits: vi.fn().mockReturnValue({ success: true, modifiedKeys: [], appliedEdits: 1 }),
     executeQuery: vi.fn(),
     executeMutation: vi.fn(),
@@ -385,6 +387,33 @@ describe('table-storage-strategy', () => {
   // reloadStorageProvider
   // ═══════════════════════════════════════════════════════════════
   describe('reloadStorageProvider', () => {
+    it('重载前后 canonical 数据一致时不推进 RuntimeRevision', async () => {
+      mockStorageMode = 'sqlite';
+      mockLoadOrCreateJsonTableFromChatHistory.mockResolvedValue({ loaded: true, source: 'merged', data: { mate: {}, sheet_0: { content: [['row_id'], ['1']] } } });
+      await initStorageProvider();
+      const before = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }]);
+
+      await reloadStorageProvider();
+
+      const after = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }]);
+      expect(after).toBe(before);
+    });
+
+    it('重载替换了 canonical 数据时只推进一次 RuntimeRevision', async () => {
+      mockStorageMode = 'sqlite';
+      mockLoadOrCreateJsonTableFromChatHistory.mockResolvedValue({ loaded: true, source: 'merged', data: { mate: {}, sheet_0: { content: [['row_id'], ['1']] } } });
+      await initStorageProvider();
+      const before = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }]);
+      mockLoadOrCreateJsonTableFromChatHistory.mockResolvedValue({ loaded: true, source: 'merged', data: { mate: {}, sheet_0: { content: [['row_id'], ['1'], ['2']] } } });
+
+      await reloadStorageProvider();
+
+      const after = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }]);
+      expect(after).not.toBe(before);
+      const afterSecondCapture = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }]);
+      expect(afterSecondCapture).toBe(after);
+    });
+
     it('native 模式重新加载', async () => {
       mockStorageMode = 'native';
       await initStorageProvider();
@@ -479,6 +508,52 @@ describe('table-storage-strategy', () => {
       await writerStarted.promise;
       await writer;
       expect(events).toEqual(['reload:end', 'writer:start']);
+    });
+
+    it('readiness 请求复用活跃 reload 航班，不基于旧 ready provider 提前放行', async () => {
+      const releaseReload = deferred_ACU();
+      const reloadStarted = deferred_ACU();
+      nativeReloadGate = releaseReload.promise;
+      nativeReloadStarted = () => reloadStarted.resolve();
+
+      const oldProvider = getActiveStorageProvider();
+      const reload = reloadStorageProvider();
+      await reloadStarted.promise;
+
+      let readinessSettled = false;
+      const readiness = ensureStorageProviderReady_ACU().then((provider) => {
+        readinessSettled = true;
+        return provider;
+      });
+      await Promise.resolve();
+
+      expect(readinessSettled).toBe(false);
+      expect(getActiveStorageProvider()).toBe(oldProvider);
+
+      releaseReload.resolve();
+      const [loadResult, readyProvider] = await Promise.all([reload, readiness]);
+      expect(loadResult).toMatchObject({ ok: true, degraded: false });
+      expect(readyProvider).toBe(getActiveStorageProvider());
+      expect(readyProvider).not.toBe(oldProvider);
+    });
+
+    it('等待活跃 reload readiness 时可取消，且不会取消全局 reload 航班', async () => {
+      const releaseReload = deferred_ACU();
+      const reloadStarted = deferred_ACU();
+      nativeReloadGate = releaseReload.promise;
+      nativeReloadStarted = () => reloadStarted.resolve();
+
+      const reload = reloadStorageProvider();
+      await reloadStarted.promise;
+      const controller = new AbortController();
+      const readiness = ensureStorageProviderReady_ACU({ signal: controller.signal });
+
+      controller.abort();
+      await expect(readiness).rejects.toMatchObject({ name: 'AbortError' });
+
+      releaseReload.resolve();
+      await expect(reload).resolves.toMatchObject({ ok: true, degraded: false });
+      expect(getStorageRuntimeHealth_ACU().status).toBe('ready');
     });
 
     it('排他 reload 不复用锁外初始化航班，并丢弃旧候选', async () => {

@@ -25,6 +25,7 @@ import { SCRIPT_ID_PREFIX_ACU } from '../../../shared/constants';
 import { escapeHtml_ACU } from '../../../shared/html-helpers';
 import { topLevelWindow_ACU } from '../../../shared/env';
 import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../../shared/utils';
+import { startRuntimePerformanceSpan_ACU } from '../../../shared/runtime-performance';
 import { executeContentOptimization_ACU } from '../../components/optimization-ui';
 import { maybeLiftWorldbookSuppression_ACU } from '../../../service/runtime/helpers-remaining';
 import { triggerAutomaticUpdateIfNeeded_ACU } from './settings-ui-trigger';
@@ -202,10 +203,24 @@ import { evaluateNewMessageAction_ACU } from '../../../service/runtime/message-h
     );
     clearTimeout(newMessageDebounceTimer_ACU);
     _set_newMessageDebounceTimer_ACU(setTimeout(async () => {
+      const performanceSpan = startRuntimePerformanceSpan_ACU('new-message-pipeline', {
+        settings: settings_ACU,
+        metrics: { source: eventType },
+      });
+      const performanceContext = { runId: performanceSpan.id, parentSpanId: performanceSpan.id };
+      try {
       // [健全性] 如果用户已经开始对话，则解除"开场白阶段世界书注入抑制"
       try { maybeLiftWorldbookSuppression_ACU(); } catch (e) {}
 
-      await loadAllChatMessages_ACU();
+      const loadSpan = startRuntimePerformanceSpan_ACU('new-message-load-chat', {
+        ...performanceContext,
+        settings: settings_ACU,
+      });
+      try {
+        await loadAllChatMessages_ACU();
+      } finally {
+        loadSpan.end();
+      }
 
       const liveChat = getChatArray_ACU();
 
@@ -230,7 +245,7 @@ import { evaluateNewMessageAction_ACU } from '../../../service/runtime/message-h
               logDebug_ACU('[正文优化] 并行模式已启用，正文优化与填表将同时进行...');
               await Promise.all([
                   executeContentOptimization_ACU(result.lastMessageIndex!),
-                  triggerAutomaticUpdateIfNeeded_ACU()
+                  triggerAutomaticUpdateIfNeeded_ACU(performanceContext)
               ]);
               break;
 
@@ -241,12 +256,15 @@ import { evaluateNewMessageAction_ACU } from '../../../service/runtime/message-h
 
           case 'optimize_then_update':
               await executeContentOptimization_ACU(result.lastMessageIndex!);
-              await triggerAutomaticUpdateIfNeeded_ACU();
+              await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
               break;
 
           case 'update_only':
-              await triggerAutomaticUpdateIfNeeded_ACU();
+              await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
               break;
+      }
+      } finally {
+        performanceSpan.end({ messageCount: getChatArray_ACU()?.length || 0 });
       }
     }, NEW_MESSAGE_DEBOUNCE_DELAY_ACU));
   }

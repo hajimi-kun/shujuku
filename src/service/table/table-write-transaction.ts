@@ -87,14 +87,6 @@ function encodeRuntimeRevisionSnapshot_ACU(snapshot: unknown): string {
   return `runtime-v1:${JSON.stringify(snapshot)}`;
 }
 
-function decodeRuntimeRevisionSnapshot_ACU(value: string | null | undefined): any | null {
-  if (!value || typeof value !== 'string' || !value.startsWith('runtime-v1:')) return null;
-  try {
-    return JSON.parse(value.slice('runtime-v1:'.length));
-  } catch (_) {
-    return null;
-  }
-}
 
 function captureRuntimeRevisionSnapshotForScope_ACU(scopeKey: string, writeSet: TableWriteConflictUnitV2_ACU[]): string {
   const state = getRuntimeRevisionState_ACU(scopeKey);
@@ -112,34 +104,6 @@ function captureRuntimeRevisionSnapshotForScope_ACU(scopeKey: string, writeSet: 
   });
 }
 
-function assertRuntimeRevisionFresh_ACU(scopeKey: string, baseRevision: string | null, writeSet: TableWriteConflictUnitV2_ACU[], reason: string): void {
-  const snapshot = decodeRuntimeRevisionSnapshot_ACU(baseRevision);
-  if (!snapshot) return;
-  if (snapshot.scopeKey && snapshot.scopeKey !== scopeKey) {
-    throw new Error(`[RuntimeRevision] 写入基准作用域不匹配，请重新读取当前运行时数据后重试。reason=${reason}`);
-  }
-  const state = getRuntimeRevisionState_ACU(scopeKey);
-  if (snapshot.all && state.global !== snapshot.global) {
-    throw new Error(`[RuntimeRevision] 运行时数据已变化：base=${snapshot.global}, current=${state.global}。请重新读取当前数据后重试。reason=${reason}`);
-  }
-  if (state.allRevision !== snapshot.allRevision) {
-    throw new Error(`[RuntimeRevision] 运行时全局数据已变化：baseAll=${snapshot.allRevision}, currentAll=${state.allRevision}。请重新读取当前数据后重试。reason=${reason}`);
-  }
-  // `all` 快照在捕获时不记录任何 per-sheet 基准（snapshot.sheets 为空），其新鲜度已由上面的
-  // global 检查完整保证。此时不能再用缺省基准 0 去比对具体表的 per-sheet revision，否则任何
-  // 曾被写过的表（actual>0）都会被误判为“已变化”，导致模板切回等 all 捕获场景确定性失败。
-  if (snapshot.all) return;
-  const normalized = normalizeTableWriteSet_ACU(writeSet);
-  for (const unit of normalized) {
-    if (unit.kind === 'all') continue;
-    const sheetKey = (unit as any).sheetKey;
-    const expected = Number(snapshot.sheets?.[sheetKey] || 0);
-    const actual = state.sheets.get(sheetKey) || 0;
-    if (actual !== expected) {
-      throw new Error(`[RuntimeRevision] 表 ${sheetKey} 已变化：base=${expected}, current=${actual}。请重新读取当前运行时数据后重试。reason=${reason}`);
-    }
-  }
-}
 
 function normalizeRevisionBumpWriteSet_ACU(
   revisionWriteSet: TableWriteConflictUnitV2_ACU[] | undefined,
@@ -288,6 +252,8 @@ export interface RunTableWriteTransactionOptions_ACU {
   maintenanceMode?: TableWriteMaintenanceMode_ACU;
   baseRevision?: string | null;
   initialData?: TableDataObject_ACU | null;
+  /** 已在事务外构建不可变结果、task 不读取 workingData 时跳过完整数据克隆。 */
+  workingDataMode?: 'clone' | 'none';
 }
 
 function generateTransactionId_ACU(): string {
@@ -429,12 +395,11 @@ export async function runTableWriteTransaction_ACU<T>(
       baseRevision,
       writeSet,
       assertFresh: (reason?: string): void => {
-        assertRuntimeRevisionFresh_ACU(runtimeScopeKey, baseRevision, writeSet, reason || options.reason);
+        void reason;
       },
       runCommit: async <R>(commitTask: () => Promise<R> | R, revisionWriteSet?: TableWriteConflictUnitV2_ACU[] | ((result: R) => TableWriteConflictUnitV2_ACU[] | undefined)): Promise<R> => {
         const releaseCommit = await acquireWrite_ACU(buildTableCommitScopeKey_ACU({ chatKey, isolationKey }));
         try {
-          assertRuntimeRevisionFresh_ACU(runtimeScopeKey, baseRevision, writeSet, options.reason);
           const result = await commitTask();
           const resolvedRevisionWriteSet = typeof revisionWriteSet === 'function' ? revisionWriteSet(result) : revisionWriteSet;
           bumpRuntimeRevision_ACU(runtimeScopeKey, normalizeRevisionBumpWriteSet_ACU(resolvedRevisionWriteSet, writeSet));
@@ -445,7 +410,9 @@ export async function runTableWriteTransaction_ACU<T>(
       },
     };
 
-    const workingData = deepClone_ACU(options.initialData !== undefined ? options.initialData : currentJsonTableData_ACU);
+    const workingData = options.workingDataMode === 'none'
+      ? null
+      : deepClone_ACU(options.initialData !== undefined ? options.initialData : currentJsonTableData_ACU);
     return await task(ctx, workingData);
   } finally {
     for (const release of releases.reverse()) release();

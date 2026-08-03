@@ -60,6 +60,14 @@ export interface SheetSourceData_ACU {
    */
   hiddenPhysicalColumns?: string[];
   /**
+   * 表的历史/约定名称。所有名称都显式指向当前这张表，用于 AI、SQL 与
+   * 调度快照在表改名或稳定 sheetKey 重分配后恢复同一表身份。
+   *
+   * 这是可审计的声明而非模糊匹配：任一名称被多张表声明时，路由必须拒绝，
+   * 不能猜测目标表或扩大写入权限。
+   */
+  tableAliases?: string[];
+  /**
    * 列的历史显示名声明：physical column name → 曾用过的显示名列表。
    *
    * 列身份以 canonical 显示名为准；改名后 canonical 不再相等，靠该声明认回同一列，

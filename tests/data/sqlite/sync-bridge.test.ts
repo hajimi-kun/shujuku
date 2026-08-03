@@ -404,6 +404,35 @@ describe('SyncBridge', () => {
       expect(engine.getTableNames()).not.toContain('sheet_broken');
     });
 
+    it('strict hydrate 只修复精确 auto_merged 尾列并保留调用方快照', () => {
+      const legacySheet = makeSheet({
+        name: '纪要表',
+        content: [
+          ['row_id', '物品名称', '数量', '描述'],
+          ['1', '历史纪要', '1', '旧数据', 'auto_merged'],
+        ],
+      });
+      const data = makeTableData({ sheet_3NoMc1wI: legacySheet });
+      const before = structuredClone(data);
+      const tableName = getRuntimeTableName(data, 'sheet_3NoMc1wI');
+
+      expect(() => bridge.loadFromTableData(data, { strict: true })).not.toThrow();
+      expect(data).toEqual(before);
+      expect(engine.query(`SELECT item_name FROM ${tableName};`).values).toEqual([['历史纪要']]);
+    });
+
+    it('strict hydrate 继续拒绝非目标宽度异常', () => {
+      const invalidSheet = makeSheet({
+        name: '纪要表',
+        content: [['row_id', '物品名称', '数量', '描述'], ['1', '坏行', '1', '旧数据', 'manual']],
+      });
+      const data = makeTableData({ sheet_3NoMc1wI: invalidSheet });
+
+      expect(() => bridge.loadFromTableData(data, { strict: true })).toThrow('row_width_mismatch');
+      expect(engine.getTableNames()).not.toContain(getRuntimeTableName(data, 'sheet_3NoMc1wI'));
+    });
+
+
     it('strict hydrate 在同一快照内 row_id 重复时 fail closed，不覆盖既有行', () => {
       const duplicatedRowSheet = makeSheet({
         content: [

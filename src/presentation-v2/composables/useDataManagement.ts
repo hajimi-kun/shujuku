@@ -399,10 +399,10 @@ export function useDataManagement() {
     }
   }
 
-  function scanV2IsolationDiagnostics(): void {
+  async function scanV2IsolationDiagnostics(): Promise<void> {
     busyAction.value = 'scan-v2-isolation-diagnostics';
     try {
-      v2IsolationDiagnostics.value = scanV2IsolationDiagnostics_ACU();
+      v2IsolationDiagnostics.value = await scanV2IsolationDiagnostics_ACU();
       if (v2IsolationDiagnostics.value.length === 0) {
         toast.warning('当前聊天不存在 V2 storage frame，无法生成隔离域恢复诊断。');
       } else {
@@ -417,15 +417,17 @@ export function useDataManagement() {
     }
   }
 
-  function prepareV2Recovery(): void {
+  async function prepareV2Recovery(): Promise<void> {
     busyAction.value = 'prepare-v2-recovery';
     try {
-      v2RecoverySummary.value = prepareV2Recovery_ACU();
+      v2RecoverySummary.value = await prepareV2Recovery_ACU();
       const summary = v2RecoverySummary.value;
       if (summary.status === 'recoverable_repaired_checkpoint') {
         toast.warning('检测到可修复的 V2 full checkpoint。请先导出原始 frame 备份，再确认提交。', { muteable: false, durationMs: 6000 });
       } else if (summary.status === 'recoverable_orphan_data_replace') {
         toast.warning('检测到无锚点 data_replace。该恢复必须经过两次明确确认。', { muteable: false, durationMs: 6000 });
+      } else if (summary.status === 'recoverable_temporary_sheet_anchor') {
+        toast.warning('检测到历史回放依赖临时 Sheet 补锚。请提交恢复，将兼容状态固化为 integrity_repair checkpoint。', { muteable: false, durationMs: 6000 });
       } else {
         toast.warning(summary.message, { muteable: false, durationMs: 6000 });
       }

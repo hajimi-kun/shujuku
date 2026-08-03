@@ -233,4 +233,71 @@ describe('mixed-storage-evidence', () => {
       { sheetKey: 'sheet_0', lastReplayMessageIndex: 1, lastReplayAiFloor: 2, lastChangedAiFloor: 2 },
     ]);
   });
+
+  it('真实缺表回放会暴露 temporary anchor 与待收敛状态，不能只报告 fingerprint success', async () => {
+    const template = {
+      mate: { type: 'acu', version: 1 },
+      sheet_global: {
+        uid: 'global_state',
+        name: '全局数据表',
+        content: [['row_id', 'prev_scene_time', 'elapsed_time', 'cur_time'], ['99', '模板示例', '0分', '模板时间']],
+        sourceData: { ddl: 'CREATE TABLE global_state (row_id INTEGER PRIMARY KEY, prev_scene_time TEXT, elapsed_time TEXT, cur_time TEXT);' },
+        updateConfig: {}, exportConfig: {}, orderNo: 1,
+      },
+    } as any;
+    const checkpointData = { mate: { type: 'acu', version: 1 }, sheet_0: sheet('背包') } as any;
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_ScopedConfig: {
+        version: 1,
+        template: { '': { mode: 'chat_override', isolationKey: '', templateStr: JSON.stringify(template) } },
+      },
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: checkpointData },
+            logEntries: [{
+              seq: 1,
+              entryId: 'missing-global-sheet-384',
+              createdAt: 2,
+              source: 'manual_crud',
+              targetMessageIndex: 0,
+              aiFloor: 1,
+              filledSheetKeys: ['sheet_global'],
+              changedSheetKeys: ['sheet_global'],
+              groupKeys: [],
+              operations: [{
+                kind: 'sql_sheet_batch',
+                sheetKey: 'sheet_global',
+                tableName: 'quanjushujubiao',
+                statements: ["INSERT INTO quanjushujubiao (row_id, prev_scene_time, elapsed_time, cur_time) VALUES (1, '2026-08-07 00:15', '5分', '2026-08-07 00:20')"],
+                reason: 'system',
+              }],
+            }],
+          },
+        },
+      },
+    }];
+
+    const evidence = await collectMixedStorageEvidence_ACU({
+      chat,
+      isolationKey: '',
+      isolationConfig: { enabled: false, code: '' },
+      legacyCandidateData: checkpointData,
+    });
+
+    expect(evidence.v2.replay).toEqual(expect.objectContaining({
+      status: 'success',
+      requiresCheckpointConvergence: true,
+      compatibilityRepairs: [expect.objectContaining({
+        kind: 'temporary_sheet_anchor', sheetKey: 'sheet_global', messageIndex: 0, seq: 1, operationIndex: 0,
+      })],
+    }));
+    expect(evidence.v2.replay.data?.sheet_global.content).toEqual([
+      ['row_id', 'prev_scene_time', 'elapsed_time', 'cur_time'],
+      ['1', '2026-08-07 00:15', '5分', '2026-08-07 00:20'],
+    ]);
+  });
 });

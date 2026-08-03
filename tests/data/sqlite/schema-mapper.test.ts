@@ -550,6 +550,28 @@ describe('generateInserts', () => {
     ]);
   });
 
+  it('ASCII 展示表头按 DDL 注释映射到物理列生成 INSERT', () => {
+    const sheet = makeSheet({
+      uid: 'battle_status',
+      sourceData: {
+        note: '', initNode: '', deleteNode: '', updateNode: '', insertNode: '',
+        ddl: `CREATE TABLE battle_status (
+  row_id INTEGER PRIMARY KEY, -- 行号
+  hp_rp TEXT, -- HP/RP
+  en TEXT -- EN
+);`,
+      },
+      content: [
+        ['row_id', 'HP/RP', 'EN'],
+        ['1', '10/20', '8'],
+      ],
+    });
+
+    expect(generateInserts(sheet, 'battle_status')).toEqual([
+      "INSERT INTO battle_status (row_id, hp_rp, en) VALUES (1, '10/20', 8);",
+    ]);
+  });
+
   it('缺少有 DEFAULT 的新增列时省略该 INSERT 列以保留 SQL 默认值', () => {
     const sheet = makeSheet({
       sourceData: {
@@ -834,6 +856,19 @@ describe('validateDDLAgainstHeaders', () => {
     const result = validateDDLAgainstHeaders(ddl, ['row_id', '物品名称', '数量', '描述/效果']);
     expect(result.valid).toBe(true);
     expect(result.mismatches).toHaveLength(0);
+  });
+
+  it('ASCII 展示表头可通过精确 DDL 注释校验', () => {
+    const ddl = `CREATE TABLE battle_status (
+      row_id INTEGER PRIMARY KEY, -- 行号
+      hp_rp TEXT, -- HP/RP
+      en TEXT -- EN
+    );`;
+
+    const result = validateDDLAgainstHeaders(ddl, ['row_id', 'HP/RP', 'EN']);
+
+    expect(result.valid).toBe(true);
+    expect(result.mismatches).toEqual([]);
   });
 
   it('宽松 DDL 不因缺少 NOT NULL/UNIQUE/CHECK 等业务约束而失败', () => {

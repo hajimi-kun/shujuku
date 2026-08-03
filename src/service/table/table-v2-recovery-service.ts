@@ -8,12 +8,12 @@ import { repairTableDataFromAudit_ACU, type UpgradeIdRemap_ACU } from './table-d
 import { getCurrentStorageMode } from './storage-mode';
 import { isV2TagData_ACU } from './storage-strategy-resolver';
 import { didSqliteFallbackAfterReload_ACU, reloadStorageProvider } from './table-storage-strategy';
-import { loadTableStateFromFramesV2_ACU } from './storage-frame-v2-replay';
+import { loadTableStateFromFramesV2Detailed_ACU, type TableReplayCompatibilityRepairV2_ACU } from './storage-frame-v2-replay';
 import type { TableMutationOperationV2_ACU, TablePatchV2_ACU, TableStorageFrameV2_ACU, TableV2RecoveryBackup_ACU } from './storage-frame-v2-types';
 import { runTableWriteTransaction_ACU } from './table-write-transaction';
 
-type RecoveryKind_ACU = 'repaired_full_checkpoint' | 'confirmed_orphan_data_replace';
-export type V2RecoveryStatus_ACU = 'recoverable_repaired_checkpoint' | 'recoverable_orphan_data_replace' | 'unrecoverable_no_base' | 'unrecoverable';
+type RecoveryKind_ACU = 'repaired_full_checkpoint' | 'confirmed_orphan_data_replace' | 'temporary_sheet_anchor_convergence';
+export type V2RecoveryStatus_ACU = 'recoverable_repaired_checkpoint' | 'recoverable_orphan_data_replace' | 'recoverable_temporary_sheet_anchor' | 'unrecoverable_no_base' | 'unrecoverable';
 export type V2RecoveryCommitStatus_ACU = 'committed' | 'committed_postcondition_failed' | 'commit_failed_rolled_back';
 
 export interface V2RecoveryCommitResult_ACU {
@@ -31,6 +31,8 @@ export interface V2RecoverySummary_ACU {
   status: V2RecoveryStatus_ACU;
   isolationKey: string;
   sourceMessageIndex?: number;
+  affectedSheetKeys?: string[];
+  compatibilityRepairs?: TableReplayCompatibilityRepairV2_ACU[];
   requiresConfirmation: boolean;
   message: string;
 }
@@ -171,7 +173,16 @@ function createPlan_ACU(plan: Omit<RecoveryPlan_ACU, 'planId'>): V2RecoverySumma
   }
   const planId = buildPlanId_ACU();
   plans_ACU.set(planId, { ...plan, planId });
-  return { planId, status: plan.status, isolationKey: plan.isolationKey, sourceMessageIndex: plan.sourceMessageIndex, requiresConfirmation: plan.requiresConfirmation, message: plan.message };
+  return {
+    planId,
+    status: plan.status,
+    isolationKey: plan.isolationKey,
+    sourceMessageIndex: plan.sourceMessageIndex,
+    ...(plan.affectedSheetKeys?.length ? { affectedSheetKeys: clone_ACU(plan.affectedSheetKeys) } : {}),
+    ...(plan.compatibilityRepairs?.length ? { compatibilityRepairs: clone_ACU(plan.compatibilityRepairs) } : {}),
+    requiresConfirmation: plan.requiresConfirmation,
+    message: plan.message,
+  };
 }
 function getPlanSourceFrame_ACU(plan: RecoveryPlan_ACU): TableStorageFrameV2_ACU | null {
   if (!Number.isInteger(plan.sourceMessageIndex)) return null;
@@ -215,9 +226,13 @@ function buildRecoveredCandidateChat_ACU(plan: RecoveryPlan_ACU): any[] {
   return candidateChat;
 }
 async function validateRecoveredCandidateReplay_ACU(plan: RecoveryPlan_ACU, candidateChat: any[]): Promise<void> {
-  const replayedData = await loadTableStateFromFramesV2_ACU(candidateChat, plan.isolationKey, { updateRuntimeState: false });
-  if (!replayedData) throw new Error('恢复候选未产生可回放表数据。');
-  if (getTableDataFingerprint_ACU(replayedData) !== getTableDataFingerprint_ACU(plan.candidateData)) {
+  const replay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, plan.isolationKey, {
+    updateRuntimeState: false,
+    compatibilityMode: 'disabled',
+  });
+  if (!replay) throw new Error('恢复候选未产生可回放表数据。');
+  if (replay.requiresCheckpointConvergence || replay.compatibilityRepairs?.length) throw new Error('恢复候选仍依赖临时 Sheet 补锚。');
+  if (getTableDataFingerprint_ACU(replay.data) !== getTableDataFingerprint_ACU(plan.candidateData)) {
     throw new Error('恢复候选 replay 结果与修复数据不一致。');
   }
 }
@@ -238,13 +253,49 @@ function findOrphanDataReplace_ACU(frame: TableStorageFrameV2_ACU): TableDataObj
   }
   return candidate;
 }
-function diagnoseV2Recovery_ACU(chat: any[], isolationKey: string): V2RecoveryDiagnosis_ACU {
+async function diagnoseV2Recovery_ACU(chat: any[], isolationKey: string): Promise<V2RecoveryDiagnosis_ACU> {
   const frames = getFrames_ACU(chat, isolationKey);
   if (frames.length === 0) return { summary: { status: 'unrecoverable_no_base', isolationKey, requiresConfirmation: false, message: '当前隔离标识不存在 V2 storage frame。' } };
   const latestFull = [...frames].reverse().find(item => item.frame.checkpoint?.kind === 'full');
   if (latestFull?.frame.checkpoint) {
     const repair = repairCandidate_ACU(latestFull.frame.checkpoint.data);
-    if (repair.status === 'clean') return { summary: { status: 'unrecoverable', isolationKey, sourceMessageIndex: latestFull.messageIndex, requiresConfirmation: false, message: '最新 full checkpoint 已通过完整性审计，无需恢复。' } };
+    if (repair.status === 'clean') {
+      let replay;
+      try {
+        replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, { updateRuntimeState: false });
+      } catch (error) {
+        return { summary: { status: 'unrecoverable', isolationKey, sourceMessageIndex: latestFull.messageIndex, requiresConfirmation: false, message: `full checkpoint 虽通过静态审计，但完整回放失败：${getErrorMessage_ACU(error)}` } };
+      }
+      if (replay?.requiresCheckpointConvergence && replay.compatibilityRepairs?.length) {
+        const source = frames[frames.length - 1];
+        const repairedSheetKeys = [...new Set(replay.compatibilityRepairs.map(item => item.sheetKey))];
+        const repairPositions = replay.compatibilityRepairs.map(item => `#${item.messageIndex}/seq=${item.seq}/op=${item.operationIndex}`).join('、');
+        const summary: V2RecoverySummary_ACU = {
+          status: 'recoverable_temporary_sheet_anchor', isolationKey, sourceMessageIndex: source.messageIndex,
+          affectedSheetKeys: repairedSheetKeys,
+          compatibilityRepairs: clone_ACU(replay.compatibilityRepairs),
+          requiresConfirmation: false,
+          message: `检测到历史回放依赖临时 Sheet 补锚（${repairedSheetKeys.join('、')}，位置 ${repairPositions}）；可通过 integrity_repair full checkpoint 自动收敛。`,
+        };
+        return { summary, plan: {
+          ...summary, kind: 'temporary_sheet_anchor_convergence', chat,
+          chatKey: String(currentChatFileIdentifier_ACU || '').trim(),
+          sourceFrameFingerprint: getFrameFingerprint_ACU(source.frame), candidateData: replay.data,
+        } };
+      }
+      const isTemplateFallbackRoot = latestFull.frame.checkpoint.fallbackProvenance?.kind === 'manual_refill_template_root';
+      return {
+        summary: {
+          status: 'unrecoverable',
+          isolationKey,
+          sourceMessageIndex: latestFull.messageIndex,
+          requiresConfirmation: false,
+          message: isTemplateFallbackRoot
+            ? '最新 full checkpoint 是可正常回放的手动重填模板临时根；无需完整性恢复，后续边界 compaction 会将其固化为正式 checkpoint。'
+            : '最新 full checkpoint 已通过完整性审计，无需恢复。',
+        },
+      };
+    }
     if (!repair.candidateData) return { summary: { status: 'unrecoverable', isolationKey, sourceMessageIndex: latestFull.messageIndex, requiresConfirmation: false, message: '最新 full checkpoint 不可无损自动修复；请先导出原始 frame。' } };
     if (hasReplayArtifactsAfterCheckpoint_ACU(latestFull.frame) || hasLaterReplayArtifacts_ACU(frames, latestFull.messageIndex)) {
       const ambiguity = findAmbiguousRowIdReference_ACU(frames, latestFull.messageIndex, repair.idRemap);
@@ -268,7 +319,7 @@ function diagnoseV2Recovery_ACU(chat: any[], isolationKey: string): V2RecoveryDi
   }
   return { summary: { status: 'unrecoverable_no_base', isolationKey, requiresConfirmation: false, message: '仅检测到无 base 的 V2 日志；无法编造恢复数据。' } };
 }
-export function scanV2IsolationDiagnostics_ACU(chat: any[] = getChatArray_ACU()): V2IsolationDiagnostic_ACU[] {
+export async function scanV2IsolationDiagnostics_ACU(chat: any[] = getChatArray_ACU()): Promise<V2IsolationDiagnostic_ACU[]> {
   const isolationKeys = new Set<string>();
   for (const message of chat) {
     if (message?.is_user) continue;
@@ -279,12 +330,16 @@ export function scanV2IsolationDiagnostics_ACU(chat: any[] = getChatArray_ACU())
     }
   }
   const currentIsolationKey = getCurrentIsolationKey_ACU();
-  return [...isolationKeys].map(isolationKey => ({ ...diagnoseV2Recovery_ACU(chat, isolationKey).summary, isCurrentIsolation: isolationKey === currentIsolationKey }));
+  const diagnostics = await Promise.all([...isolationKeys].map(async isolationKey => ({
+    ...(await diagnoseV2Recovery_ACU(chat, isolationKey)).summary,
+    isCurrentIsolation: isolationKey === currentIsolationKey,
+  })));
+  return diagnostics;
 }
-export function prepareV2Recovery_ACU(options: { chat?: any[]; isolationKey?: string } = {}): V2RecoverySummary_ACU {
+export async function prepareV2Recovery_ACU(options: { chat?: any[]; isolationKey?: string } = {}): Promise<V2RecoverySummary_ACU> {
   const chat = options.chat || getChatArray_ACU();
   const isolationKey = options.isolationKey ?? getCurrentIsolationKey_ACU();
-  const diagnosis = diagnoseV2Recovery_ACU(chat, isolationKey);
+  const diagnosis = await diagnoseV2Recovery_ACU(chat, isolationKey);
   return diagnosis.plan ? createPlan_ACU(diagnosis.plan) : diagnosis.summary;
 }
 

@@ -7,6 +7,8 @@ async function importTrigger() {
   const showCustomConfirm_ACU = vi.fn();
   const showToastr_ACU = vi.fn(() => ({ find: vi.fn(() => ({ text: vi.fn() })) }));
   const orchestrateManualUpdate_ACU = vi.fn();
+  const processUpdatesBatch_ACU = vi.fn();
+  const executeCardUpdateCore_ACU = vi.fn();
   const resetManualUpdateButton_ACU = vi.fn();
   const clear = vi.fn();
 
@@ -44,16 +46,27 @@ async function importTrigger() {
   vi.doMock('../../../src/presentation/triggers/settings-ui-sync', () => ({ collectManualExtraHint_ACU: vi.fn() }));
   vi.doMock('../../../src/presentation/components/pipeline-ui-helpers', () => ({ refreshMergedDataAndNotifyWithUI_ACU: vi.fn(async () => undefined) }));
   vi.doMock('../../../src/service/table/update-orchestrator', () => ({
-    processUpdatesBatch_ACU: vi.fn(),
-    executeCardUpdateCore_ACU: vi.fn(),
+    processUpdatesBatch_ACU,
+    executeCardUpdateCore_ACU,
     orchestrateManualUpdate_ACU,
   }));
   vi.doMock('../../../src/service/table/table-history', () => ({
     collectV2CheckpointFloorsFromChat_ACU: vi.fn(() => [{ messageIndex: 0, aiFloor: 1, reason: 'init' }]),
   }));
 
-  const { handleManualUpdate_ACU } = await import('../../../src/presentation/triggers/update-process');
-  return { handleManualUpdate_ACU, showCustomConfirm_ACU, showToastr_ACU, orchestrateManualUpdate_ACU, clear, resetManualUpdateButton_ACU };
+  const { handleManualUpdate_ACU, proceedWithCardUpdate_ACU, processUpdates_ACU } = await import('../../../src/presentation/triggers/update-process');
+  return {
+    handleManualUpdate_ACU,
+    proceedWithCardUpdate_ACU,
+    processUpdates_ACU,
+    showCustomConfirm_ACU,
+    showToastr_ACU,
+    orchestrateManualUpdate_ACU,
+    processUpdatesBatch_ACU,
+    executeCardUpdateCore_ACU,
+    clear,
+    resetManualUpdateButton_ACU,
+  };
 }
 
 beforeEach(() => {
@@ -114,3 +127,47 @@ describe('handleManualUpdate_ACU destructive refill confirmation', () => {
   });
 });
 
+
+describe('update error toast ownership', () => {
+  it('直接执行单次更新失败时由 proceedWithCardUpdate 显示一次错误', async () => {
+    const { proceedWithCardUpdate_ACU, executeCardUpdateCore_ACU, showToastr_ACU } = await importTrigger();
+    executeCardUpdateCore_ACU.mockResolvedValue({ success: false, modifiedKeys: [], error: '单次失败' });
+
+    const result = await proceedWithCardUpdate_ACU([{ is_user: false, mes: 'AI' }]);
+
+    expect(result.success).toBe(false);
+    expect(showToastr_ACU.mock.calls.filter(call => call[0] === 'error')).toEqual([
+      ['error', '更新失败: 单次失败'],
+    ]);
+  });
+
+  it('批处理失败时内部 proceed 不报错，由 processUpdates 最外层只显示一次', async () => {
+    const { processUpdates_ACU, processUpdatesBatch_ACU, executeCardUpdateCore_ACU, showToastr_ACU } = await importTrigger();
+    executeCardUpdateCore_ACU.mockResolvedValue({ success: false, modifiedKeys: [], error: '内部失败' });
+    processUpdatesBatch_ACU.mockImplementation(async (_indices: number[], _mode: string, _options: any, executeUpdate: any) => {
+      const inner = await executeUpdate([{ is_user: false, mes: 'AI' }], 1, 'auto_standard', false, ['sheet_0'], null, {
+        currentBatch: 1,
+        totalBatches: 1,
+        batchBaseSnapshot: {},
+      });
+      expect(inner.success).toBe(false);
+      return { success: false, failedBatches: [0], error: '批处理失败' };
+    });
+
+    const result = await processUpdates_ACU([1], 'auto');
+
+    expect(result.success).toBe(false);
+    expect(showToastr_ACU.mock.calls.filter(call => call[0] === 'error')).toEqual([
+      ['error', '批处理失败'],
+    ]);
+  });
+
+  it('批处理静默内部失败仍只由最外层输出一次最终错误', async () => {
+    const { processUpdates_ACU, processUpdatesBatch_ACU, showToastr_ACU } = await importTrigger();
+    processUpdatesBatch_ACU.mockResolvedValue({ success: false, failedBatches: [0], error: '静默批失败' });
+
+    await processUpdates_ACU([1], 'auto');
+
+    expect(showToastr_ACU.mock.calls.filter(call => call[0] === 'error')).toEqual([['error', '静默批失败']]);
+  });
+});

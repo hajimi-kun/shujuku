@@ -7,6 +7,7 @@ import { repairTableDataFromAudit_ACU, type RepairResult_ACU } from './table-dat
 
 export type MixedStorageDecisionKind_ACU =
   | 'blocked_replay_unavailable'
+  | 'blocked_checkpoint_convergence'
   | 'blocked_legacy_requires_confirmation'
   | 'equivalent_provenance_verified'
   | 'v2_successor_verified'
@@ -16,6 +17,7 @@ export type MixedStorageDecisionKind_ACU =
 export type MixedStorageDecisionAction_ACU = 'keep_v2' | 'commit_merge_candidate' | 'download_snapshots' | 'noop';
 export type MixedStorageDecisionDiagnosticCode_ACU =
   | 'v2_replay_unavailable'
+  | 'v2_requires_checkpoint_convergence'
   | 'legacy_requires_confirmation'
   | 'scope_isolation_mismatch'
   | 'provenance_missing_or_invalid'
@@ -204,6 +206,7 @@ export async function evaluateMixedStorageDecision_ACU(
     && options.isolationKey === getCurrentIsolationKey_ACU();
   if (!scopeMatches) diagnostics.push('scope_isolation_mismatch');
   if (evidence.v2.replay.status !== 'success') diagnostics.push('v2_replay_unavailable');
+  if (evidence.v2.replay.requiresCheckpointConvergence || evidence.v2.replay.compatibilityRepairs?.length) diagnostics.push('v2_requires_checkpoint_convergence');
   if (legacyAudit.status === 'unrecoverable' || legacyRepair.requiresConfirmation) diagnostics.push('legacy_requires_confirmation');
   if (evidence.comparison.fingerprintsEqual === true) diagnostics.push('legacy_v2_fingerprints_equal');
   if (evidence.comparison.fingerprintsEqual === false) diagnostics.push('legacy_v2_fingerprints_differ');
@@ -212,6 +215,8 @@ export async function evaluateMixedStorageDecision_ACU(
   let frozenMergeCandidate: TableDataObject_ACU | undefined;
   if (evidence.v2.replay.status !== 'success') {
     kind = 'blocked_replay_unavailable';
+  } else if (evidence.v2.replay.requiresCheckpointConvergence || evidence.v2.replay.compatibilityRepairs?.length) {
+    kind = 'blocked_checkpoint_convergence';
   } else if (legacyAudit.status === 'unrecoverable' || legacyRepair.requiresConfirmation) {
     kind = 'blocked_legacy_requires_confirmation';
   } else {

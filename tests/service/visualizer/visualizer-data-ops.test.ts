@@ -7,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   sqlite: false,
   migration: vi.fn(async () => ({ success: true, migrated: false })),
   persist: vi.fn(async () => ({ saved: true, messageIndices: [0] })),
-  replay: vi.fn(async () => mocks.replayData),
+  replay: vi.fn(async () => ({ baseKind: 'full_checkpoint', data: mocks.replayData })),
   reload: vi.fn(async () => undefined),
   transaction: vi.fn(async (options: any, task: any) => task({
     baseRevision: 'test-revision',
@@ -32,7 +32,7 @@ vi.mock('../../../src/service/table/table-history', () => ({
 }));
 vi.mock('../../../src/service/table/table-service', () => ({ ensureLegacyStorageMigratedBeforeWrite_ACU: mocks.migration }));
 vi.mock('../../../src/service/table/storage-frame-v2-persist', () => ({ persistTableMutationLogBatchV2_ACU: mocks.persist }));
-vi.mock('../../../src/service/table/storage-frame-v2-replay', () => ({ loadTableStateFromFramesV2_ACU: mocks.replay }));
+vi.mock('../../../src/service/table/storage-frame-v2-replay', () => ({ loadTableStateFromFramesV2Detailed_ACU: mocks.replay }));
 vi.mock('../../../src/service/table/table-storage-strategy', () => ({ reloadStorageProvider: mocks.reload }));
 vi.mock('../../../src/service/table/table-write-transaction', () => ({ runTableWriteTransaction_ACU: mocks.transaction }));
 vi.mock('../../../src/service/table/storage-mode', () => ({ isSqliteMode: () => mocks.sqlite }));
@@ -68,7 +68,7 @@ describe('visualizer-data-ops V2 replay save', () => {
       mocks.replayData = options.afterData;
       return { saved: true, messageIndices: [0] };
     });
-    mocks.replay.mockReset().mockImplementation(async () => JSON.parse(JSON.stringify(mocks.replayData)));
+    mocks.replay.mockReset().mockImplementation(async () => ({ baseKind: 'full_checkpoint', data: JSON.parse(JSON.stringify(mocks.replayData)) }));
     mocks.reload.mockReset().mockResolvedValue(undefined);
     mocks.transaction.mockClear();
     mocks.fullCheckpoint.mockReset().mockReturnValue(0);
@@ -176,6 +176,33 @@ describe('visualizer-data-ops V2 replay save', () => {
     expect(persistOptions.targets[0].operations[0].cells).toEqual(['1', 'new-a']);
   });
 
+  it('V2 replay 仍依赖临时 Sheet 补锚时阻止保存且不启动事务', async () => {
+    const draft = state();
+    recordVisualizerCellUpdate_ACU(draft, 'sheet_a', '1', 'value', 'new-a');
+    mocks.replay.mockResolvedValueOnce({
+      baseKind: 'full_checkpoint',
+      data: data(),
+      requiresCheckpointConvergence: true,
+      compatibilityRepairs: [{
+        kind: 'temporary_sheet_anchor',
+        sheetKey: 'sheet_a',
+        messageIndex: 384,
+        seq: 1,
+        operationIndex: 0,
+        templateFingerprint: 'test-fingerprint',
+        reason: 'missing_at_operation',
+      }],
+    });
+
+    const result = await applyVisualizerPendingDataOps_ACU(draft);
+
+    expect(result).toEqual({ success: false, changed: false, error: expect.stringContaining('恢复收敛') });
+    expect(mocks.transaction).not.toHaveBeenCalled();
+    expect(mocks.persist).not.toHaveBeenCalled();
+    expect(mocks.setCurrentData).not.toHaveBeenCalled();
+    expect(draft.pendingDataOps.committed).toBeUndefined();
+  });
+
   it('candidate replay 校验失败时不刷新、不标记 committed', async () => {
     const draft = state();
     recordVisualizerCellUpdate_ACU(draft, 'sheet_a', '1', 'value', 'new-a');
@@ -208,7 +235,7 @@ describe('visualizer-data-ops V2 replay save', () => {
     const draft = state();
     recordVisualizerCellUpdate_ACU(draft, 'sheet_a', '1', 'value', 'new-a');
     mocks.replay
-      .mockImplementationOnce(async () => JSON.parse(JSON.stringify(data())))
+      .mockImplementationOnce(async () => ({ baseKind: 'full_checkpoint', data: JSON.parse(JSON.stringify(data())) }))
       .mockRejectedValueOnce(new Error('reload replay failed'));
 
     const first = await applyVisualizerPendingDataOps_ACU(draft);
@@ -220,7 +247,7 @@ describe('visualizer-data-ops V2 replay save', () => {
     expect(mocks.persist).toHaveBeenCalledTimes(1);
     expect(() => assertVisualizerDataOpsEditable_ACU(draft)).toThrow('数据已持久化但本地刷新尚未完成');
 
-    mocks.replay.mockResolvedValueOnce(draft.pendingDataOps.committed.afterData);
+    mocks.replay.mockResolvedValueOnce({ baseKind: 'full_checkpoint', data: draft.pendingDataOps.committed.afterData });
     const second = await applyVisualizerPendingDataOps_ACU(draft);
 
     expect(second).toEqual({ success: true, changed: true });

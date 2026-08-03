@@ -12,7 +12,7 @@ import { validateMigrationProvenanceV1_ACU } from '../../shared/canonical-checkp
 import type { TableDataObject_ACU } from '../../shared/models/table-data';
 import { isV2TagData_ACU } from './storage-strategy-resolver';
 import type { TableMigrationProvenanceV1_ACU, TableStorageFrameV2_ACU } from './storage-frame-v2-types';
-import { loadTableStateFromFramesV2_ACU } from './storage-frame-v2-replay';
+import { loadTableStateFromFramesV2Detailed_ACU, type TableReplayCompatibilityRepairV2_ACU } from './storage-frame-v2-replay';
 import { getTableDataFingerprint_ACU } from './table-data-upgrade-audit';
 
 export type MixedStorageLegacyLocation_ACU =
@@ -74,7 +74,14 @@ export interface MixedStorageEvidence_ACU {
       headRevision?: string | null;
     };
     sheetCoverage: MixedStorageSheetCoverageEvidence_ACU[];
-    replay: { status: 'not_present' | 'unavailable' | 'success' | 'failed'; fingerprint: string | null; data?: TableDataObject_ACU; error?: string };
+    replay: {
+      status: 'not_present' | 'unavailable' | 'success' | 'failed';
+      fingerprint: string | null;
+      data?: TableDataObject_ACU;
+      error?: string;
+      requiresCheckpointConvergence?: boolean;
+      compatibilityRepairs?: TableReplayCompatibilityRepairV2_ACU[];
+    };
     provenance: {
       present: boolean;
       value?: TableMigrationProvenanceV1_ACU;
@@ -335,8 +342,14 @@ export async function collectMixedStorageEvidence_ACU(
   let replay: MixedStorageEvidence_ACU['v2']['replay'] = { status: frames.length === 0 ? 'not_present' : 'unavailable', fingerprint: null };
   if (anchor) {
     try {
-      const replayed = await loadTableStateFromFramesV2_ACU(chat, options.isolationKey, { updateRuntimeState: false });
-      replay = replayed ? { status: 'success', fingerprint: getTableDataFingerprint_ACU(replayed), data: clone_ACU(replayed) } : { status: 'unavailable', fingerprint: null };
+      const detailed = await loadTableStateFromFramesV2Detailed_ACU(chat, options.isolationKey, { updateRuntimeState: false });
+      replay = detailed ? {
+        status: 'success',
+        fingerprint: getTableDataFingerprint_ACU(detailed.data),
+        data: clone_ACU(detailed.data),
+        ...(detailed.requiresCheckpointConvergence ? { requiresCheckpointConvergence: true } : {}),
+        ...(detailed.compatibilityRepairs?.length ? { compatibilityRepairs: clone_ACU(detailed.compatibilityRepairs) } : {}),
+      } : { status: 'unavailable', fingerprint: null };
     } catch (error) {
       replay = { status: 'failed', fingerprint: null, error: error instanceof Error ? error.message : String(error) };
     }

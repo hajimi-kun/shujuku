@@ -263,6 +263,49 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
     expect(content).not.toContain('$U');
   });
 
+  it('if seed 优先使用 prepare 阶段冻结的填表上下文范围', async () => {
+    mockSettings.charCardPrompt = [{ role: 'USER', content: '<if seed="批次关键词">命中</if>' }];
+    mockGenerateRaw.mockResolvedValue('AI回复');
+    mockGetLatestAIMessageContent.mockReturnValue('聊天最新层，不应参与本批次判断');
+    mockParseIfBlocksInContent.mockImplementation((text: string) => text);
+
+    await callCustomOpenAI_ACU({
+      tableDataText: '',
+      messagesText: '当前最新对话内容:\n角色: 批次关键词',
+      conditionalSeedContent: '批次关键词',
+    });
+
+    expect(mockParseIfBlocksInContent).toHaveBeenCalledWith(
+      '<if seed="批次关键词">命中</if>',
+      expect.objectContaining({ seedContent: '批次关键词' }),
+      0,
+    );
+    expect(mockGetLatestAIMessageContent).not.toHaveBeenCalled();
+  });
+
+  it('conditionalSeedContent 为空字符串时也不回退聊天最新层', async () => {
+    mockSettings.charCardPrompt = [{ role: 'USER', content: '<if seed="批次关键词">命中</if>' }];
+    mockGenerateRaw.mockResolvedValue('AI回复');
+    mockGetLatestAIMessageContent.mockReturnValue('聊天最新层，空范围时不得读取');
+    mockParseIfBlocksInContent.mockImplementation((text: string) => text);
+
+    await callCustomOpenAI_ACU({
+      tableDataText: '',
+      messagesText: '当前最新对话内容:\n(无最新对话内容)',
+      // 新调用方明确传入空字符串：表示本次填表范围内没有可用的 AI 内容，
+      // 必须使用空 seedContent，而不是回退读取聊天最新层。
+      conditionalSeedContent: '',
+    });
+
+    expect(mockParseIfBlocksInContent).toHaveBeenCalledWith(
+      '<if seed="批次关键词">命中</if>',
+      expect.objectContaining({ seedContent: '' }),
+      0,
+    );
+    expect(mockGetLatestAIMessageContent).not.toHaveBeenCalled();
+  });
+
+
   it('charCardPrompt 为字符串时转为单段落', async () => {
     mockSettings.charCardPrompt = '纯字符串提示词 $0';
     mockGetApiConfigByPreset.mockReturnValue({

@@ -18,18 +18,18 @@ import { getActiveChatStorageIdentity_ACU } from '../../data/storage/chat-histor
 import { buildChatSheetGuideDataFromData_ACU, buildChatSheetGuideDataFromTemplateObj_ACU, buildChatTemplateScopeStateFromCurrent_ACU, clearChatSheetGuideDataForIsolationKey_ACU, getChatSheetGuideDataForIsolationKey_ACU, getCurrentChatTemplateScopeState_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, listChatTemplatePresetEntries_ACU, migrateLegacyTemplateScopeForCurrentChat_ACU, normalizeTemplateScopeIsolationKey_ACU, normalizeTemplateScopeMode_ACU, sanitizeChatSheetsObject_ACU, sanitizeTemplateSnapshotForChat_ACU, setCurrentChatTemplateScopeState_ACU } from '../template/chat-scope';
 import { refreshMergedDataAndNotify_ACU } from '../worldbook/pipeline';
 import { safeJsonParse_ACU, safeJsonStringify_ACU } from '../../shared/json-helpers';
-import { ensureSheetOrderNumbers_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
+import { ensureSheetOrderNumbers_ACU, logDebug_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
 import { buildDefaultExportConfig_ACU, ensureExportConfigDefaults_ACU } from '../worldbook/injection-engine';
-import { TemplateImportValidationError_ACU, validateImportedTemplateObject_ACU } from './template-import-validator';
+import { TemplateImportValidationError_ACU, type TemplateImportDiagnostic_ACU, validateImportedTemplateObject_ACU } from './template-import-validator';
 import { allocateStableSheetKeys_ACU } from '../../shared/sheet-identity';
 import { reconcileChatTemplate_ACU } from './chat-template-reconciler';
 import { commitCurrentFloorTemplateChanges_ACU, commitCurrentFloorTemplateScopeOnly_ACU } from '../table/storage-frame-v2-persist';
-import { loadTableStateFromFramesV2_ACU } from '../table/storage-frame-v2-replay';
+import { loadTableStateFromFramesV2Detailed_ACU } from '../table/storage-frame-v2-replay';
 import { resolveTableStorageStrategy_ACU } from '../table/storage-strategy-resolver';
 import { captureTableRuntimeRevisionForWriteSet_ACU } from '../table/table-write-transaction';
 import { getCurrentStorageMode, isSqliteMode } from '../table/storage-mode';
 import { didSqliteFallbackAfterReload_ACU, reloadStorageProvider } from '../table/table-storage-strategy';
-import { normalizeHeaderOnlyRowIdColumns_ACU } from '../table/table-data-upgrade-audit';
+import { normalizeTemplateRowIds_ACU } from './template-row-id-normalizer';
 import { abortableDelay } from '../../shared/abortable-delay';
 
 // ═══ 预设存储 CRUD（内部辅助） ═══
@@ -205,7 +205,18 @@ export function parseImportedTemplateData_ACU(templateData: any) {
         }
     }
 
-    jsonData = normalizeHeaderOnlyRowIdColumns_ACU(jsonData);
+    const normalization = normalizeTemplateRowIds_ACU(jsonData, {
+        syncDdl: getCurrentStorageMode() === 'sqlite',
+    });
+    if (normalization.blockers.length > 0) {
+        const diagnostics: TemplateImportDiagnostic_ACU[] = normalization.blockers.map(issue => ({
+            code: issue.code === 'misplaced_row_id' ? 'misplaced_row_id' : 'invalid_header_row',
+            sheetKey: issue.sheetKey, sheetName: issue.sheetName, message: issue.message,
+            columnIndex: issue.columnIndex,
+        }));
+        throw new TemplateImportValidationError_ACU(diagnostics);
+    }
+    jsonData = normalization.templateData;
     const importDiagnostics = validateImportedTemplateObject_ACU(jsonData);
     if (importDiagnostics.length > 0) {
         throw new TemplateImportValidationError_ACU(importDiagnostics);
@@ -442,16 +453,48 @@ function rekeyTemplateForPristineChat_ACU(templateData: Record<string, any>): Re
  * replace this with scope-only writes: doing so discards the replay/transaction
  * contract and silently bypasses schema migration and destructive-change checks.
  */
-export async function applyChatTemplateSnapshotWithReconciliation_ACU(templateData: any, {
+const activeChatTemplateReconciliations_ACU = new Map<string, Promise<unknown>>();
+let templateReconciliationSequence_ACU = 0;
+
+function createTemplateReconciliationRequestId_ACU(): string {
+    templateReconciliationSequence_ACU += 1;
+    return `template-reconcile-${Date.now().toString(36)}-${templateReconciliationSequence_ACU.toString(36)}`;
+}
+
+async function loadConsistentTemplateBaseline_ACU(isolationKey: string, signal?: AbortSignal): Promise<{
+    baselineData: any;
+    baseRevision: string;
+} | { error: string }> {
+    // 结构协调的 snapshot 与提交 revision 必须来自同一逻辑时点。
+    // 旧实现先 replay、协调，最后才取 revision；期间发生的写入会让旧计划伪装成新计划。
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        if (signal?.aborted) return { error: '模板提交已取消。' };
+        const beforeRevision = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }], { isolationKey });
+        const replay = await loadTableStateFromFramesV2Detailed_ACU(undefined, isolationKey, { updateRuntimeState: false });
+        if (signal?.aborted) return { error: '模板提交已取消。' };
+        if (replay?.requiresCheckpointConvergence || replay?.compatibilityRepairs?.length) {
+            const affectedSheetKeys = [...new Set((replay.compatibilityRepairs || []).map(item => item.sheetKey))];
+            return { error: `当前 V2 历史仍依赖临时 Sheet 补锚（${affectedSheetKeys.join('、') || '未知 Sheet'}）；请先在数据管理中完成 V2 恢复收敛，再切换模板。` };
+        }
+        const baselineData = replay?.data ?? null;
+        const afterRevision = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }], { isolationKey });
+        if (beforeRevision === afterRevision) return { baselineData, baseRevision: beforeRevision };
+    }
+    return { error: '当前表格状态在读取模板基线时发生变化，请稍后重试。' };
+}
+
+async function applyChatTemplateSnapshotWithReconciliationInternal_ACU(templateData: any, {
     source = 'ui',
     presetName = '',
     destructiveChangeConfirmed = false,
     signal,
+    requestId = createTemplateReconciliationRequestId_ACU(),
 }: {
     source?: string;
     presetName?: string;
     destructiveChangeConfirmed?: boolean;
     signal?: AbortSignal;
+    requestId?: string;
 } = {}) {
     const snapshot = sanitizeTemplateSnapshotForChat_ACU(templateData);
     if (!snapshot?.templateObj) return { saved: false, error: '模板结构无效，无法生成聊天模板提交。' };
@@ -485,21 +528,28 @@ export async function applyChatTemplateSnapshotWithReconciliation_ACU(templateDa
             return { saved: false, error: error instanceof Error ? error.message : String(error) };
         }
     }
-    // Capture before any asynchronous replay/planning work. "all" is deliberate:
-    // a template import can match, introduce, or delete sheets only after planning.
-    const baseRevision = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }], { isolationKey });
-    let baselineData: any = null;
+    let baselineData: any;
+    let baseRevision: string | null = null;
     if (!chatContextMatches_ACU(targetChatIdentity, entryContext.firstMessage)) {
         return { saved: false, error: '目标聊天已切换，已取消模板提交。' };
     }
     try {
-        baselineData = await loadTableStateFromFramesV2_ACU(undefined, isolationKey, { updateRuntimeState: false });
+        const baselineSnapshot = await loadConsistentTemplateBaseline_ACU(isolationKey, signal);
+        if ('error' in baselineSnapshot) return { saved: false, error: baselineSnapshot.error };
+        baselineData = baselineSnapshot.baselineData;
+        baseRevision = baselineSnapshot.baseRevision;
+        logDebug_ACU(`[TemplateScope] 模板协调基线已读取: requestId=${requestId}, source=v2_replay, baseRevision=${baseRevision}, isolationKey=${isolationKey}`);
     } catch (error) {
         return { saved: false, error: `无法读取当前聊天 V2 replay 基线：${error instanceof Error ? error.message : String(error)}` };
     }
     if (pristineChat) {
         baselineData = { mate: JSON.parse(JSON.stringify(targetTemplateData.mate || { type: 'chatSheets', version: 1 })) };
     } else if (!baselineData || typeof baselineData !== 'object') {
+        if (storageStrategy.mode === 'v2') {
+            return { saved: false, error: '当前聊天 V2 replay 基线不可用，已拒绝基于运行时缓存执行结构性模板切换。请先完成恢复诊断后重试。' };
+        }
+        // legacy 迁移分支仍由提交层作最终 fail-closed 判定；此处只保留既有迁移入口，
+        // 不允许 V2 聊天把非权威 runtime 缓存当作结构协调基线。
         baselineData = currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object'
             ? JSON.parse(JSON.stringify(currentJsonTableData_ACU))
             : { mate: { type: 'chatSheets', version: 1 } };
@@ -520,6 +570,7 @@ export async function applyChatTemplateSnapshotWithReconciliation_ACU(templateDa
     if (plan.blockers.length > 0) {
         return { saved: false, blockers: plan.blockers, error: plan.blockers.join('；') };
     }
+    logDebug_ACU(`[TemplateScope] 模板协调计划已生成: requestId=${requestId}, baseRevision=${baseRevision}, changes=${plan.sheetChanges.map(change => `${change.kind}:${change.sheetKey}`).join(',') || 'none'}, deleted=${plan.deletedSheetKeys.join(',') || 'none'}`);
     const guideData = buildChatSheetGuideDataFromData_ACU(plan.candidateData, {
         preserveSeedRowsFromGuideData: pristineChat ? null : getChatSheetGuideDataForIsolationKey_ACU(isolationKey),
         seedRowsFromTemplateObj: targetTemplateData,
@@ -531,6 +582,8 @@ export async function applyChatTemplateSnapshotWithReconciliation_ACU(templateDa
         return { saved: false, error: '目标聊天已切换，已取消模板提交。' };
     }
     const hasStructuralChanges = plan.sheetChanges.length > 0 || plan.deletedSheetKeys.length > 0;
+    // 必须使用读取 replay baseline 时一并验证的 revision；此处重新捕获会掩盖 stale plan。
+    const commitBaseRevision = hasStructuralChanges ? baseRevision : null;
     const committed = hasStructuralChanges
         ? await commitCurrentFloorTemplateChanges_ACU({
             isolationKey,
@@ -542,7 +595,8 @@ export async function applyChatTemplateSnapshotWithReconciliation_ACU(templateDa
             presetName: normalizeTemplatePresetSelectionValue_ACU(presetName),
             source,
             reason: 'chat_template_reconciliation',
-            baseRevision,
+            baseRevision: commitBaseRevision,
+            requestId,
             expectedChatIdentity: targetChatIdentity,
             expectedFirstMessage: entryContext.firstMessage,
             storageMode,
@@ -591,6 +645,36 @@ export async function applyChatTemplateSnapshotWithReconciliation_ACU(templateDa
         audit: plan.audit,
         ...(postCommitWarning ? { runtimeReady: false, postCommitWarning } : { runtimeReady: true }),
     };
+}
+
+/**
+ * 同一聊天/隔离域一次只允许一个模板协调进入 read-plan-commit 链路。
+ * 这不是数据正确性的唯一保障（事务 revision 仍是最终边界），而是避免旧入口
+ * 与可视化入口并发生成两份互相过期的结构计划。
+ */
+export async function applyChatTemplateSnapshotWithReconciliation_ACU(templateData: any, options: {
+    source?: string;
+    presetName?: string;
+    destructiveChangeConfirmed?: boolean;
+    signal?: AbortSignal;
+    requestId?: string;
+} = {}) {
+    const chat = getChatArray_ACU();
+    const firstMessage = Array.isArray(chat) ? chat[0] : null;
+    const chatIdentity = getActiveChatStorageIdentity_ACU(chat);
+    const scopeKey = `${chatIdentity || 'unresolved-chat'}::${getCurrentIsolationKey_ACU()}::${firstMessage ? 'bound' : 'unbound'}`;
+    if (activeChatTemplateReconciliations_ACU.has(scopeKey)) {
+        return { saved: false, error: '当前聊天的模板切换正在进行中，请等待其完成后再试。' };
+    }
+    const operation = applyChatTemplateSnapshotWithReconciliationInternal_ACU(templateData, options);
+    activeChatTemplateReconciliations_ACU.set(scopeKey, operation);
+    try {
+        return await operation;
+    } finally {
+        if (activeChatTemplateReconciliations_ACU.get(scopeKey) === operation) {
+            activeChatTemplateReconciliations_ACU.delete(scopeKey);
+        }
+    }
 }
 
 export async function applyTemplatePresetToCurrent_ACU(presetName: string, { source = 'ui', updateGlobal = true, save = true, persistChatScope = undefined as boolean | undefined, chatSelectionSource = 'auto' as 'auto' | 'snapshot' | 'global', destructiveChangeConfirmed = false, signal = undefined as AbortSignal | undefined } = {}) {

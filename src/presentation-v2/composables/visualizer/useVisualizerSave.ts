@@ -71,7 +71,10 @@ export interface VisualizerSaveInteractions {
   requestGlobalPresetName?: (defaultName: string) => string | null | Promise<string | null>;
   confirmOverwriteGlobalPreset?: (presetName: string) => boolean | Promise<boolean>;
   confirmDestructiveSchemaChange?: (summary: VisualizerDestructiveSchemaChangeSummary) => boolean | Promise<boolean>;
+  requestSchemaMigrationChoice?: (summary: VisualizerSchemaMigrationChoiceSummary) => string | null | Promise<string | null>;
 }
+
+export interface VisualizerSchemaMigrationChoiceSummary { sheetKey: string; message: string; choices: Array<{ id: string; label: string }> }
 
 export interface VisualizerDestructiveSchemaChangeSummary {
   sheets: Array<{
@@ -526,11 +529,48 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           pendingLockChanges: cloneData(visualizer.pendingLockChanges),
           lockDirty: visualizer.lockDirty,
         };
+        const schemaMigrationIntents: Record<string, any> = {};
         let preflight = await preflightSchemaMigrations_ACU({
           baselineData: visualizer.templateBaseData as any,
           candidateData: orderedData as any,
           destructiveChangeConfirmed: false,
         });
+        const choiceDecisions = () => (preflight.decisions || []).filter(decision => decision.status === 'needs_choice');
+        if (preflight.blockers.length > 0 && choiceDecisions().length > 0) {
+          const decisions = choiceDecisions();
+          const onlyChoiceBlockers = decisions.length === preflight.blockers.length
+            && decisions.every(decision => Array.isArray(decision.choices) && decision.choices.length > 0);
+          if (onlyChoiceBlockers && interactions.requestSchemaMigrationChoice) {
+            for (const decision of decisions) {
+              const selectedId = await interactions.requestSchemaMigrationChoice({
+                sheetKey: decision.sheetKey,
+                message: decision.message || '请选择该 Sheet 的历史列映射。',
+                choices: (decision.choices || []).map(choice => ({ id: choice.id, label: choice.label })),
+              });
+              if (!selectedId) return false;
+              const selected = (decision.choices || []).find(choice => choice.id === selectedId);
+              if (!selected) {
+                toastStore.error(`schema migration 返回了无效选择：${decision.sheetKey}。`, { muteable: false });
+                return false;
+              }
+              schemaMigrationIntents[decision.sheetKey] = cloneData(selected.intent);
+            }
+            const currentChoiceSnapshot = {
+              tempData: cloneData(visualizer.tempData), sheetOrder: [...visualizer.sheetOrder],
+              templateBaseData: cloneData(visualizer.templateBaseData), templateBaseSheetOrder: [...visualizer.templateBaseSheetOrder],
+              deletedSheetKeys: [...visualizer.deletedSheetKeys], tableLockDrafts: cloneData(visualizer.tableLockDrafts),
+              pendingLockChanges: cloneData(visualizer.pendingLockChanges), lockDirty: visualizer.lockDirty,
+            };
+            if (!sameTemplateValue_ACU(preflightSnapshot, currentChoiceSnapshot)) {
+              toastStore.warning('模板结构在 schema migration 选择期间已变化；请重新保存。', { muteable: false });
+              return false;
+            }
+            preflight = await preflightSchemaMigrations_ACU({
+              baselineData: visualizer.templateBaseData as any, candidateData: orderedData as any,
+              intents: schemaMigrationIntents, destructiveChangeConfirmed: false,
+            });
+          }
+        }
         if (preflight.blockers.length > 0) {
           const confirmationIssues = preflight.issues || [];
           const onlyDestructiveDropConfirmation = confirmationIssues.length > 0
@@ -568,6 +608,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           preflight = await preflightSchemaMigrations_ACU({
             baselineData: visualizer.templateBaseData as any,
             candidateData: orderedData as any,
+            intents: schemaMigrationIntents,
             destructiveChangeConfirmed: true,
           });
           if (preflight.blockers.length > 0) {

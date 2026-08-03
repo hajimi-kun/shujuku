@@ -55,6 +55,29 @@ vi.mock('../../../src/service/template/chat-scope', () => ({
   setChatSheetGuideDataForIsolationKey_ACU: vi.fn(),
   attachSeedRowsToCurrentDataFromGuide_ACU: vi.fn(),
   getEffectiveSeedRowsForSheet_ACU: vi.fn(() => []),
+  ensureStableRowIdsForSheetContent_ACU: vi.fn((content: any[]) => {
+    const copied = content.map(row => Array.isArray(row) ? [...row] : row);
+    const reserved = new Set(
+      copied.slice(1)
+        .filter(Array.isArray)
+        .map(row => String(row[0] ?? '').trim())
+        .filter(Boolean),
+    );
+    let nextId = 1;
+    for (const row of copied.slice(1)) {
+      if (!Array.isArray(row)) continue;
+      const rowId = String(row[0] ?? '').trim();
+      if (rowId) {
+        row[0] = rowId;
+        continue;
+      }
+      while (reserved.has(String(nextId))) nextId += 1;
+      row[0] = String(nextId);
+      reserved.add(String(nextId));
+      nextId += 1;
+    }
+    return copied;
+  }),
 }));
 
 vi.mock('../../../src/service/worldbook/pipeline', () => ({
@@ -910,6 +933,83 @@ describe('fillFirstLayerWithTemplateData_ACU', () => {
     mockPersistV2CheckpointSuccess_ACU();
   });
 
+  it('将补齐身份后的系统规则快照同时写入 V2 checkpoint 与内存', async () => {
+    const templateObj = {
+      sheet_SystemRules: {
+        name: '系统规则表',
+        content: [
+          ['row_id', '规则名称'],
+          [null, '规则一'],
+          ['', '规则二'],
+          [' fixed-rule ', '规则三'],
+        ],
+      },
+    };
+
+    const result = await fillFirstLayerWithTemplateData_ACU(templateObj);
+
+    expect(result).toEqual({ success: true, messageIndex: 0, sheetCount: 1 });
+    const persistedSnapshot = vi.mocked(persistTableMutationLogV2_ACU).mock.calls[0][0].afterData;
+    expect(persistedSnapshot.sheet_SystemRules.content).toEqual([
+      ['row_id', '规则名称'],
+      ['1', '规则一'],
+      ['2', '规则二'],
+      ['fixed-rule', '规则三'],
+    ]);
+    expect(vi.mocked(_set_currentJsonTableData_ACU)).toHaveBeenCalledWith(expect.objectContaining({
+      sheet_SystemRules: expect.objectContaining({
+        content: persistedSnapshot.sheet_SystemRules.content,
+      }),
+    }));
+    expect(templateObj.sheet_SystemRules.content[1][0]).toBeNull();
+    expect(templateObj.sheet_SystemRules.content[2][0]).toBe('');
+  });
+
+  it('保留原始模板给 guide，并使 guide seedRows 与 checkpoint 身份一致', async () => {
+    const templateObj = {
+      sheet_SystemRules: {
+        name: '系统规则表',
+        content: [
+          ['row_id', '规则名称'],
+          [null, '规则一'],
+          [' fixed-rule ', '规则二'],
+          ['', '规则三'],
+        ],
+      },
+    };
+    const expectedSeedRows = [
+      ['1', '规则一'],
+      ['fixed-rule', '规则二'],
+      ['2', '规则三'],
+    ];
+    vi.mocked(buildChatSheetGuideDataFromTemplateObj_ACU).mockImplementation((source: any) => {
+      expect(source).toBe(templateObj);
+      expect(source.sheet_SystemRules.content).toEqual([
+        ['row_id', '规则名称'],
+        [null, '规则一'],
+        [' fixed-rule ', '规则二'],
+        ['', '规则三'],
+      ]);
+      return {
+        sheet_SystemRules: {
+          name: source.sheet_SystemRules.name,
+          content: [['row_id', '规则名称']],
+          seedRows: expectedSeedRows,
+        },
+      };
+    });
+    vi.mocked(setChatSheetGuideDataForIsolationKey_ACU).mockReturnValue(true);
+
+    const result = await fillFirstLayerWithTemplateData_ACU(templateObj);
+
+    expect(result).toEqual({ success: true, messageIndex: 0, sheetCount: 1 });
+    const persistedSnapshot = vi.mocked(persistTableMutationLogV2_ACU).mock.calls[0][0].afterData;
+    const guideData = vi.mocked(setChatSheetGuideDataForIsolationKey_ACU).mock.calls[0][1];
+    expect(guideData.sheet_SystemRules.seedRows).toEqual(persistedSnapshot.sheet_SystemRules.content.slice(1));
+    expect(templateObj.sheet_SystemRules.content[1][0]).toBeNull();
+    expect(templateObj.sheet_SystemRules.content[2][0]).toBe(' fixed-rule ');
+  });
+
   it('正常填充：写入 V2 初始化 checkpoint', async () => {
     const templateObj = {
       sheet_0: {
@@ -1044,6 +1144,19 @@ describe('fillFirstLayerWithTemplateData_ACU', () => {
 
     const result = await fillFirstLayerWithTemplateData_ACU(templateObj);
     expect(result).toEqual({ success: true, messageIndex: 0, sheetCount: 3 });
+  });
+
+  it('不可安全修复的模板行会返回初始化失败，且不写入 checkpoint 或内存', async () => {
+    const result = await fillFirstLayerWithTemplateData_ACU({
+      sheet_invalid: {
+        name: '非法表',
+        content: [['row_id', '值'], ['1', '正常行'], '非数组行'],
+      },
+    });
+
+    expect(result).toEqual({ success: false });
+    expect(vi.mocked(persistTableMutationLogV2_ACU)).not.toHaveBeenCalled();
+    expect(vi.mocked(_set_currentJsonTableData_ACU)).not.toHaveBeenCalled();
   });
 });
 
@@ -1209,6 +1322,83 @@ describe('buildTemplateBaseStateDataForLocalStorage_ACU', () => {
     expect(result!.mate).toEqual({ type: 'chatSheets', version: 1 });
     expect(result!.sheet_0.name).toBe('背包物品表');
     expect(result!.sheet_1.name).toBe('角色表');
+  });
+
+  it('为初始 checkpoint 的模板预置行补齐稳定 row_id，且不修改原模板', () => {
+    const systemRulesRows = Array.from({ length: 11 }, (_, index) => [
+      index === 3 ? '8' : (index === 7 ? ' custom-rule ' : null),
+      '规则类别',
+      `规则${index + 1}`,
+    ]);
+    const templateObj = {
+      sheet_SystemRules: {
+        name: '系统规则表',
+        content: [['row_id', '规则类别', '规则名称'], ...systemRulesRows],
+      },
+    };
+
+    const result = buildTemplateBaseStateDataForLocalStorage_ACU(templateObj);
+
+    expect(result!.sheet_SystemRules.content).toEqual([
+      ['row_id', '规则类别', '规则名称'],
+      ['1', '规则类别', '规则1'],
+      ['2', '规则类别', '规则2'],
+      ['3', '规则类别', '规则3'],
+      ['8', '规则类别', '规则4'],
+      ['4', '规则类别', '规则5'],
+      ['5', '规则类别', '规则6'],
+      ['6', '规则类别', '规则7'],
+      ['custom-rule', '规则类别', '规则8'],
+      ['7', '规则类别', '规则9'],
+      ['9', '规则类别', '规则10'],
+      ['10', '规则类别', '规则11'],
+    ]);
+    expect(templateObj.sheet_SystemRules.content).toEqual([
+      ['row_id', '规则类别', '规则名称'],
+      ...systemRulesRows,
+    ]);
+  });
+
+  it('保留重复的非空 row_id，交由 canonical checkpoint 边界拒绝', () => {
+    const templateObj = {
+      sheet_duplicate: {
+        name: '重复身份表',
+        content: [['row_id', '值'], [' stable-id ', '第一行'], ['stable-id', '第二行']],
+      },
+    };
+
+    const result = buildTemplateBaseStateDataForLocalStorage_ACU(templateObj);
+
+    expect(result!.sheet_duplicate.content).toEqual([
+      ['row_id', '值'],
+      ['stable-id', '第一行'],
+      ['stable-id', '第二行'],
+    ]);
+  });
+
+  it('初始 checkpoint 基底拒绝缺少 row_id 表头的模板，不改写表头语义', () => {
+    const templateObj = {
+      sheet_invalid_header: {
+        name: '非法表头',
+        content: [['id', '值'], [null, '不可补齐']],
+      },
+    };
+
+    expect(() => buildTemplateBaseStateDataForLocalStorage_ACU(templateObj))
+      .toThrow(/缺少 row_id 表头/);
+    expect(templateObj.sheet_invalid_header.content[0][0]).toBe('id');
+  });
+
+  it('初始 checkpoint 基底拒绝非数组数据行，不将其伪造为合法行', () => {
+    const templateObj = {
+      sheet_invalid: {
+        name: '非法表',
+        content: [['row_id', '值'], ['1', '首行'], ['1', '重复行'], '不是数组'],
+      },
+    };
+
+    expect(() => buildTemplateBaseStateDataForLocalStorage_ACU(templateObj))
+      .toThrow(/包含非数组数据行/);
   });
 
   it('返回的数据是深拷贝，修改不影响原对象', () => {

@@ -30,6 +30,7 @@ import { purgeOldLayerData_ACU } from './settings-ui-config';
 import { buildAutoUpdatePlan_ACU, checkAutoUpdatePreConditions_ACU, executeAutoUpdatePlan_ACU, handleFloorIncreaseDelay_ACU } from '../../../service/table/update-scheduler';
 import { processGroupedRuntimeChunk_ACU, type CardUpdateProgressEvent } from '../../../service/table/update-orchestrator';
 import { isSqliteMode } from '../../../service/table/storage-mode';
+import { startRuntimePerformanceSpan_ACU } from '../../../shared/runtime-performance';
 
 function buildAutoUpdateProgressLabel_ACU(event: Partial<CardUpdateProgressEvent>): string {
     if (Number.isFinite(event.currentBatch) && Number.isFinite(event.totalBatches)) {
@@ -101,13 +102,19 @@ function handleAutoGroupedProgressEvent_ACU(event: CardUpdateProgressEvent, load
 
 let autoUpdateTriggerInFlight_ACU = false;
 
-  export async function triggerAutomaticUpdateIfNeeded_ACU() {
+  export async function triggerAutomaticUpdateIfNeeded_ACU(
+    performanceContext?: { runId?: string; parentSpanId?: string },
+  ) {
     logDebug_ACU('ACU Auto-Trigger: Starting independent check...');
     if (autoUpdateTriggerInFlight_ACU) {
       logDebug_ACU('ACU Auto-Trigger: trigger already in flight. Skipping.');
       return;
     }
     autoUpdateTriggerInFlight_ACU = true;
+    const performanceSpan = startRuntimePerformanceSpan_ACU('auto-update-trigger', {
+      ...performanceContext,
+      settings: settings_ACU,
+    });
 
     try {
     // [重构] 调用 service 层前置检查
@@ -144,7 +151,13 @@ let autoUpdateTriggerInFlight_ACU = false;
 
     // [重构] 调用 service 层构建更新计划
     const triggerIsolationKey = getCurrentIsolationKey_ACU();
-    const plan = buildAutoUpdatePlan_ACU(liveChat, currentJsonTableData_ACU, settings_ACU, triggerIsolationKey);
+    const plan = buildAutoUpdatePlan_ACU(
+      liveChat,
+      currentJsonTableData_ACU,
+      settings_ACU,
+      triggerIsolationKey,
+      { runId: performanceContext?.runId || performanceSpan.id, parentSpanId: performanceSpan.id },
+    );
     if (plan.tablesToUpdate.length === 0) return;
 
     // UI：显示开始 toast
@@ -211,7 +224,8 @@ let autoUpdateTriggerInFlight_ACU = false;
                 refreshData: () => refreshRuntimeDataAndNotifyAfterAutoUpdate_ACU(),
                 loadAllChatMessages: () => loadAllChatMessages_ACU(),
                 purgeOldLayerData: () => purgeOldLayerData_ACU(),
-            }
+            },
+            { runId: performanceContext?.runId || performanceSpan.id, parentSpanId: performanceSpan.id },
         );
     } finally {
         clearAutoUpdateToast_ACU(autoProgressToast);
@@ -230,6 +244,11 @@ let autoUpdateTriggerInFlight_ACU = false;
     }
     if (typeof updateCardUpdateStatusDisplay_ACU === 'function') updateCardUpdateStatusDisplay_ACU();
     } finally {
+      performanceSpan.end({
+        messageCount: getChatArray_ACU()?.length || 0,
+        sheetCount: currentJsonTableData_ACU ? getSortedSheetKeys_ACU(currentJsonTableData_ACU).length : 0,
+        sqlite: isSqliteMode(),
+      });
       autoUpdateTriggerInFlight_ACU = false;
     }
   }

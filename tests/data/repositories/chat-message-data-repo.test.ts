@@ -633,7 +633,7 @@ describe('purgeSheetKeysFromMessage_ACU', () => {
   });
 
 
-  it('局部改写 V2 data_replace 并保留其他 sheet 数据', () => {
+  it('纯 data_replace 不能被按表改写，避免伪造残缺整库状态', () => {
     const msg: any = {
       TavernDB_ACU_IsolatedData: {
         tag1: {
@@ -655,12 +655,11 @@ describe('purgeSheetKeysFromMessage_ACU', () => {
       },
     };
 
-    expect(purgeSheetKeysFromMessage_ACU(msg, ['sheet_0'])).toBe(true);
+    expect(purgeSheetKeysFromMessage_ACU(msg, ['sheet_0'])).toBe(false);
 
-    expect(msg.TavernDB_ACU_IsolatedData.tag1.storageFrame.logEntries[0].operations).toEqual([
-      { kind: 'data_replace', data: { sheet_1: { name: '保留表' } }, reason: 'manual_crud' },
-      { kind: 'sql_batch', statements: ['select * from sheet_0'] },
-    ]);
+    expect(msg.TavernDB_ACU_IsolatedData.tag1.storageFrame.logEntries[0].operations[0]).toEqual(
+      { kind: 'data_replace', data: { sheet_0: { name: '被删表' }, sheet_1: { name: '保留表' } }, reason: 'manual_crud' },
+    );
   });
 
   it('IsolatedData 为 JSON 字符串时也能清理 V2 storageFrame 并按既有约定写回对象', () => {
@@ -826,7 +825,7 @@ describe('purgeManualRefillIncrementalSheetKeysFromMessage_ACU', () => {
     expect(frame.logEntries[0].changedSheetKeys).toEqual(['sheet_1']);
     expect(frame.logEntries[0].groupKeys).toEqual(['sheet_1']);
     expect(frame.logEntries[0].operations).toEqual([
-      { kind: 'data_replace', data: { sheet_1: { name: '增量保留表' } }, reason: 'manual_crud' },
+      { kind: 'data_replace', data: { sheet_0: { name: '增量旧表' }, sheet_1: { name: '增量保留表' } }, reason: 'manual_crud' },
       { kind: 'row_upsert', sheetKey: 'sheet_1', rowId: 'r1', cells: ['r1'] },
       { kind: 'table_edit_dsl', text: 'update sheet_0 but text is not structured' },
     ]);

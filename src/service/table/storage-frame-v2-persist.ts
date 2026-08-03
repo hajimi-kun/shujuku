@@ -4,12 +4,13 @@ import { getActiveChatStorageIdentity_ACU, peekChatScopedConfigContainer_ACU, pe
 import type { Sheet_ACU, TableDataObject_ACU } from '../../shared/models/table-data';
 import type { StorageMode } from '../../shared/table-storage-provider';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performance';
 import { getCurrentIsolationKey_ACU, settings_ACU } from '../runtime/state-manager';
 import { normalizeGuideData_ACU, setChatSheetGuideDataForIsolationKey_ACU } from '../template/chat-scope';
 import { ensureGlobalInjectionConfigDefaults_ACU } from '../worldbook/injection-engine';
 import type { ManualRefillProgressV2_ACU, TableMutationEventV2_ACU, TableMutationLogEntryV2_ACU, TableMutationSourceV2_ACU, TableStorageFrameV2_ACU, TableCheckpointV2_ACU, TableMutationWriteSetV2_ACU, TableMutationOperationV2_ACU, TableSheetCheckpointV2_ACU, TableV2RecoveryBackup_ACU } from './storage-frame-v2-types';
 import { hasLegacyTopLevelTableData_ACU, hasV2TableHistoryEvidence_ACU, isLegacyV1TagData_ACU, isV2TagData_ACU } from './storage-strategy-resolver';
-import { applyTableOperationV2_ACU, collectScheduleSummaryFromFramesV2_ACU, hasUnanchoredReplayArtifactsForChatV2_ACU, loadTableStateFromFramesV2_ACU, loadTableStateFromFramesV2Detailed_ACU } from './storage-frame-v2-replay';
+import { applyTableOperationV2_ACU, collectScheduleSummaryFromFramesV2_ACU, hasUnanchoredReplayArtifactsForChatV2_ACU, loadTableStateFromFramesV2Detailed_ACU } from './storage-frame-v2-replay';
 import { runTableWriteTransaction_ACU, type TableWriteTransactionContext_ACU } from './table-write-transaction';
 import { formatCanonicalRowIssues_ACU, normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
 import { createSheetInsertPlan, generateDDL, validateDDLTextAgainstHeaders_ACU } from '../../data/sqlite/schema-mapper';
@@ -73,6 +74,8 @@ export interface PersistTableMutationV2Options_ACU {
   assumeCommitLock?: boolean;
   /** 对破坏性复合写入要求宿主真实保存；默认保持历史宽松保存语义。 */
   strictSave?: boolean;
+  performanceRunId?: string;
+  performanceParentSpanId?: string;
   transactionContext?: Pick<TableWriteTransactionContext_ACU, 'runCommit' | 'baseRevision' | 'writeSet' | 'assertFresh'>;
 }
 
@@ -129,6 +132,8 @@ export interface CommitCurrentFloorTemplateChangesOptions_ACU {
   presetName?: string;
   source?: string;
   reason?: string;
+  /** Correlates one template reconciliation across planning and atomic persistence logs. */
+  requestId?: string;
   createdAt?: number;
   baseRevision?: string | null;
   expectedChatIdentity?: string;
@@ -416,14 +421,6 @@ function hasAnyV2Frame_ACU(chat: any[], isolationKey: string, maxMessageIndex = 
   });
 }
 
-function getLatestV2FrameMessageIndex_ACU(chat: any[], isolationKey: string): number {
-  for (let index = chat.length - 1; index >= 0; index -= 1) {
-    const tagData = chat[index]?.TavernDB_ACU_IsolatedData?.[isolationKey];
-    if (isV2TagData_ACU(tagData)) return index;
-  }
-  return -1;
-}
-
 function projectReplayComparableData_ACU(data: TableDataObject_ACU): TableDataObject_ACU {
   const projected = deepClone_ACU(data);
   for (const [key, value] of Object.entries(projected)) {
@@ -442,6 +439,57 @@ async function verifyTemporaryBaselineUpgrade_ACU(
   for (const operation of operations) await applyTableOperationV2_ACU(expected, operation);
   return getTableDataFingerprint_ACU(projectReplayComparableData_ACU(expected))
     === getTableDataFingerprint_ACU(projectReplayComparableData_ACU(afterData));
+}
+
+function buildCandidateChatWithIsolatedDataOverrides_ACU(
+  chat: any[],
+  isolatedDataByMessageIndex: Map<number, Record<string, any>>,
+): any[] {
+  return chat.map((message, messageIndex) => {
+    const isolatedData = isolatedDataByMessageIndex.get(messageIndex);
+    return isolatedData === undefined
+      ? message
+      : { ...message, TavernDB_ACU_IsolatedData: isolatedData };
+  });
+}
+
+async function validateTemporaryBaselineUpgradeCandidate_ACU(
+  candidateChat: any[],
+  isolationKey: string,
+  targetMessageIndex: number,
+  afterData: TableDataObject_ACU,
+): Promise<string | null> {
+  const validateReplay = async (
+    scope: 'boundary' | 'suffix',
+    options: { maxMessageIndex?: number },
+  ): Promise<string | null> => {
+    let replay;
+    try {
+      replay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, isolationKey, {
+        ...options,
+        updateRuntimeState: false,
+        compatibilityMode: 'disabled',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return `V2 candidate_${scope}_replay_failed: ${message}`;
+    }
+    if (!replay || replay.baseKind !== 'full_checkpoint') {
+      return `V2 candidate_${scope}_replay_failed: 未能从正式 full checkpoint 建立回放基底。`;
+    }
+    if (replay.requiresCheckpointConvergence || replay.compatibilityRepairs?.length) {
+      return `V2 candidate_requires_convergence: ${scope} replay 仍依赖临时 Sheet 补锚。`;
+    }
+    if (scope === 'boundary'
+      && getTableDataFingerprint_ACU(projectReplayComparableData_ACU(replay.data))
+        !== getTableDataFingerprint_ACU(projectReplayComparableData_ACU(afterData))) {
+      return 'V2 candidate_boundary_replay_failed: checkpoint 边界回放结果与 afterData 不一致。';
+    }
+    return null;
+  };
+
+  return await validateReplay('boundary', { maxMessageIndex: targetMessageIndex })
+    || await validateReplay('suffix', {});
 }
 
 export function getLatestTableStorageHeadRevisionV2_ACU(chat: any[] | null | undefined, isolationKey: string): string | null {
@@ -515,6 +563,63 @@ export function collectCheckpointGenerationStatusV2_ACU(
 function normalizeKeys_ACU(keys: string[] | null | undefined, data?: TableDataObject_ACU): string[] {
   if (!Array.isArray(keys)) return [];
   return [...new Set(keys.filter(key => typeof key === 'string' && key.startsWith('sheet_') && (!data || Boolean(data[key]))))];
+}
+
+function collectScopedAfterDataSheetKeys_ACU(options: PersistTableMutationV2Options_ACU): string[] | null {
+  const keys = new Set<string>();
+  const addKeys = (values: unknown): void => {
+    if (!Array.isArray(values)) return;
+    values.forEach(value => {
+      if (typeof value === 'string' && value.startsWith('sheet_')) keys.add(value);
+    });
+  };
+  addKeys(options.filledSheetKeys);
+  addKeys(options.candidateChangedSheetKeys);
+  addKeys(options.groupKeys);
+  addKeys(options.replaceExistingIncremental?.targetSheetKeys);
+
+  for (const operation of options.operations || []) {
+    if (!operation || typeof operation !== 'object') return null;
+    switch (operation.kind) {
+      case 'sql_sheet_batch':
+      case 'row_upsert':
+      case 'row_delete':
+      case 'meta_update':
+      case 'sheet_schema_migrate':
+      case 'sheet_replace': {
+        const sheetKey = operation.sheetKey;
+        if (typeof sheetKey !== 'string' || !sheetKey.startsWith('sheet_')) return null;
+        keys.add(sheetKey);
+        break;
+      }
+      case 'data_replace':
+      case 'sql_batch':
+      case 'table_edit_dsl':
+      default:
+        // 未知 operation 不能因“碰巧带 sheetKey”就被推断为单表语义。
+        return null;
+    }
+  }
+  return [...keys];
+}
+
+function clonePersistAfterData_ACU(
+  options: PersistTableMutationV2Options_ACU,
+  requiresFullSnapshot: boolean,
+): TableDataObject_ACU {
+  if (requiresFullSnapshot) return deepClone_ACU(options.afterData);
+  const sheetKeys = collectScopedAfterDataSheetKeys_ACU(options);
+  if (sheetKeys === null) return deepClone_ACU(options.afterData);
+  const projected: TableDataObject_ACU = {} as TableDataObject_ACU;
+  if (Object.prototype.hasOwnProperty.call(options.afterData, 'mate')) {
+    (projected as any).mate = deepClone_ACU((options.afterData as any).mate);
+  }
+  sheetKeys.forEach(sheetKey => {
+    if (Object.prototype.hasOwnProperty.call(options.afterData, sheetKey)) {
+      (projected as any)[sheetKey] = deepClone_ACU((options.afterData as any)[sheetKey]);
+    }
+  });
+  return projected;
 }
 
 function normalizeOperations_ACU(
@@ -982,15 +1087,19 @@ async function locateRevealSourceSheetData_ACU(
   for (let boundary = maxMessageIndex; boundary >= 0; boundary -= 1) {
     const tagData = chat[boundary]?.TavernDB_ACU_IsolatedData?.[isolationKey];
     if (!hasV2HistoryMarker_ACU(tagData)) continue;
-    let replayed: TableDataObject_ACU | null = null;
+    let replayed: Awaited<ReturnType<typeof loadTableStateFromFramesV2Detailed_ACU>> = null;
     try {
-      replayed = await loadTableStateFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: boundary, updateRuntimeState: false });
+      replayed = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, {
+        maxMessageIndex: boundary,
+        updateRuntimeState: false,
+        compatibilityMode: 'disabled',
+      });
     } catch {
       // 该边界 replay 失败不代表更早边界不可用；继续向前寻找可信可见状态。
       continue;
     }
-    if (replayed && Object.prototype.hasOwnProperty.call(replayed, sheetKey)) {
-      const candidate = (replayed as Record<string, unknown>)[sheetKey];
+    if (replayed && Object.prototype.hasOwnProperty.call(replayed.data, sheetKey)) {
+      const candidate = (replayed.data as Record<string, unknown>)[sheetKey];
       if (isObjectRecord_ACU(candidate)) {
         return deepClone_ACU(candidate) as Sheet_ACU;
       }
@@ -1044,7 +1153,11 @@ async function persistTableMutationLogV2Core_ACU(
     return { saved: false, error: replacementValidation.error };
   }
   const replacement = replacementValidation as { targetMessageIndices: number[]; targetSheetKeys: string[] } | null;
-  const afterData = deepClone_ACU(options.afterData);
+  const hasExistingCheckpoint = hasAnyV2Checkpoint_ACU(chat, isolationKey, target.index);
+  const hasCheckpointAnywhere = hasAnyV2Checkpoint_ACU(chat, isolationKey);
+  const requiresFullAfterData = !hasCheckpointAnywhere
+    || (options.source === 'import' && (!Array.isArray(options.operations) || options.operations.length === 0));
+  const afterData = clonePersistAfterData_ACU(options, requiresFullAfterData);
   const normalization = normalizeCanonicalTableRows_ACU(afterData);
   if (normalization.errors.length > 0) {
     return { saved: false, error: `V2 operation log snapshot 行标识不合法：${formatCanonicalRowIssues_ACU(normalization.errors)}` };
@@ -1054,49 +1167,49 @@ async function persistTableMutationLogV2Core_ACU(
   }
   const filledSheetKeys = normalizeKeys_ACU(options.filledSheetKeys, afterData);
   const candidateChangedSheetKeys = normalizeKeys_ACU(options.candidateChangedSheetKeys, afterData);
-  const hasExistingCheckpoint = hasAnyV2Checkpoint_ACU(chat, isolationKey, target.index);
   // 「本次是否首次初始化」必须看整个聊天，而不是只看目标楼层之前。
   // 对更早楼层填表（追平/重填）时，锚点可能位于更晚的楼层；
   // 只看之前会误判为首次初始化，从而又写一个 init full checkpoint，
   // 于是聊天里出现两个初始基线，回放只认最后一个，前面楼层的数据全部失效。
-  const hasCheckpointAnywhere = hasAnyV2Checkpoint_ACU(chat, isolationKey);
   const hasExistingV2Frame = hasAnyV2Frame_ACU(chat, isolationKey, target.index);
   const operations = normalizeOperations_ACU(options.operations, afterData, options.source, hasExistingCheckpoint);
   const effectiveChangedSheetKeys = candidateChangedSheetKeys;
   const hasMetadataOnlyFillEvent = filledSheetKeys.length > 0 || (Array.isArray(options.groupKeys) && options.groupKeys.length > 0);
   const hasManualRefillProgress = !!options.manualRefillProgress;
   const isManualRefillProgressOnly = operations.length === 0 && !hasMetadataOnlyFillEvent && hasManualRefillProgress;
-  const latestV2FrameMessageIndex = getLatestV2FrameMessageIndex_ACU(chat, isolationKey);
+  const latestFullCheckpoint = findLatestFullCheckpoint_ACU(chat, isolationKey);
+  const writesReplayArtifact = operations.length > 0 || hasMetadataOnlyFillEvent || hasManualRefillProgress || replacement !== null;
+  // V2 replay 只从最后一个 full checkpoint 开始。向该 checkpoint 之前写入任何
+  // operation、填表事件或追平进度都会制造“保存成功但永远无法回放”的伪提交；不能等到
+  // terminal progress-only 写入时才暴露问题。
+  if (writesReplayArtifact && latestFullCheckpoint && latestFullCheckpoint.index > target.index) {
+    return {
+      saved: false,
+      error: `V2 write target precedes the latest full checkpoint and would never replay: targetMessageIndex=${target.index}, latestFullCheckpointIndex=${latestFullCheckpoint.index}.`,
+    };
+  }
   const hasUnanchoredArtifacts = !hasCheckpointAnywhere
     && hasUnanchoredReplayArtifactsForChatV2_ACU(chat, isolationKey);
-  let temporaryBaselineUpgrade: { sourceMessageIndex: number; storageFrame: TableStorageFrameV2_ACU } | null = null;
+  let temporaryBaselineUpgrade = false;
   if (hasUnanchoredArtifacts && !isManualRefillProgressOnly) {
-    if (target.index < latestV2FrameMessageIndex) {
-      return {
-        saved: false,
-        error: `V2 临时基线升级必须写在最后一个无锚点 artifact 之后：target=${target.index}, latestArtifact=${latestV2FrameMessageIndex}。`,
-      };
-    }
     const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, {
       maxMessageIndex: target.index,
       updateRuntimeState: false,
+      ...(options.performanceRunId ? { performanceRunId: options.performanceRunId } : {}),
+      ...(options.performanceParentSpanId
+        ? { performanceParentSpanId: options.performanceParentSpanId }
+        : {}),
       allowTemporaryTemplateBaseline: true,
+      compatibilityMode: 'disabled',
     });
-    if (!replay || replay.baseKind !== 'temporary_template_baseline') {
-      return { saved: false, error: 'V2 无锚点 artifacts 无法从当前聊天模板建立安全临时基线，已拒绝自动升级。' };
+    if (!replay || replay.baseKind !== 'temporary_template_baseline'
+      || replay.requiresCheckpointConvergence || replay.compatibilityRepairs?.length) {
+      return { saved: false, error: 'V2 boundary_replay_failed: 无锚点 artifacts 无法从当前聊天模板建立安全临时基线，已拒绝自动升级。' };
     }
     if (!await verifyTemporaryBaselineUpgrade_ACU(replay.data, operations, afterData)) {
-      return { saved: false, error: 'V2 临时基线回放与本次 afterData 不一致，已拒绝建立 full checkpoint。' };
+      return { saved: false, error: 'V2 boundary_after_data_mismatch: 临时基线回放与本次 afterData 不一致，已拒绝建立 full checkpoint。' };
     }
-    const sourceTagData = latestV2FrameMessageIndex >= 0
-      ? readIsolatedTagData_ACU(chat[latestV2FrameMessageIndex], isolationKey)
-      : null;
-    if (isV2TagData_ACU(sourceTagData)) {
-      temporaryBaselineUpgrade = {
-        sourceMessageIndex: latestV2FrameMessageIndex,
-        storageFrame: deepClone_ACU(sourceTagData.storageFrame),
-      };
-    }
+    temporaryBaselineUpgrade = true;
   }
   if (!manualRefillProgressIsValidForIntroductionHistory_ACU(options.manualRefillProgress)) {
     return { saved: false, error: 'V2 manualRefillProgress 格式无效，已拒绝写入。' };
@@ -1120,7 +1233,7 @@ async function persistTableMutationLogV2Core_ACU(
   // 同一张表的差异只是列，新增列按空处理，不需要另立基线。
   const shouldCheckpoint = !hasCheckpointAnywhere
     && !isManualRefillProgressOnly
-    && (temporaryBaselineUpgrade !== null
+    && (temporaryBaselineUpgrade
       || initialCheckpointReason === 'init'
       || initialCheckpointReason === 'migration');
   if (shouldCheckpoint && operations.length > 0 && !temporaryBaselineUpgrade) {
@@ -1202,13 +1315,14 @@ async function persistTableMutationLogV2Core_ACU(
     frame.checkpoint = checkpointResult.checkpoint;
     frame.headRevision = checkpointRevision;
     frame.logEntries = [];
-    if (temporaryBaselineUpgrade) {
+    delete frame.perSheetCheckpoints;
+    if (temporaryBaselineUpgrade && targetExistingFrame) {
       const recoveryBackup: TableV2RecoveryBackup_ACU = {
         version: 1,
         createdAt: now,
         recoveryKind: 'temporary_template_baseline_upgrade',
-        sourceMessageIndex: temporaryBaselineUpgrade.sourceMessageIndex,
-        storageFrame: targetExistingFrame || temporaryBaselineUpgrade.storageFrame,
+        sourceMessageIndex: target.index,
+        storageFrame: targetExistingFrame,
       };
       const tagData = isolatedData[isolationKey];
       if (tagData && typeof tagData === 'object' && !Array.isArray(tagData)) {
@@ -1217,38 +1331,37 @@ async function persistTableMutationLogV2Core_ACU(
     }
     logDebug_ACU(`[V2 Persist] 写入 full checkpoint: messageIndex=${target.index}, revision=${checkpointRevision}, sheets=${Object.keys(afterData).filter(k => k.startsWith('sheet_')).length}`);
   } else if (shouldAppendLogEntry) {
-    // 目标表必须在本楼的回放起点里已存在，否则这条增量永远无法回放（no such table）。
-    //
-    // 触发场景：先用旧模板填过表，之后切到新模板（新增表或新增列，rebase checkpoint
-    // 落在最新楼层），再对更早的楼层追平。那些楼的 full checkpoint 是切模板前写的，
-    // 不含新表；直接写增量就会产出注定回放失败的日志。
-    // 此时应先为该表在本楼写 per-sheet checkpoint 把它引入，再追加增量。
+    // 目标表必须在追加 operation 前的 active replay state 中真实存在。仅仅曾在历史
+    // checkpoint 出现过不够：sheet_hide / data_replace 都可能已将它移出 active state；
+    // compatibility temporary anchor 也不是可供新写入依赖的持久化锚点。
     const operationSheetKeys = [...new Set(
       operations
         .map(operation => (operation as any)?.sheetKey)
         .filter((sheetKey: unknown): sheetKey is string => typeof sheetKey === 'string' && sheetKey.startsWith('sheet_')),
     )];
     if (operationSheetKeys.length > 0) {
-      // 只做静态扫描，不触发 replay：persist 层不判断 replay applicability。
-      // 判据是「本楼及之前是否有任何 checkpoint 覆盖过该表」——这正是回放建表的来源。
-      const isSheetAnchoredAtOrBefore = (sheetKey: string): boolean => {
-        for (let index = 0; index <= target.index && index < chat.length; index += 1) {
-          const tagData = readIsolatedTagData_ACU(chat[index], isolationKey);
-          if (!isV2TagData_ACU(tagData)) continue;
-          const targetFrame = tagData.storageFrame as any;
-          const fullData = targetFrame?.checkpoint?.data;
-          if (fullData && typeof fullData === 'object' && Object.prototype.hasOwnProperty.call(fullData, sheetKey)) {
-            return true;
-          }
-          const perSheet = targetFrame?.perSheetCheckpoints;
-          const sheetCheckpoint = perSheet && typeof perSheet === 'object' ? perSheet[sheetKey] : undefined;
-          if (sheetCheckpoint && sheetCheckpoint.timeline?.kind !== 'sheet_hide') return true;
-        }
-        return false;
-      };
+      let replayBeforeAppend;
+      try {
+        replayBeforeAppend = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, {
+          maxMessageIndex: target.index,
+          updateRuntimeState: false,
+          ...(options.performanceRunId ? { performanceRunId: options.performanceRunId } : {}),
+          ...(options.performanceParentSpanId
+            ? { performanceParentSpanId: options.performanceParentSpanId }
+            : {}),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return { saved: false, error: `V2 无法确认 operation 执行前的 active sheet state，已拒绝写入：${message}` };
+      }
+      const compatibilityOnlySheetKeys = new Set(
+        (replayBeforeAppend?.compatibilityRepairs || []).map(repair => repair.sheetKey),
+      );
       {
         const missingSheetKeys = operationSheetKeys.filter(
-          sheetKey => Boolean((afterData as any)[sheetKey]) && !isSheetAnchoredAtOrBefore(sheetKey),
+          sheetKey => Boolean((afterData as any)[sheetKey])
+            && (!Object.prototype.hasOwnProperty.call(replayBeforeAppend?.data || {}, sheetKey)
+              || compatibilityOnlySheetKeys.has(sheetKey)),
         );
         const introduced: TableSheetCheckpointV2_ACU[] = [];
         for (const sheetKey of missingSheetKeys) {
@@ -1271,11 +1384,14 @@ async function persistTableMutationLogV2Core_ACU(
           if (!sheetCheckpointResult.checkpoint) {
             return { saved: false, error: sheetCheckpointResult.error };
           }
+          const timelineKind = historyContainsOrCannotDisproveSheet_ACU(chat, isolationKey, target.index, sheetKey)
+            ? 'sheet_reveal' as const
+            : 'sheet_introduction' as const;
           // timeline 决定回放时该表在本楼何时进入 state：必须早于本次追加的增量。
           introduced.push({
             ...sheetCheckpointResult.checkpoint,
             timeline: {
-              kind: 'sheet_introduction' as const,
+              kind: timelineKind,
               activateAtMessageIndex: target.index,
               afterSeq: Math.max(0, ...frame.logEntries.map(item => Number(item.seq) || 0)),
             },
@@ -1317,6 +1433,19 @@ async function persistTableMutationLogV2Core_ACU(
   }
 
   replacementIsolatedDataByMessageIndex.set(target.index, isolatedData);
+  if (temporaryBaselineUpgrade) {
+    const candidateChat = buildCandidateChatWithIsolatedDataOverrides_ACU(chat, replacementIsolatedDataByMessageIndex);
+    const candidateValidationError = await validateTemporaryBaselineUpgradeCandidate_ACU(
+      candidateChat,
+      isolationKey,
+      target.index,
+      afterData,
+    );
+    if (candidateValidationError) {
+      return { saved: false, error: candidateValidationError };
+    }
+    options.transactionContext?.assertFresh?.('persistTableMutationLogV2:before_boundary_checkpoint_save');
+  }
   const previousMessageState = [...replacementIsolatedDataByMessageIndex.keys()].map(messageIndex => {
     const message = chat[messageIndex];
     return {
@@ -1356,13 +1485,38 @@ async function persistTableMutationLogV2Core_ACU(
 export async function persistTableMutationLogV2_ACU(
   options: PersistTableMutationV2Options_ACU,
 ): Promise<{ saved: boolean; messageIndex?: number; entry?: TableMutationLogEntryV2_ACU; error?: string }> {
+  const performanceSpan = startRuntimePerformanceSpan_ACU('v2-persist-mutation-log', {
+    runId: options.performanceRunId,
+    parentSpanId: options.performanceParentSpanId,
+    settings: settings_ACU,
+    metrics: {
+      targetMessageIndex: options.targetMessageIndex,
+      operationCount: Array.isArray(options.operations) ? options.operations.length : 0,
+      changedSheetCount: Array.isArray(options.candidateChangedSheetKeys) ? options.candidateChangedSheetKeys.length : 0,
+      source: options.source,
+      strictSave: options.strictSave === true,
+      replacement: Boolean(options.replaceExistingIncremental),
+    },
+  });
   if (!options.transactionContext) {
-    return { saved: false, error: 'V2 operation log write requires TableWriteTransactionContext; direct unsafe writes are not allowed.' };
+    const result = { saved: false, error: 'V2 operation log write requires TableWriteTransactionContext; direct unsafe writes are not allowed.' };
+    performanceSpan.end({ success: false });
+    return result;
   }
-  if (options.assumeCommitLock) {
-    return persistTableMutationLogV2Core_ACU(options);
+  try {
+    const hasPerformanceContext = Boolean(options.performanceRunId || options.performanceParentSpanId);
+    const coreOptions = hasPerformanceContext
+      ? { ...options, performanceParentSpanId: performanceSpan.id }
+      : options;
+    const result = options.assumeCommitLock
+      ? await persistTableMutationLogV2Core_ACU(coreOptions)
+      : await options.transactionContext.runCommit(() => persistTableMutationLogV2Core_ACU(coreOptions), options.revisionWriteSet);
+    performanceSpan.end({ success: result.saved });
+    return result;
+  } catch (error) {
+    performanceSpan.end({ success: false });
+    throw error;
   }
-  return options.transactionContext.runCommit(() => persistTableMutationLogV2Core_ACU(options), options.revisionWriteSet);
 }
 
 function validateBatchOperationScope_ACU(
@@ -2281,11 +2435,18 @@ export async function commitCurrentFloorTemplateChanges_ACU(
     if (!isV2TagData_ACU(isolatedData[isolationKey]) || !frame) {
       throw new Error('目标 V2 storage frame 在模板提交准备期间发生变化。');
     }
-    const activeReplayState = await loadTableStateFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: target.index, updateRuntimeState: false });
+    const activeReplay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, { maxMessageIndex: target.index, updateRuntimeState: false });
     assertTemplateCommitChatContext_ACU(chat, options);
-    if (!activeReplayState) {
+    if (!activeReplay) {
       throw new Error('V2 当前楼层模板提交无法解析 active full checkpoint replay state。');
     }
+    if (activeReplay.requiresCheckpointConvergence || activeReplay.compatibilityRepairs?.length) {
+      const affectedSheetKeys = [...new Set((activeReplay.compatibilityRepairs || []).map(repair => repair.sheetKey))];
+      throw new Error(
+        `V2 当前楼层模板提交拒绝依赖临时 Sheet 补锚的回放基线：${affectedSheetKeys.join('、') || '未知 Sheet'}。请先完成恢复收敛。`,
+      );
+    }
+    const activeReplayState = activeReplay.data;
     const checkpoints: TableSheetCheckpointV2_ACU[] = [];
     const scheduleSummaryBySheet = collectScheduleSummaryFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: target.index });
     const targetFrameLastLogSeq = getValidatedFrameLastLogSeq_ACU(frame);
@@ -2302,8 +2463,12 @@ export async function commitCurrentFloorTemplateChanges_ACU(
       const activeHas = Object.prototype.hasOwnProperty.call(activeReplayState, change.sheetKey);
       const historyHas = historyContainsOrCannotDisproveSheet_ACU(chat, isolationKey, target.index, change.sheetKey);
       if (activeHas) {
-        // 仍活跃：既非全新，也非可恢复的隐藏表 → 保持 introduction 冲突防覆盖语义。
-        throw new Error(`V2 sheet introduction requires a genuinely new sheet: sheetKey=${change.sheetKey} already exists in the active checkpoint state.`);
+        // 仍活跃：既非全新，也非可恢复的隐藏表。绝不能让模板 introduction 覆盖活数据。
+        // 正常的 stale plan 应先被 baseRevision 拦截；保留这里作为跨入口/异常状态的最终保险。
+        throw new Error(
+          `当前模板计划尝试将仍在使用的表作为新表引入，已拒绝覆盖已有数据：sheetKey=${change.sheetKey}，requestId=${options.requestId || 'unknown'}。请重新读取当前表格后重试。 `
+          + `V2 sheet introduction requires a genuinely new sheet: sheetKey=${change.sheetKey} already exists in the active checkpoint state.`,
+        );
       }
       if (historyHas) {
         // historyHas 有两种含义：(1) 历史确实曾有该表（可恢复的隐藏表）；
@@ -2507,7 +2672,7 @@ export async function commitCurrentFloorTemplateChanges_ACU(
       assertTemplateCommitChatContext_ACU(chat, options);
       primarySaveAttempted = true;
       await saveChatToHostStrict_ACU();
-      logDebug_ACU(`[V2 Persist] 当前楼层模板提交完成: messageIndex=${target.index}, checkpoints=${checkpoints.length}, operations=${operations.length}, isolationKey=${isolationKey}`);
+      logDebug_ACU(`[V2 Persist] 当前楼层模板提交完成: requestId=${options.requestId || 'unknown'}, messageIndex=${target.index}, checkpoints=${checkpoints.length}, operations=${operations.length}, isolationKey=${isolationKey}`);
       return {
         saved: true,
         mode: 'v2_commit',

@@ -17,7 +17,8 @@ export type CanonicalCheckpointIssueType_ACU =
   | 'invalid_row'
   | 'row_width_mismatch'
   | 'empty_row_id'
-  | 'duplicate_row_id';
+  | 'duplicate_row_id'
+  | 'invalid_fallback_provenance';
 
 export interface CanonicalCheckpointValidationContext_ACU {
   messageIndex?: number;
@@ -222,6 +223,27 @@ export function validateCanonicalCheckpoint_ACU(
     addIssue_ACU(result, checkpointKind, issueContext, 'invalid_reason');
   }
   if (checkpointKind === 'full') {
+    if (checkpoint.fallbackProvenance !== undefined) {
+      const provenance = checkpoint.fallbackProvenance;
+      let valid = false;
+      if (isRecord_ACU(provenance)) {
+        const rangeStart = provenance.rangeStartMessageIndex;
+        const rangeEnd = provenance.rangeEndMessageIndex;
+        const createdAt = provenance.createdAt;
+        valid = provenance.version === 1
+          && provenance.kind === 'manual_refill_template_root'
+          && typeof provenance.runId === 'string' && provenance.runId.trim() !== ''
+          && typeof provenance.isolationKey === 'string'
+          && Array.isArray(provenance.targetSheetKeys)
+          && provenance.targetSheetKeys.length > 0
+          && provenance.targetSheetKeys.every(sheetKey => typeof sheetKey === 'string' && sheetKey.startsWith('sheet_'))
+          && typeof rangeStart === 'number' && Number.isInteger(rangeStart) && rangeStart >= 0
+          && typeof rangeEnd === 'number' && Number.isInteger(rangeEnd) && rangeEnd >= rangeStart
+          && typeof provenance.templateFingerprint === 'string' && provenance.templateFingerprint.trim() !== ''
+          && typeof createdAt === 'number' && Number.isFinite(createdAt) && createdAt >= 0;
+      }
+      if (!valid) addIssue_ACU(result, checkpointKind, issueContext, 'invalid_fallback_provenance');
+    }
     const validation = validateCanonicalCheckpointData_ACU(checkpoint.data, issueContext);
     result.valid = result.valid && validation.valid;
     result.issues.push(...validation.issues.map(issue => ({ ...issue, checkpointKind: 'full' as const })));

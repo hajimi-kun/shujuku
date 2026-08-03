@@ -66,6 +66,62 @@ describe('mixed-storage-decision', () => {
     expect(decision.allowedActions).toEqual(['noop', 'download_snapshots']);
   });
 
+  it('V2 replay 依赖临时 Sheet 补锚时阻止 keep_v2 与 merge candidate', async () => {
+    const legacyData = { sheet_0: sheet([['1', '药水']]) } as any;
+    const template = {
+      mate: { type: 'acu', version: 1 },
+      sheet_global: {
+        uid: 'global_state', name: '全局数据表',
+        content: [['row_id', 'prev_scene_time', 'elapsed_time', 'cur_time']],
+        sourceData: { ddl: 'CREATE TABLE global_state (row_id INTEGER PRIMARY KEY, prev_scene_time TEXT, elapsed_time TEXT, cur_time TEXT);' },
+        updateConfig: {}, exportConfig: {}, orderNo: 1,
+      },
+    } as any;
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_Data: legacyData,
+      TavernDB_ACU_ModifiedKeys: ['sheet_0'],
+      TavernDB_ACU_ScopedConfig: {
+        version: 1,
+        template: { '': { mode: 'chat_override', isolationKey: '', templateStr: JSON.stringify(template) } },
+      },
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'migration', data: legacyData },
+            logEntries: [{
+              seq: 1,
+              entryId: 'missing-global-sheet-384',
+              createdAt: 2,
+              source: 'manual_crud',
+              targetMessageIndex: 0,
+              aiFloor: 1,
+              filledSheetKeys: ['sheet_global'],
+              changedSheetKeys: ['sheet_global'],
+              groupKeys: [],
+              operations: [{
+                kind: 'sql_sheet_batch',
+                sheetKey: 'sheet_global',
+                tableName: 'quanjushujubiao',
+                statements: ["INSERT INTO quanjushujubiao (row_id, prev_scene_time, elapsed_time, cur_time) VALUES (1, '2026-08-07 00:15', '5分', '2026-08-07 00:20')"],
+                reason: 'system',
+              }],
+            }],
+          },
+        },
+      },
+    }];
+
+    const decision = await evaluate(chat, legacyData);
+
+    expect(decision.kind).toBe('blocked_checkpoint_convergence');
+    expect(decision.diagnosticCodes).toContain('v2_requires_checkpoint_convergence');
+    expect(decision.allowedActions).toEqual(['noop', 'download_snapshots']);
+    expect(decision.frozenMergeCandidate).toBeUndefined();
+  });
+
   it('已验证的 V2 后继状态仅在 anchor 后有 V2 活动时授权 keep_v2', async () => {
     const legacyData = { sheet_0: sheet([['1', '药水']]) } as any;
     const v2Data = { sheet_0: sheet([['1', '药水'], ['2', '卷轴']]) } as any;

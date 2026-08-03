@@ -584,6 +584,12 @@ export function useManualUpdate(): ManualUpdateState {
         showCatchUpSyncPending();
       } else if (result.outcome === 'no_work') {
         finishToast('info', '所选表已追平，无需调用 AI 或写入数据。');
+      } else if (result.outcome === 'progress_metadata_failed') {
+        finishToast('warning', `手动追平数据已提交，但完成状态记录失败：${result.error || '下次追平会重新记录状态。'}`);
+      } else if (result.outcome === 'integrity_failed') {
+        finishToast('error', `手动追平持久化完整性校验失败，已回载聊天中的已保存数据：${result.error || '请执行 V2 恢复诊断。'}`);
+      } else if (result.outcome === 'blocked') {
+        finishToast('error', result.error || '手动追平已在调用 AI 前阻止：V2 存储锚点无法安全修复。');
       } else if (result.outcome === 'stopped' || catchUpAbortController.signal.aborted) {
         finishToast('warning', `手动追平已终止；已保留 ${result.committedBucketCount || 0} 个已提交 bucket。`);
       } else if (result.success) {

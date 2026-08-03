@@ -6,10 +6,10 @@
 
 import { currentChatFileIdentifier_ACU, isAutoUpdatingCard_ACU, pendingFinalGenerationGreenlights_ACU, wasStoppedByUser_ACU, _set_isAutoUpdatingCard_ACU, _set_manualExtraHint_ACU, _set_wasStoppedByUser_ACU } from '../runtime/state-manager';
 import { callCustomOpenAI_ACU } from '../ai/prompt-builder';
-import { captureManualRefillSessionSnapshot_ACU, clearManualRefillSheetDataInRange_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU, ensureV2BoundaryCheckpointForRetainedBuffer_ACU, getChatArray_ACU, restoreManualRefillSessionSnapshotAtomic_ACU, shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU } from '../chat/chat-service';
+import { captureManualRefillSessionSnapshot_ACU, clearManualRefillSheetDataInRange_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU, ensureManualCatchUpAnchorBeforeTarget_ACU, ensureV2BoundaryCheckpointForRetainedBuffer_ACU, getChatArray_ACU, restoreManualRefillSessionSnapshotAtomic_ACU, shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU } from '../chat/chat-service';
 import { coreApisAreReady_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
 import { checkAutoMergeTrigger_ACU, prepareAutoMergeBatches_ACU, executeAutoMergeBatch_ACU, finalizeAutoMerge_ACU } from '../summary/merge-logic';
-import { ensureStableRowIdsForSheetContent_ACU, filterSheetKeysByTemplateScope_ACU, getChatSheetGuideDataForIsolationKey_ACU, getEffectiveSeedRowsForSheet_ACU, resolveTemplateScope_ACU, shouldUseInitialSeedRows_ACU } from '../template/chat-scope';
+import { ensureStableRowIdsForSheetContent_ACU, filterSheetKeysByTemplateScope_ACU, getChatSheetGuideDataForIsolationKey_ACU, getCurrentChatTemplateScopeState_ACU, getEffectiveSeedRowsForSheet_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, resolveTemplateScope_ACU, sanitizeTemplateSnapshotForChat_ACU, shouldUseInitialSeedRows_ACU } from '../template/chat-scope';
 import type { TemplateScope_ACU } from '../template/chat-scope';
 import { loadAllChatMessages_ACU, updateReadableLorebookEntry_ACU } from '../worldbook/pipeline';
 import { enqueueSummaryVectorIndexFlush_ACU } from '../vector/summary-vector-index-flush-queue';
@@ -18,8 +18,10 @@ import { resolveTableHistoryStateFromChat_ACU } from './table-history';
 import { planManualCatchUpWaves_ACU, type ManualCatchUpPlan_ACU } from './manual-fill-planner';
 import type { ManualRefillProgressV2_ACU } from './storage-frame-v2-types';
 import type { SqlTableApplyScope_ACU } from '../../shared/table-storage-provider';
+import { rebindSheetKeysThroughTableAliases_ACU, resolveHistoricalSheetKeyMigrations_ACU, SheetTableAliasResolutionError_ACU } from '../../shared/sql-read-resolver';
 
 import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
+import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performance';
 
 import { applyTableDelta_ACU, isDeltaTagData_ACU } from './table-delta';
 /**
@@ -118,8 +120,16 @@ export interface ManualUpdateResult {
     autoMergeTriggered?: boolean;
     autoMergeSuccess?: boolean;
     checkpointWarning?: string;
-    outcome?: 'complete' | 'no_work' | 'stopped' | 'sync_pending';
+    outcome?: 'complete' | 'no_work' | 'stopped' | 'sync_pending' | 'blocked' | 'integrity_failed' | 'progress_metadata_failed';
     committedBucketCount?: number;
+    /** 是否至少有一个 bucket 已严格提交到聊天记录。 */
+    dataCommitted?: boolean;
+    /** 至少一次终态 bounded replay 已确认可读取已提交状态。 */
+    replayVerified?: boolean;
+    /** terminal manualRefillProgress 是否已严格保存。 */
+    terminalProgressSaved?: boolean;
+    /** 面向 UI/恢复诊断的稳定失败分类；不得依赖错误文案解析。 */
+    diagnosticCode?: 'anchor_preflight_blocked' | 'replay_anchor_missing' | 'replay_missing_selected_sheet' | 'replay_requires_checkpoint_convergence' | 'replay_data_mismatch' | 'replay_failed';
     catchUpPlan?: ManualCatchUpPlan_ACU;
 }
 
@@ -144,9 +154,10 @@ export interface GroupFillJob_ACU {
     /** AI 请求发起前锁定的提交作用域；后续不得重新读取全局当前聊天。 */
     chatKey?: string;
     isolationKey?: string;
-    chatSnapshot?: any[];
     templateScope?: TemplateScope_ACU;
     sqlApplyScope?: SqlTableApplyScope_ACU;
+    performanceRunId?: string;
+    performanceParentSpanId?: string;
 }
 
 export interface GroupFillResponse_ACU {
@@ -171,7 +182,7 @@ export interface UnifiedApplyAttempt_ACU {
 interface FillExecutionScope_ACU {
     chatKey: string;
     isolationKey: string;
-    chatSnapshot: any[];
+    promptMessages: any[];
     templateScope: TemplateScope_ACU;
     sqlApplyScope?: SqlTableApplyScope_ACU;
 }
@@ -188,18 +199,51 @@ function buildTemplateScopeFromData_ACU(data: Record<string, any> | null | undef
     return sheetKeys.size > 0 ? { sheetKeys, sheets } : null;
 }
 
-function captureFillExecutionScope_ACU(): FillExecutionScope_ACU {
+function resolveManualRefillTemplateData_ACU(chat: any[], isolationKey: string): Record<string, any> | null {
+    const scopedState = getCurrentChatTemplateScopeState_ACU({ chat, isolationKey });
+    const globalSnapshot = scopedState ? null : getGlobalTemplateSnapshotForCurrentProfile_ACU();
+    const effectiveTemplate = scopedState?.templateObj || scopedState?.templateStr
+        || globalSnapshot?.templateObj || globalSnapshot?.templateStr;
+    const snapshot = sanitizeTemplateSnapshotForChat_ACU(effectiveTemplate || null);
+    if (!snapshot?.templateObj || typeof snapshot.templateObj !== 'object' || Array.isArray(snapshot.templateObj)) {
+        return null;
+    }
+    return snapshot.templateObj as Record<string, any>;
+}
+
+function capturePromptMessageSnapshot_ACU(messages: any[]): any[] {
+    return messages.map(message => {
+        if (!message || typeof message !== 'object') return {};
+        return {
+            is_user: message.is_user === true,
+            ...(typeof message.name === 'string' ? { name: message.name } : {}),
+            ...(typeof message.mes === 'string' ? { mes: message.mes } : {}),
+            ...(typeof message.message === 'string' ? { message: message.message } : {}),
+        };
+    });
+}
+
+function captureFillExecutionScope_ACU(
+    performanceContext?: { runId?: string; parentSpanId?: string },
+): FillExecutionScope_ACU {
+    const performanceSpan = startRuntimePerformanceSpan_ACU('fill-execution-scope-capture', {
+        ...performanceContext,
+        settings: settings_ACU,
+        metrics: { sqlite: isSqliteMode() },
+    });
     const chatKey = String(currentChatFileIdentifier_ACU || 'current-chat');
     const isolationKey = getCurrentIsolationKey_ACU();
     const liveChat = getChatArray_ACU() || [];
-    const chatSnapshot = JSON.parse(JSON.stringify(liveChat));
+    const promptMessages = capturePromptMessageSnapshot_ACU(liveChat);
     const sqlApplyScope = isSqliteMode()
         ? captureSqlTableApplyScope_ACU({ chat: liveChat, isolationKey })
         : undefined;
     const templateScope = sqlApplyScope
         ? buildTemplateScopeFromData_ACU(sqlApplyScope.templateData)
         : resolveTemplateScope_ACU(isolationKey);
-    return { chatKey, isolationKey, chatSnapshot, templateScope, sqlApplyScope };
+    const result = { chatKey, isolationKey, promptMessages, templateScope, sqlApplyScope };
+    performanceSpan.end({ messageCount: liveChat.length });
+    return result;
 }
 
 interface ManualRuntimeUpdateGroup_ACU {
@@ -479,6 +523,12 @@ function buildSqlSheetBatchOperationsFromText_ACU(
         keepLegacyForUnclassified: true,
         reason: 'system',
     });
+    if (buildResult.ambiguousStatements.length > 0) {
+        return { success: false, error: 'SQL 表身份存在歧义，拒绝生成可回放操作。' };
+    }
+    if (buildResult.unknownStatements.some(statement => extractTableNamesFromStatements([statement]).length > 0)) {
+        return { success: false, error: 'SQL 显式引用了未知表名，拒绝生成可回放操作。' };
+    }
     return { success: true, operations: buildResult.operations };
 }
 
@@ -505,6 +555,15 @@ function getTouchedSheetKeysFromSqlText_ACU(sqlText: string, tableData: Record<s
     if (statements.length === 0) return [];
     const tableNames = extractTableNamesFromStatements(statements);
     return mapSqlTableNamesToSheetKeys_ACU(tableData as any, tableNames);
+}
+
+function shouldDiscardUnauthorizedTableEdits_ACU(): boolean {
+    return settings_ACU.discardUnauthorizedTableEditsEnabled !== false;
+}
+
+function formatAllowedSheetKeys_ACU(sheetKeys: readonly string[]): string {
+    const normalized = [...new Set(sheetKeys.filter(key => typeof key === 'string' && key.startsWith('sheet_')))].sort();
+    return normalized.length > 0 ? normalized.join(', ') : '无（当前任务未授权任何目标表）';
 }
 
 function findSqlFailureGroupKey_ACU(sqlTexts: string[], responses: GroupFillResponse_ACU[], errorMessage: string): string | null {
@@ -541,6 +600,7 @@ function getRuntimeTableDataSnapshot_ACU(fallbackData: Record<string, any> | nul
 }
 
 
+
 function mergeGuideStructureIntoBaseData_ACU(data: Record<string, any>): Record<string, any> {
     const base = cloneTableDataSnapshot_ACU(data) || {};
     const batchIsoKey = getCurrentIsolationKey_ACU();
@@ -550,6 +610,13 @@ function mergeGuideStructureIntoBaseData_ACU(data: Record<string, any>): Record<
     }
 
     const guideBase = buildGuidedBaseDataFromSheetGuide_ACU(sheetGuideForBatch);
+    const historicalKeyMigrations = resolveHistoricalSheetKeyMigrations_ACU(base, guideBase);
+    for (const [sourceKey, targetKey] of historicalKeyMigrations) {
+        base[targetKey] = base[sourceKey];
+        delete base[sourceKey];
+        logDebug_ACU(`[MergeBase] 已将可证明同表的历史 Sheet key 重绑定：${sourceKey} -> ${targetKey}`);
+    }
+
     if (!base.mate && guideBase?.mate) base.mate = JSON.parse(JSON.stringify(guideBase.mate));
     Object.keys(guideBase || {}).forEach(sheetKey => {
         if (!sheetKey.startsWith('sheet_')) return;
@@ -583,6 +650,10 @@ async function loadV2ReplayMergeBase_ACU(
             allowTemporaryTemplateBaseline: true,
             throwOnRecoveryRequired: true,
         });
+        if (replayResult?.requiresCheckpointConvergence || replayResult?.compatibilityRepairs?.length) {
+            const affectedSheetKeys = [...new Set((replayResult.compatibilityRepairs || []).map(item => item.sheetKey))];
+            throw new Error(`V2 replay 仍依赖临时 Sheet 补锚（${affectedSheetKeys.join('、') || '未知 Sheet'}）；请先执行 V2 恢复或边界 compaction，再继续生成新表格增量。`);
+        }
         const cloned = cloneTableDataSnapshot_ACU(replayResult?.data as any);
         if (!hasUsableRuntimeTableData_ACU(cloned)) return { data: null, attempted: true };
         const mergedData = mergeGuideStructureIntoBaseData_ACU(cloned as Record<string, any>);
@@ -721,16 +792,36 @@ export async function collectGroupFillResponse_ACU(
 ): Promise<GroupFillResponse_ACU> {
     const effectiveAbortController = abortController || new AbortController();
     const isStopped = () => effectiveAbortController.signal.aborted || (options.respectGlobalStop !== false && wasStoppedByUser_ACU);
-    options.onProgress?.({ phase: 'preparing' });
-
-    const dynamicContent = await prepareAIInput_ACU(job.messagesForContext, job.updateMode, job.targetSheetKeys, {
-        tableData: job.baseSnapshot,
-        excludeImportTaggedWorldbookEntries: job.isImportMode === true && settings_ACU.importPromptExcludeImportedWorldbookEntries !== false,
-        agentGreenlights: Array.isArray(pendingFinalGenerationGreenlights_ACU) ? [...pendingFinalGenerationGreenlights_ACU] : [],
-        isolationKey: job.isolationKey,
-        templateScope: job.templateScope,
-        sqlApplyScope: job.sqlApplyScope,
+    const maxRetries = options.maxRetriesOverride || settings_ACU.tableMaxRetries || 3;
+    if (isStopped()) return { job, success: false, attempt: 0, aborted: true };
+    options.onProgress?.({ phase: 'preparing', attempt: 1, maxRetries: 1 });
+    const prepareSpan = startRuntimePerformanceSpan_ACU('table-fill-prepare-ai-input', {
+        runId: job.performanceRunId,
+        parentSpanId: job.performanceParentSpanId,
+        settings: settings_ACU,
+        metrics: {
+            messageCount: job.messagesForContext.length,
+            sheetCount: Array.isArray(job.targetSheetKeys) ? job.targetSheetKeys.length : 0,
+            sqlite: isSqliteMode(),
+        },
     });
+    let dynamicContent: any = null;
+    try {
+        dynamicContent = await prepareAIInput_ACU(job.messagesForContext, job.updateMode, job.targetSheetKeys, {
+            tableData: job.baseSnapshot,
+            excludeImportTaggedWorldbookEntries: job.isImportMode === true && settings_ACU.importPromptExcludeImportedWorldbookEntries !== false,
+            agentGreenlights: Array.isArray(pendingFinalGenerationGreenlights_ACU) ? [...pendingFinalGenerationGreenlights_ACU] : [],
+            isolationKey: job.isolationKey,
+            templateScope: job.templateScope,
+            sqlApplyScope: job.sqlApplyScope,
+            signal: effectiveAbortController.signal,
+        });
+    } catch (error: any) {
+        prepareSpan.end({ success: false });
+        if (error?.name === 'AbortError' || isStopped()) return { job, success: false, attempt: 0, aborted: true };
+        throw error;
+    }
+    prepareSpan.end({ success: Boolean(dynamicContent) });
     if (dynamicContent && typeof dynamicContent === 'object' && dynamicContent.ok === false) {
         const failure = dynamicContent as { failureCode?: string; message?: string };
         const error = `无法准备AI输入（${failure.failureCode || 'provider_load_failed'}）：${failure.message || 'SQLite 运行时未就绪。'}`;
@@ -743,6 +834,7 @@ export async function collectGroupFillResponse_ACU(
             errorCategory: 'infrastructure',
         };
     }
+
     if (!dynamicContent) {
         return {
             job,
@@ -753,8 +845,6 @@ export async function collectGroupFillResponse_ACU(
             errorCategory: 'infrastructure',
         };
     }
-
-    const maxRetries = options.maxRetriesOverride || settings_ACU.tableMaxRetries || 3;
     let lastErrorMessage = 'AI响应中未找到完整有效的 <tableEdit> 标签';
     let lastErrorCategory: TableUpdateCommitErrorCategory_ACU = 'model';
 
@@ -781,11 +871,24 @@ export async function collectGroupFillResponse_ACU(
         }
 
         try {
-            const aiResponse = await callCustomOpenAI_ACU(dynamicContent, effectiveAbortController, {
-                ...(job.requestOptions || {}),
-                tableData: job.baseSnapshot,
-                targetSheetKeys: job.targetSheetKeys,
+            const aiWaitSpan = startRuntimePerformanceSpan_ACU('table-fill-ai-wait', {
+                runId: job.performanceRunId,
+                parentSpanId: job.performanceParentSpanId,
+                settings: settings_ACU,
+                metrics: { sheetCount: Array.isArray(job.targetSheetKeys) ? job.targetSheetKeys.length : 0 },
             });
+            let aiResponse: string;
+            try {
+                aiResponse = await callCustomOpenAI_ACU(dynamicContent, effectiveAbortController, {
+                    ...(job.requestOptions || {}),
+                    tableData: job.baseSnapshot,
+                    targetSheetKeys: job.targetSheetKeys,
+                });
+                aiWaitSpan.end({ success: true });
+            } catch (error) {
+                aiWaitSpan.end({ success: false });
+                throw error;
+            }
             if (isStopped()) {
                 return { job, success: false, attempt, aborted: true };
             }
@@ -883,6 +986,17 @@ function buildSqlInitializationBase_ACU(baseSnapshot: Record<string, any>, targe
         guidedBaseData = guideData ? buildGuidedBaseDataFromSheetGuide_ACU(guideData) : null;
     } catch (error) {
         logWarn_ACU('[SQL Init] getChatSheetGuideDataForIsolationKey_ACU failed, fallback to template/baseSnapshot only.', error);
+    }
+
+    const identityTargetData = guidedBaseData && Object.keys(guidedBaseData).some(key => key.startsWith('sheet_'))
+        ? guidedBaseData
+        : templateData;
+    if (identityTargetData) {
+        const historicalKeyMigrations = resolveHistoricalSheetKeyMigrations_ACU(workingTableData, identityTargetData);
+        for (const [sourceKey, targetKey] of historicalKeyMigrations) {
+            workingTableData[targetKey] = workingTableData[sourceKey];
+            delete workingTableData[sourceKey];
+        }
     }
 
     if (!workingTableData.mate && templateData?.mate) {
@@ -1001,7 +1115,7 @@ function buildMixedSqliteFormatError_ACU(nonSqlResponses: GroupFillResponse_ACU[
     return `SQLite 严格模式下同一批分组填表禁止混合 SQL/非 SQL 输出；以下分组未返回 SQL tableEdit：${groupLabels}。请只重试这些分组，并输出 SQL。`;
 }
 
-export async function applyUnifiedGroupFillResponses_ACU(
+async function applyUnifiedGroupFillResponsesCore_ACU(
     responses: GroupFillResponse_ACU[],
     baseSnapshot: Record<string, any>,
     options: {
@@ -1010,13 +1124,14 @@ export async function applyUnifiedGroupFillResponses_ACU(
         isImportMode: boolean;
         chatKey?: string;
         isolationKey?: string;
-        chatSnapshot?: any[];
         templateScope?: TemplateScope_ACU;
         sqlApplyScope?: SqlTableApplyScope_ACU;
         replaceExistingIncremental?: { targetMessageIndices: number[]; targetSheetKeys: string[] };
         manualRefillProgress?: ManualRefillProgressV2_ACU;
         syncAfterCommit?: boolean;
         baseRevision?: string | null;
+        performanceRunId?: string;
+        performanceParentSpanId?: string;
     }
 ): Promise<CardUpdateResult> {
     if (!Array.isArray(responses) || responses.length === 0) {
@@ -1030,7 +1145,6 @@ export async function applyUnifiedGroupFillResponses_ACU(
     const firstJob = sortedResponses[0]?.job;
     const capturedChatKey = options.chatKey ?? firstJob?.chatKey;
     const capturedIsolationKey = options.isolationKey ?? firstJob?.isolationKey ?? getCurrentIsolationKey_ACU();
-    const capturedChat = options.chatSnapshot ?? firstJob?.chatSnapshot ?? getChatArray_ACU() ?? [];
     const capturedSqlApplyScope = options.sqlApplyScope ?? firstJob?.sqlApplyScope;
     const capturedTemplateScope = options.templateScope !== undefined
         ? options.templateScope
@@ -1095,16 +1209,16 @@ export async function applyUnifiedGroupFillResponses_ACU(
                 logDebug_ACU(`[TemplateScope] ${formatResponseGroupReference_ACU(response)} 的目标表不在模板范围内，已屏蔽其 SQL。`);
                 continue;
             }
-            let sqlText: string;
+            let reboundStatements: string[];
             try {
-                const reboundStatements = rebindSqlMutationTableIdentifiers_ACU(
+                reboundStatements = rebindSqlMutationTableIdentifiers_ACU(
                     normalizeSqlStatementsForRuntimeLog_ACU(response.tableEditText || ''),
                     baseSnapshot as any,
                     capturedSqlApplyScope?.templateData,
+                    { requireKnownTables: true },
                 );
                 // collect 不是安全边界。执行前再次校验 AI SQL，防止导出函数被直接调用时绕过白名单。
                 assertNoHiddenPhysicalColumnMutations_ACU(reboundStatements, baseSnapshot);
-                sqlText = reboundStatements.join(';\n');
             } catch (error: any) {
                 return {
                     success: false,
@@ -1113,19 +1227,46 @@ export async function applyUnifiedGroupFillResponses_ACU(
                     errorCategory: 'model',
                 };
             }
-            const touchedKeys = getTouchedSheetKeysFromSqlText_ACU(sqlText, baseSnapshot);
+
             if (Array.isArray(response.job.targetSheetKeys) && response.job.targetSheetKeys.length > 0) {
                 const allowedSheetKeys = new Set(response.job.targetSheetKeys);
-                const unauthorizedKeys = touchedKeys.filter((sheetKey: string) => !allowedSheetKeys.has(sheetKey));
-                if (unauthorizedKeys.length > 0) {
+                const retainedStatements: string[] = [];
+                const discardedKeys = new Set<string>();
+                for (const statement of reboundStatements) {
+                    const touchedKeys = getTouchedSheetKeysFromSqlText_ACU(statement, baseSnapshot);
+                    const unauthorizedKeys = touchedKeys.filter(sheetKey => !allowedSheetKeys.has(sheetKey));
+                    if (unauthorizedKeys.length === 0) {
+                        retainedStatements.push(statement);
+                        continue;
+                    }
+                    const authorizedKeys = touchedKeys.filter(sheetKey => allowedSheetKeys.has(sheetKey));
+                    const mayDiscardStatement = shouldDiscardUnauthorizedTableEdits_ACU()
+                        && authorizedKeys.length === 0
+                        && touchedKeys.length > 0;
+                    if (!mayDiscardStatement) {
+                        return {
+                            success: false,
+                            modifiedKeys: [],
+                            error: `统一提交失败：${formatResponseGroupReference_ACU(response)} 越权修改了非目标表 (${unauthorizedKeys.join(', ')})。允许写入表：${formatAllowedSheetKeys_ACU(response.job.targetSheetKeys)}。`,
+                            errorCategory: 'model',
+                        };
+                    }
+                    unauthorizedKeys.forEach(sheetKey => discardedKeys.add(sheetKey));
+                }
+                if (discardedKeys.size > 0) {
+                    logWarn_ACU(`[TargetScope] ${formatResponseGroupReference_ACU(response)} 已丢弃仅影响非目标表的 SQL statement: ${[...discardedKeys].sort().join(', ')}`);
+                }
+                reboundStatements = retainedStatements;
+                if (reboundStatements.length === 0) {
                     return {
                         success: false,
                         modifiedKeys: [],
-                        error: `统一提交失败：${formatResponseGroupReference_ACU(response)} 越权修改了非目标表 (${unauthorizedKeys.join(', ')})。`,
+                        error: `统一提交失败：${formatResponseGroupReference_ACU(response)} 的 SQL 仅修改非目标表，已全部丢弃。允许写入表：${formatAllowedSheetKeys_ACU(response.job.targetSheetKeys)}。请仅生成允许表的写入。`,
                         errorCategory: 'model',
                     };
                 }
             }
+            const sqlText = reboundStatements.join(';\n');
             sqlTexts.push(sqlText);
             sqlResponses.push(response);
         }
@@ -1143,6 +1284,7 @@ export async function applyUnifiedGroupFillResponses_ACU(
             isolationKey: capturedIsolationKey,
             writeSet: buildWriteSetForSheetKeys_ACU([...allTargetSheetKeySet], baseSnapshot),
             baseRevision: options.baseRevision,
+            workingDataMode: 'none',
             initialData: baseSnapshot as any,
             targetMessageIndex: options.saveTargetIndex,
             targetSheetKeys: null,
@@ -1209,7 +1351,9 @@ export async function applyUnifiedGroupFillResponses_ACU(
             // checkpoint，只接受 afterData，不能附带 sql_sheet_batch operations；但若已存在
             // 可由模板临时基线回放的 orphan artifacts，则必须保留本次 operations，供 persist
             // 层校验 replay + operations === afterData 后升级为 integrity_repair checkpoint。
-            const persistChat = capturedChat;
+            // Prompt 上下文保持执行开始时的冻结快照；但 checkpoint 拓扑是持久化事实，
+            // 首个 bucket 成功后必须立即对后续 bucket 可见，不能继续使用旧快照。
+            const persistChat = getChatArray_ACU() || [];
             const persistIsolationKey = capturedIsolationKey;
             const hasCheckpointAnchor = hasAnyV2Checkpoint_ACU(
                 persistChat,
@@ -1330,7 +1474,7 @@ export async function applyUnifiedGroupFillResponses_ACU(
                 return {
                     success: false,
                     modifiedKeys: [],
-                    error: `统一提交失败：${formatResponseGroupReference_ACU(response)} 越权修改了非目标表 (${unauthorizedKeys.join(', ')})。`,
+                    error: `统一提交失败：${formatResponseGroupReference_ACU(response)} 越权修改了非目标表 (${unauthorizedKeys.join(', ')})。允许写入表：${formatAllowedSheetKeys_ACU(response.job.targetSheetKeys)}。`,
                     errorCategory: 'model',
                 };
             }
@@ -1361,7 +1505,9 @@ export async function applyUnifiedGroupFillResponses_ACU(
         // full checkpoint；pristine 场景只接受 afterData 快照。若已有可临时回放的
         // orphan artifacts，则必须保留本次 operations，由 persist 验证
         // temporary replay + operations === afterData 后升级为 integrity_repair checkpoint。
-        const persistChat = capturedChat;
+        // 同 SQLite 路径：只冻结 AI 上下文，不冻结存储锚点事实。
+        // 否则首 bucket 建立 checkpoint 后，后续 bucket 仍会被误判为无锚点。
+        const persistChat = getChatArray_ACU() || [];
         const persistIsolationKey = capturedIsolationKey;
         const hasCheckpointAnchor = hasAnyV2Checkpoint_ACU(
             persistChat,
@@ -1397,6 +1543,9 @@ export async function applyUnifiedGroupFillResponses_ACU(
             writeSet: buildWriteSetForSheetKeys_ACU([...allTargetSheetKeySet], baseSnapshot),
             revisionWriteSet,
             baseRevision: options.baseRevision,
+            performanceRunId: options.performanceRunId,
+            performanceParentSpanId: options.performanceParentSpanId,
+            workingDataMode: 'none',
             initialData: baseSnapshot as any,
             targetMessageIndex: options.saveTargetIndex,
             targetSheetKeys: keysToSave,
@@ -1421,9 +1570,33 @@ export async function applyUnifiedGroupFillResponses_ACU(
         }
 
         if (options.syncAfterCommit !== false) {
-            await updateReadableLorebookEntry_ACU(true, false, null, workingTableData);
+            const lorebookSpan = startRuntimePerformanceSpan_ACU('table-fill-worldbook-sync', {
+                runId: options.performanceRunId,
+                parentSpanId: options.performanceParentSpanId,
+                settings: settings_ACU,
+                metrics: { targetMessageIndex: options.saveTargetIndex },
+            });
+            try {
+                await updateReadableLorebookEntry_ACU(true, false, null, workingTableData);
+                lorebookSpan.end({ success: true });
+            } catch (error) {
+                lorebookSpan.end({ success: false });
+                throw error;
+            }
             if (getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true) {
-                await enqueueSummaryVectorIndexFlush_ACU({ targetMessageIndex: options.saveTargetIndex, mode: 'sync', reason: 'unified_group_fill_complete' });
+                const vectorSpan = startRuntimePerformanceSpan_ACU('table-fill-vector-flush', {
+                    runId: options.performanceRunId,
+                    parentSpanId: options.performanceParentSpanId,
+                    settings: settings_ACU,
+                    metrics: { targetMessageIndex: options.saveTargetIndex },
+                });
+                try {
+                    await enqueueSummaryVectorIndexFlush_ACU({ targetMessageIndex: options.saveTargetIndex, mode: 'sync', reason: 'unified_group_fill_complete' });
+                    vectorSpan.end({ success: true });
+                } catch (error) {
+                    vectorSpan.end({ success: false });
+                    throw error;
+                }
             }
         }
     }
@@ -1431,7 +1604,33 @@ export async function applyUnifiedGroupFillResponses_ACU(
     return { success: true, modifiedKeys, tableData: workingTableData as any };
 }
 
-export async function processGroupedRuntimeChunk_ACU(
+export function applyUnifiedGroupFillResponses_ACU(
+    ...args: Parameters<typeof applyUnifiedGroupFillResponsesCore_ACU>
+): ReturnType<typeof applyUnifiedGroupFillResponsesCore_ACU> {
+    const responses = args[0];
+    const options = args[2];
+    const performanceSpan = startRuntimePerformanceSpan_ACU('table-fill-apply', {
+        runId: options.performanceRunId,
+        parentSpanId: options.performanceParentSpanId,
+        settings: settings_ACU,
+        metrics: {
+            groupCount: Array.isArray(responses) ? responses.length : 0,
+            targetMessageIndex: options.saveTargetIndex,
+        },
+    });
+    return applyUnifiedGroupFillResponsesCore_ACU(args[0], args[1], {
+        ...options,
+        performanceParentSpanId: performanceSpan.id,
+    }).then(result => {
+        performanceSpan.end({ success: result.success, changedSheetCount: result.modifiedKeys.length });
+        return result;
+    }, error => {
+        performanceSpan.end({ success: false });
+        throw error;
+    });
+}
+
+async function processGroupedRuntimeChunkCore_ACU(
     groups: GroupedRuntimeUpdateGroup_ACU[],
     mode: string,
     options: {
@@ -1453,11 +1652,14 @@ export async function processGroupedRuntimeChunk_ACU(
         syncAfterCommit?: boolean;
         onProgress?: (event: CardUpdateProgressEvent) => void;
         respectGlobalStop?: boolean;
+        performanceRunId?: string;
+        performanceParentSpanId?: string;
     } = {}
 ): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number }> {
     if (!Array.isArray(groups) || groups.length === 0) {
         return { success: true, failedGroups: [], committedBucketCount: 0 };
     }
+    const schedulingIdentitySnapshot = cloneTableDataSnapshot_ACU(currentJsonTableData_ACU);
 
     const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU('processGroupedRuntimeChunk');
     if (!migration.success) {
@@ -1472,22 +1674,39 @@ export async function processGroupedRuntimeChunk_ACU(
         await reloadStorageProvider();
     }
 
-    const executionScope = captureFillExecutionScope_ACU();
+    const executionScope = captureFillExecutionScope_ACU({
+        runId: options.performanceRunId,
+        parentSpanId: options.performanceParentSpanId,
+    });
     const templateForLookup = executionScope.sqlApplyScope?.templateData || parseTableTemplateJson_ACU({ stripSeedRows: true });
     const failedGroups = new Set<string>();
     let firstError: string | undefined;
     // 模板只起指导作用：只有模板声明的表参与填表。
     // 范围未知时不过滤，避免把所有表判成不参与导致数据写不进去。
     const templateScope = executionScope.templateScope;
-    const scopedGroups = groups
-        .map(group => {
-            const scopedSheetKeys = filterSheetKeysByTemplateScope_ACU(group.sheetKeys || [], templateScope);
-            if (scopedSheetKeys.length === (group.sheetKeys || []).length) return group;
-            const dropped = (group.sheetKeys || []).filter(sheetKey => !scopedSheetKeys.includes(sheetKey));
-            logDebug_ACU(`[TemplateScope] ${formatGroupReference_ACU(group)} 剔除模板未声明的表：${dropped.join('、')}。`);
-            return { ...group, sheetKeys: scopedSheetKeys };
-        })
-        .filter(group => (group.sheetKeys || []).length > 0);
+    let scopedGroups: GroupedRuntimeUpdateGroup_ACU[];
+    try {
+        scopedGroups = groups
+            .map(group => {
+                const reboundSheetKeys = templateForLookup
+                    ? rebindSheetKeysThroughTableAliases_ACU(group.sheetKeys || [], schedulingIdentitySnapshot, templateForLookup)
+                    : [...(group.sheetKeys || [])];
+                const scopedSheetKeys = filterSheetKeysByTemplateScope_ACU(reboundSheetKeys, templateScope);
+                if (scopedSheetKeys.length === reboundSheetKeys.length) return { ...group, sheetKeys: scopedSheetKeys };
+                const dropped = reboundSheetKeys.filter(sheetKey => !scopedSheetKeys.includes(sheetKey));
+                logDebug_ACU(`[TemplateScope] ${formatGroupReference_ACU(group)} 剔除模板未声明的表：${dropped.join('、')}。`);
+                return { ...group, sheetKeys: scopedSheetKeys };
+            })
+            .filter(group => (group.sheetKeys || []).length > 0);
+    } catch (error) {
+        const message = error instanceof SheetTableAliasResolutionError_ACU ? error.message : String(error);
+        return {
+            success: false,
+            failedGroups: groups.map(group => group.key),
+            error: sanitizeRetryFeedback_ACU(message, MAX_WARN_ERROR_LENGTH_ACU),
+            committedBucketCount: 0,
+        };
+    }
     if (scopedGroups.length === 0) {
         logDebug_ACU('[TemplateScope] 所有分组的目标表都不在模板范围内，本次无需填表。');
         return { success: true, failedGroups: [], committedBucketCount: 0 };
@@ -1565,7 +1784,7 @@ export async function processGroupedRuntimeChunk_ACU(
                 aborted = true;
                 break;
             }
-            const chatHistory = executionScope.chatSnapshot;
+            const chatHistory = executionScope.promptMessages;
             const bucketFirstMessageIndex = Math.min(...bucket.plannedJobs.map(job => job.firstMessageIndexOfBatch));
             const explicitMergeBaseBounds = [...new Set(
                 bucket.plannedJobs
@@ -1592,6 +1811,23 @@ export async function processGroupedRuntimeChunk_ACU(
             }
 
             const mergedBatchData = baseResult.data;
+            try {
+                bucket.plannedJobs = bucket.plannedJobs.map(plannedJob => ({
+                    ...plannedJob,
+                    group: {
+                        ...plannedJob.group,
+                        sheetKeys: rebindSheetKeysThroughTableAliases_ACU(
+                            plannedJob.group.sheetKeys || [],
+                            templateForLookup || schedulingIdentitySnapshot,
+                            mergedBatchData,
+                        ),
+                    },
+                }));
+            } catch (error) {
+                bucket.plannedJobs.forEach(job => failedGroups.add(job.group.key));
+                firstError = firstError || (error instanceof Error ? error.message : String(error));
+                break;
+            }
             _set_currentJsonTableData_ACU(mergedBatchData);
             const baseSnapshot = JSON.parse(JSON.stringify(mergedBatchData));
             const bucketSheetKeys = [...new Set(bucket.plannedJobs.flatMap(job => job.group.sheetKeys || []))].sort();
@@ -1639,9 +1875,10 @@ export async function processGroupedRuntimeChunk_ACU(
                     isImportMode: options.isImportMode === true,
                     chatKey: executionScope.chatKey,
                     isolationKey: executionScope.isolationKey,
-                    chatSnapshot: executionScope.chatSnapshot,
                     templateScope: executionScope.templateScope,
                     sqlApplyScope: executionScope.sqlApplyScope,
+                    performanceRunId: options.performanceRunId,
+                    performanceParentSpanId: options.performanceParentSpanId,
                 });
             }
 
@@ -1652,14 +1889,14 @@ export async function processGroupedRuntimeChunk_ACU(
 
             const collectFeedback = retryUnifiedError ? { lastUnifiedError: retryUnifiedError } : undefined;
             const settledResponses = await Promise.allSettled(jobs.map(job => collectGroupFillResponse_ACU(
-                job,
-                collectFeedback,
-                options.abortController,
-                {
-                    onProgress: event => emitBucketProgress(bucketIndex, event),
-                    respectGlobalStop: options.respectGlobalStop,
-                },
-            )));
+                    job,
+                    collectFeedback,
+                    options.abortController,
+                    {
+                        onProgress: event => emitBucketProgress(bucketIndex, event),
+                        respectGlobalStop: options.respectGlobalStop,
+                    },
+                )));
             let responses: GroupFillResponse_ACU[] = [];
             let collectFailed = false;
             let collectError: string | undefined;
@@ -1755,9 +1992,10 @@ export async function processGroupedRuntimeChunk_ACU(
                 baseRevision,
                 chatKey: executionScope.chatKey,
                 isolationKey: executionScope.isolationKey,
-                chatSnapshot: executionScope.chatSnapshot,
                 templateScope: executionScope.templateScope,
                 sqlApplyScope: executionScope.sqlApplyScope,
+                performanceRunId: options.performanceRunId,
+                performanceParentSpanId: options.performanceParentSpanId,
             });
             if (applyResult.success) {
                 const nextCommittedBucketCount = committedBucketCount + 1;
@@ -1809,6 +2047,33 @@ export async function processGroupedRuntimeChunk_ACU(
     return failedGroups.size > 0
         ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount }
         : { success: true, failedGroups: [], committedBucketCount };
+}
+
+export function processGroupedRuntimeChunk_ACU(
+    ...args: Parameters<typeof processGroupedRuntimeChunkCore_ACU>
+): ReturnType<typeof processGroupedRuntimeChunkCore_ACU> {
+    const groups = args[0];
+    const options = args[2] || {};
+    const performanceSpan = startRuntimePerformanceSpan_ACU('grouped-runtime-chunk', {
+        runId: options.performanceRunId,
+        parentSpanId: options.performanceParentSpanId,
+        settings: settings_ACU,
+        metrics: {
+            groupCount: Array.isArray(groups) ? groups.length : 0,
+            sheetCount: Array.isArray(groups) ? new Set(groups.flatMap(group => group.sheetKeys || [])).size : 0,
+            sqlite: isSqliteMode(),
+        },
+    });
+    return processGroupedRuntimeChunkCore_ACU(groups, args[1], {
+        ...options,
+        performanceParentSpanId: performanceSpan.id,
+    }).then(result => {
+        performanceSpan.end({ success: result.success, failedGroupCount: result.failedGroups.length, bucketCount: result.committedBucketCount });
+        return result;
+    }, error => {
+        performanceSpan.end({ success: false });
+        throw error;
+    });
 }
 
 /**
@@ -1865,7 +2130,7 @@ export async function executeCardUpdateCore_ACU(
                     buildWriteSetForSheetKeys_ACU(targetSheetKeys, rawBaseSnapshot),
                     { chatKey: executionScope.chatKey, isolationKey: executionScope.isolationKey },
                 );
-                const collectResult = await collectGroupFillResponse_ACU({
+                const currentJob: GroupFillJob_ACU = {
                     groupKey: `legacy_execute_${saveTargetIndex}`,
                     groupId: 0,
                     batchNumber: progressContext?.currentBatch || 1,
@@ -1879,10 +2144,15 @@ export async function executeCardUpdateCore_ACU(
                     isImportMode,
                     chatKey: executionScope.chatKey,
                     isolationKey: executionScope.isolationKey,
-                    chatSnapshot: executionScope.chatSnapshot,
                     templateScope: executionScope.templateScope,
                     sqlApplyScope: executionScope.sqlApplyScope,
-                }, { lastSqlError }, effectiveAbortController, { onProgress: emitProgress, maxRetriesOverride: 1 });
+                };
+                const collectResult = await collectGroupFillResponse_ACU(
+                    currentJob,
+                    { lastSqlError },
+                    effectiveAbortController,
+                    { onProgress: emitProgress, maxRetriesOverride: 1 },
+                );
 
                 if (collectResult.aborted) {
                     return { success: false, modifiedKeys: [], aborted: true };
@@ -1924,6 +2194,7 @@ export async function executeCardUpdateCore_ACU(
                         isolationKey: executionScope.isolationKey,
                         writeSet,
                         baseRevision,
+                        workingDataMode: 'none',
                         initialData: rawBaseSnapshot as any,
                         targetMessageIndex: saveTargetIndex,
                         targetSheetKeys: null,
@@ -2293,6 +2564,7 @@ export async function processUpdatesBatch_ACU(
     }
 
     const { targetSheetKeys, batchSize: specificBatchSize, requestOptions } = options;
+    const schedulingIdentitySnapshot = cloneTableDataSnapshot_ACU(currentJsonTableData_ACU);
 
     const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU('processUpdatesBatch');
     if (!migration.success) {
@@ -2333,6 +2605,18 @@ export async function processUpdatesBatch_ACU(
                 return { success: false, failedBatch: batchNumber, error: baseResult.error || '无法构建合并基底，操作已终止。' };
             }
             const mergedBatchData = baseResult.data;
+            let effectiveTargetSheetKeys = targetSheetKeys;
+            if (Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0) {
+                try {
+                    effectiveTargetSheetKeys = rebindSheetKeysThroughTableAliases_ACU(
+                        targetSheetKeys,
+                        schedulingIdentitySnapshot,
+                        mergedBatchData,
+                    );
+                } catch (error) {
+                    return { success: false, failedBatch: batchNumber, error: error instanceof Error ? error.message : String(error) };
+                }
+            }
 
             const batchSheetKeys = getSortedSheetKeys_ACU(mergedBatchData);
             const batchIsolationKey = getCurrentIsolationKey_ACU();
@@ -2367,9 +2651,8 @@ export async function processUpdatesBatch_ACU(
             // 决议 effective API preset：如果调用方未指定 tableApiPreset，
             // 则以 targetSheetKeys 中第一个表名为准查覆盖映射
             let effectiveRequestOptions = requestOptions;
-            if (!effectiveRequestOptions?.tableApiPreset && targetSheetKeys && targetSheetKeys.length > 0) {
-                const templateForLookup = parseTableTemplateJson_ACU({ stripSeedRows: true });
-                const firstTableName = templateForLookup?.[targetSheetKeys[0]]?.name || '';
+            if (!effectiveRequestOptions?.tableApiPreset && effectiveTargetSheetKeys && effectiveTargetSheetKeys.length > 0) {
+                const firstTableName = mergedBatchData?.[effectiveTargetSheetKeys[0]]?.name || '';
                 const resolvedPreset = resolveTableApiPresetOverride_ACU(firstTableName);
                 if (resolvedPreset) {
                     effectiveRequestOptions = { ...(effectiveRequestOptions || {}), tableApiPreset: resolvedPreset };
@@ -2381,7 +2664,7 @@ export async function processUpdatesBatch_ACU(
                 finalSaveTargetIndex,
                 updateMode,
                 isSilentMode,
-                targetSheetKeys,
+                effectiveTargetSheetKeys,
                 effectiveRequestOptions,
                 {
                     currentBatch: batchNumber,
@@ -2505,7 +2788,34 @@ export async function orchestrateManualCatchUp_ACU(
     const selectedSheetKeys = [...new Set(plan.waves.flatMap(wave => wave.sheetKeys))].sort();
 
     if (plan.waves.length === 0) {
-        return { success: true, outcome: 'no_work', catchUpPlan: plan, committedBucketCount: 0 };
+        return {
+            success: true,
+            outcome: 'no_work',
+            catchUpPlan: plan,
+            committedBucketCount: 0,
+            dataCommitted: false,
+            replayVerified: true,
+            terminalProgressSaved: false,
+        };
+    }
+
+    // 旧版“删除全部数据”会将 header-only reset checkpoint 留在原先较晚楼层。
+    // 在任何 AI 调用之前修复可证明安全的布局；无法证明安全则阻断，而不是让 bucket
+    // 伪提交后由 terminal progress-only 写入兜底报错。
+    const preflightTargetIndex = plan.waves[0]?.messageIndices[0] ?? plan.targetMessageIndex;
+    if (preflightTargetIndex !== null && preflightTargetIndex !== undefined) {
+        const anchorPreflight = await ensureManualCatchUpAnchorBeforeTarget_ACU(preflightTargetIndex, getCurrentIsolationKey_ACU());
+        if (anchorPreflight.status === 'blocked') {
+            return {
+                success: false,
+                outcome: 'blocked',
+                error: anchorPreflight.error,
+                catchUpPlan: plan,
+                committedBucketCount: 0,
+                dataCommitted: false,
+                diagnosticCode: 'anchor_preflight_blocked',
+            };
+        }
     }
 
     const maxConcurrentGroups = Math.max(1, Math.trunc(Number(settings_ACU.maxConcurrentGroups) || 1));
@@ -2519,6 +2829,7 @@ export async function orchestrateManualCatchUp_ACU(
     const runId = createManualCatchUpRunId_ACU();
     let committedBucketCount = 0;
     let activeWaveIndex = 0;
+    let lastCommittedBucketTargetIndex: number | null = null;
     const completedSheetMessageIndexByKey: Record<string, number> = {};
     const allContextMessageIndices = [...new Set(plan.waves.flatMap(wave => wave.messageIndices))].sort((left, right) => left - right);
     const originalStartMessageIndex = plan.waves[0]?.messageIndices[0] ?? plan.targetMessageIndex ?? 0;
@@ -2554,20 +2865,92 @@ export async function orchestrateManualCatchUp_ACU(
             updatedAt: Date.now(),
         };
     };
+    const resolveSafeTerminalTargetMessageIndex = (): number | undefined => {
+        const liveChat = getChatArray_ACU() || [];
+        const isolationKey = getCurrentIsolationKey_ACU();
+        const targetCandidates = [terminalTargetMessageIndex, lastCommittedBucketTargetIndex]
+            .filter((value): value is number => Number.isInteger(value) && value >= 0)
+            .filter((value, index, values) => values.indexOf(value) === index);
+        return targetCandidates.find(targetIndex =>
+            hasAnyV2Checkpoint_ACU(liveChat, isolationKey, targetIndex),
+        );
+    };
+    const verifyCommittedCatchUpReplay = async (): Promise<{ error?: string; diagnosticCode?: ManualUpdateResult['diagnosticCode'] }> => {
+        // 不能用内存 runtime 作为验收依据：bucket 的唯一交付物是聊天中的 V2 frame。
+        // 在终态前从 live chat 做 bounded replay，并用结果回写运行时视图，确保 UI 不会继续
+        // 展示仅存在于内存的假数据。
+        const safeTargetMessageIndex = resolveSafeTerminalTargetMessageIndex();
+        if (safeTargetMessageIndex === undefined) {
+            return {
+                error: '手动追平提交后未找到可见 full checkpoint，无法验证 V2 replay。',
+                diagnosticCode: 'replay_anchor_missing',
+            };
+        }
+        try {
+            const replay = await loadTableStateFromFramesV2Detailed_ACU(getChatArray_ACU(), getCurrentIsolationKey_ACU(), {
+                maxMessageIndex: safeTargetMessageIndex,
+                updateRuntimeState: false,
+            });
+            if (replay?.requiresCheckpointConvergence || replay?.compatibilityRepairs?.length) {
+                const affectedSheetKeys = [...new Set((replay.compatibilityRepairs || []).map(item => item.sheetKey))];
+                return {
+                    error: `V2 replay 仍依赖临时 Sheet 补锚：${affectedSheetKeys.join('、') || '未知 Sheet'}。请先执行恢复收敛。`,
+                    diagnosticCode: 'replay_requires_checkpoint_convergence',
+                };
+            }
+            const replayData = replay?.data as Record<string, any> | undefined;
+            const missingSheetKeys = selectedSheetKeys.filter(sheetKey => !replayData?.[sheetKey]);
+            if (!replayData || missingSheetKeys.length > 0) {
+                return {
+                    error: `V2 replay 未恢复所选表：${missingSheetKeys.join('、') || '无可用回放数据'}。`,
+                    diagnosticCode: 'replay_missing_selected_sheet',
+                };
+            }
+            // 存在 sheet 只证明锚点可见，不证明本轮 bucket 的 operations 真正进入可回放
+            // 时间线。对运行时产生的数据内容逐表比对，防止“有表头但本轮数据被最后 checkpoint
+            // 跳过”的伪成功。
+            const replayMismatchSheetKeys = selectedSheetKeys.filter(sheetKey =>
+                JSON.stringify(replayData[sheetKey]?.content)
+                !== JSON.stringify((currentJsonTableData_ACU as Record<string, any> | null)?.[sheetKey]?.content),
+            );
+            if (replayMismatchSheetKeys.length > 0) {
+                return {
+                    error: `V2 replay 与本轮已提交数据不一致：${replayMismatchSheetKeys.join('、')}。`,
+                    diagnosticCode: 'replay_data_mismatch',
+                };
+            }
+            _set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(replayData)));
+            return {};
+        } catch (error: any) {
+            return {
+                error: error?.message || String(error || 'V2 replay 验证失败。'),
+                diagnosticCode: 'replay_failed',
+            };
+        }
+    };
     const persistCatchUpTerminalProgress = async (
         status: 'complete' | 'stopped' | 'failed' | 'sync_pending',
         lastError?: string,
     ): Promise<string | undefined> => {
         try {
+            // terminal progress 是纯 metadata，必须写在当前 live chat 中能看到 full
+            // checkpoint 的楼层。优先计划终点；聊天在运行期间变化时才退回最后一个已严格
+            // 提交的 bucket，绝不能向无锚点楼层发起一次注定失败的写入。
+            const isolationKey = getCurrentIsolationKey_ACU();
+            const safeTargetMessageIndex = resolveSafeTerminalTargetMessageIndex();
+            if (safeTargetMessageIndex === undefined) {
+                return `手动追平终态 ${status} 未找到可见 full checkpoint。`;
+            }
             const progress = buildCatchUpProgress(status, lastError);
             const commitResult = await runTableUpdateCommit_ACU({
                 source: 'manual_fill',
                 reason: `orchestrateManualCatchUp:terminal:${status}`,
-                isolationKey: getCurrentIsolationKey_ACU(),
+                isolationKey,
                 writeSet: buildWriteSetForSheetKeys_ACU(selectedSheetKeys, currentJsonTableData_ACU),
                 revisionWriteSet: [],
+                workingDataMode: 'none',
                 initialData: currentJsonTableData_ACU,
-                targetMessageIndex: terminalTargetMessageIndex,
+                targetMessageIndex: safeTargetMessageIndex,
                 targetSheetKeys: [],
                 updateGroupKeys: [],
                 trackingSheetKeys: [],
@@ -2575,9 +2958,9 @@ export async function orchestrateManualCatchUp_ACU(
                 operations: [],
                 manualRefillProgress: progress,
                 strictSave: true,
-            }, ({ workingData }) => ({
+            }, () => ({
                 success: true,
-                tableData: workingData || currentJsonTableData_ACU,
+                tableData: currentJsonTableData_ACU,
             }));
             return commitResult.success ? undefined : (commitResult.error || `手动追平终态 ${status} 保存失败。`);
         } catch (error: any) {
@@ -2604,6 +2987,9 @@ export async function orchestrateManualCatchUp_ACU(
                     success: false, outcome: 'stopped',
                     error: terminalError ? `手动追平已终止；终态进度保存失败：${terminalError}` : '手动追平已终止。',
                     committedBucketCount, catchUpPlan: plan,
+                    dataCommitted: committedBucketCount > 0,
+                    replayVerified: false,
+                    terminalProgressSaved: !terminalError,
                 };
             }
             const wave = plan.waves[waveIndex];
@@ -2615,6 +3001,9 @@ export async function orchestrateManualCatchUp_ACU(
                         success: false, outcome: 'stopped',
                         error: terminalError ? `手动追平已终止；终态进度保存失败：${terminalError}` : '手动追平已终止。',
                         committedBucketCount, catchUpPlan: plan,
+                        dataCommitted: committedBucketCount > 0,
+                        replayVerified: false,
+                        terminalProgressSaved: !terminalError,
                     };
                 }
                 const groupChunk = wave.groups.slice(groupStart, groupStart + maxConcurrentGroups);
@@ -2668,6 +3057,7 @@ export async function orchestrateManualCatchUp_ACU(
                         bucket.sheetKeys.forEach(sheetKey => {
                             completedSheetMessageIndexByKey[sheetKey] = bucket.saveTargetIndex;
                         });
+                        lastCommittedBucketTargetIndex = bucket.saveTargetIndex;
                     },
                 });
                 committedBucketCount += result.committedBucketCount;
@@ -2682,10 +3072,39 @@ export async function orchestrateManualCatchUp_ACU(
                         error: terminalError ? `${primaryError}；终态进度保存失败：${terminalError}` : primaryError,
                         committedBucketCount,
                         catchUpPlan: plan,
+                        dataCommitted: committedBucketCount > 0,
+                        replayVerified: false,
+                        terminalProgressSaved: !terminalError,
                     };
                 }
             }
             await loadAllChatMessages_ACU();
+        }
+
+        const replayVerification = await verifyCommittedCatchUpReplay();
+        if (replayVerification.error) {
+            // 任何 bucket 在内存中的成功都不足以证明已交付。回放失败后不能继续刷新世界书，
+            // 更不能写 complete/failed progress 掩盖不可验证的持久化状态。
+            let reloadError: string | undefined;
+            try {
+                const reloadResult = await reloadStorageProvider();
+                if (!reloadResult.ok) {
+                    reloadError = reloadResult.error || reloadResult.failureCode || '存储运行时重载未完成。';
+                }
+            } catch (error: any) {
+                reloadError = error?.message || String(error || '存储运行时重载异常。');
+            }
+            return {
+                success: false,
+                outcome: 'integrity_failed',
+                error: `手动追平持久化完整性校验失败：${replayVerification.error}${reloadError ? `；聊天状态回载失败：${reloadError}` : '；已从聊天持久化状态回载运行时。'}`,
+                committedBucketCount,
+                dataCommitted: committedBucketCount > 0,
+                replayVerified: false,
+                terminalProgressSaved: false,
+                diagnosticCode: replayVerification.diagnosticCode,
+                catchUpPlan: plan,
+            };
         }
 
         const refreshResult = await refreshData();
@@ -2693,9 +3112,15 @@ export async function orchestrateManualCatchUp_ACU(
             const terminalError = await persistCatchUpTerminalProgress('sync_pending');
             if (terminalError) {
                 return {
-                    success: false,
+                    // 世界书同步已经明确处于待重试状态；terminal progress 同样只是恢复
+                    // 辅助元数据，不能把已提交的表数据误报成失败。
+                    success: true,
+                    outcome: 'progress_metadata_failed',
                     error: `手动追平数据已提交且世界书同步待重试，但终态进度保存失败：${terminalError}`,
                     committedBucketCount,
+                    dataCommitted: committedBucketCount > 0,
+                    replayVerified: true,
+                    terminalProgressSaved: false,
                     catchUpPlan: plan,
                 };
             }
@@ -2703,19 +3128,28 @@ export async function orchestrateManualCatchUp_ACU(
                 success: true,
                 outcome: 'sync_pending',
                 committedBucketCount,
+                dataCommitted: committedBucketCount > 0,
+                replayVerified: true,
+                terminalProgressSaved: true,
                 catchUpPlan: plan,
             };
         }
         const terminalError = await persistCatchUpTerminalProgress('complete');
         if (terminalError) {
             return {
-                success: false,
+                // bucket 已严格提交并完成最终刷新；终态进度是恢复辅助元数据，失败不能
+                // 反向篡改“表数据已提交”的事实。
+                success: true,
+                outcome: 'progress_metadata_failed',
                 error: `手动追平数据与世界书同步已完成，但终态进度保存失败：${terminalError}`,
                 committedBucketCount,
+                dataCommitted: committedBucketCount > 0,
+                replayVerified: true,
+                terminalProgressSaved: false,
                 catchUpPlan: plan,
             };
         }
-        return { success: true, outcome: 'complete', committedBucketCount, catchUpPlan: plan };
+        return { success: true, outcome: 'complete', committedBucketCount, dataCommitted: committedBucketCount > 0, replayVerified: true, terminalProgressSaved: true, catchUpPlan: plan };
     } catch (error: any) {
         const primaryError = error?.message || String(error || '手动追平执行异常。');
         const terminalError = await persistCatchUpTerminalProgress('failed', primaryError);
@@ -2725,6 +3159,9 @@ export async function orchestrateManualCatchUp_ACU(
             error: terminalError ? `${primaryError}；终态进度保存失败：${terminalError}` : primaryError,
             committedBucketCount,
             catchUpPlan: plan,
+            dataCommitted: committedBucketCount > 0,
+            replayVerified: false,
+            terminalProgressSaved: !terminalError,
         };
     } finally {
         _set_isAutoUpdatingCard_ACU(false);
@@ -2877,6 +3314,11 @@ export async function orchestrateManualUpdate_ACU(
         const groupKeys = Object.keys(updateGroups);
 
         const manualRefillEnabled = options.clearBeforeUpdate === true;
+        // 最终 commit 只能消费本次会话开始时解析出的模板，不能在 bucket 已写入后重新读取
+        // chat override / profile 全局模板；后者在长事务期间变化会让 fallback 根与本次重填依据脱节。
+        const frozenManualRefillTemplateData = manualRefillEnabled
+            ? resolveManualRefillTemplateData_ACU(liveChat, getCurrentIsolationKey_ACU())
+            : null;
         // 手动填表先无条件清空本次范围内选中表的 checkpoint 与增量，再完全沿用自动填表语义
         // （逐 bucket 取 bucketFirstMessageIndex - 1）解析基底。初始基线保持原位，不做前移。
         if (manualRefillEnabled) {
@@ -2915,6 +3357,7 @@ export async function orchestrateManualUpdate_ACU(
                 const failureError = error?.message || '手动重填清理后刷新运行时快照失败。';
                 return { success: false, error: rollbackError ? `${failureError}；回滚失败：${rollbackError}` : failureError };
             }
+
         }
 
         _set_isAutoUpdatingCard_ACU(true);
@@ -3011,11 +3454,13 @@ export async function orchestrateManualUpdate_ACU(
                 return await failManualRefillSession('手动重填已完成，但无法从运行时导出完整恢复快照；已拒绝写入不完整 checkpoint。');
             }
             try {
+                const isolationKey = getCurrentIsolationKey_ACU();
                 const snapshotResult = await commitManualRefillSheetSnapshotInRangeAtomic_ACU({
-                    isolationKey: getCurrentIsolationKey_ACU(),
+                    isolationKey,
                     targetMessageIndices: contextScopeIndices,
                     targetSheetKeys: targetKeys,
                     snapshotData: completedData,
+                    templateData: frozenManualRefillTemplateData || undefined,
                 });
                 if (!snapshotResult.success) {
                     logError_ACU('[Manual Refill] 重填完成后提交完整单表 checkpoint 失败:', snapshotResult.error);

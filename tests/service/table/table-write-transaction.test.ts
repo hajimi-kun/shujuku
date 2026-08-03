@@ -179,38 +179,71 @@ describe('table-write-transaction', () => {
     expect(globalData.sheet_0.content).toEqual([['row_id'], ['r1']]);
   });
 
-  it('提交时发现同表运行时版本已变化则失败，交给上层重试', async () => {
+  it('workingDataMode=none 时不复制 initialData，并向不需要工作副本的提交回调传 null', async () => {
+    const serializationProbe = {
+      toJSON() {
+        throw new Error('不应复制未使用的事务工作数据');
+      },
+    };
+    let receivedWorkingData: any = 'unset';
+
+    await runTableWriteTransaction_ACU({
+      source: 'group_fill',
+      reason: 'commit precomputed snapshot',
+      writeSet: sheetWrite('sheet_0'),
+      initialData: { sheet_0: serializationProbe } as any,
+      workingDataMode: 'none',
+    }, async (_ctx, workingData) => {
+      receivedWorkingData = workingData;
+    });
+
+    expect(receivedWorkingData).toBeNull();
+  });
+
+  it('提交时同表运行时版本已变化仍允许提交（兼容第三方外部修改）', async () => {
     const staleRevision = captureTableRuntimeRevisionForWriteSet_ACU(sheetWrite('sheet_0'));
 
     await runTableWriteTransaction_ACU({ source: 'manual_crud', reason: 'first commit', writeSet: sheetWrite('sheet_0') }, async (ctx) => {
       await ctx.runCommit(async () => 'ok');
     });
 
-    await expect(runTableWriteTransaction_ACU({
+    const commits: string[] = [];
+    await runTableWriteTransaction_ACU({
       source: 'manual_crud',
       reason: 'stale commit',
       writeSet: sheetWrite('sheet_0'),
       baseRevision: staleRevision,
     }, async (ctx) => {
-      await ctx.runCommit(async () => 'should-fail');
-    })).rejects.toThrow('表 sheet_0 已变化');
+      await ctx.runCommit(async () => {
+        commits.push('commit');
+        return 'ok';
+      });
+    });
+
+    expect(commits).toEqual(['commit']);
   });
 
-  it('全局写入后旧 all revision 提交被拒绝', async () => {
+  it('全局写入后旧 all revision 提交仍被允许', async () => {
     const staleRevision = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }]);
 
     await runTableWriteTransaction_ACU({ source: 'import', reason: 'global commit', writeSet: [{ kind: 'all' }] }, async (ctx) => {
       await ctx.runCommit(async () => 'ok');
     });
 
-    await expect(runTableWriteTransaction_ACU({
+    const commits: string[] = [];
+    await runTableWriteTransaction_ACU({
       source: 'import',
       reason: 'stale global commit',
       writeSet: [{ kind: 'all' }],
       baseRevision: staleRevision,
     }, async (ctx) => {
-      await ctx.runCommit(async () => 'should-fail');
-    })).rejects.toThrow('运行时数据已变化');
+      await ctx.runCommit(async () => {
+        commits.push('commit');
+        return 'ok';
+      });
+    });
+
+    expect(commits).toEqual(['commit']);
   });
 
   it('不同表版本未变化时允许基于旧快照提交', async () => {
@@ -250,7 +283,7 @@ describe('table-write-transaction', () => {
     })).resolves.toBeUndefined();
   });
 
-  it('all 快照下若期间发生任意写入仍被 global 检查拦截', async () => {
+  it('all 快照下若期间发生任意写入仍可提交（不再被 global 检查拦截）', async () => {
     const allRevision = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }]);
 
     // 捕获后有并发 per-sheet 写入，global 必然变化。
@@ -258,14 +291,20 @@ describe('table-write-transaction', () => {
       await ctx.runCommit(async () => 'ok', sheetWrite('sheet_x'));
     });
 
-    await expect(runTableWriteTransaction_ACU({
+    const commits: string[] = [];
+    await runTableWriteTransaction_ACU({
       source: 'template_assistant',
       reason: 'chat_template_reconciliation',
       writeSet: sheetWrite('sheet_x'),
       baseRevision: allRevision,
     }, async (ctx) => {
-      await ctx.runCommit(async () => 'should-fail');
-    })).rejects.toThrow('运行时数据已变化');
+      await ctx.runCommit(async () => {
+        commits.push('commit');
+        return 'ok';
+     });
+    });
+
+    expect(commits).toEqual(['commit']);
   });
 
 
