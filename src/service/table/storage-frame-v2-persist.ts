@@ -1185,7 +1185,7 @@ async function persistTableMutationLogV2Core_ACU(
   // Import-without-operations is a full afterData snapshot write, so it is
   // still a replay artifact for boundary ordering even though it is not a
   // metadata-only fill event.
-  const writesReplayArtifact = operations.length > 0 || hasMetadataOnlyFillEvent || hasManualRefillProgress || replacement !== null
+  const writesReplayArtifact = operations.length > 0 || hasFillSheets || hasManualRefillProgress || replacement !== null
     || (options.source === 'import' && operations.length === 0);
   // V2 replay 只从最后一个 full checkpoint 开始。向该 checkpoint 之前写入任何
   // operation、填表事件或追平进度都会制造“保存成功但永远无法回放”的伪提交；不能等到
