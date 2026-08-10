@@ -60218,8 +60218,11 @@ $CONTENT
         for (const entry of Array.isArray(entries) ? entries : []) {
             const comment = String(entry?.comment || entry?.rawComment || entry?.name || '').trim();
             const candidates = buildNativeWorldbookGreenlightRemovalCandidates_ACU(entry);
+            const allowRawContentForEntry = typeof allowRawContentOnly === 'function'
+                ? allowRawContentOnly(entry)
+                : allowRawContentOnly;
             for (const candidate of candidates) {
-                if (!allowRawContentOnly && !candidate.requiresComment)
+                if (!allowRawContentForEntry && !candidate.requiresComment)
                     continue;
                 if (candidate.requiresComment && comment && !result.includes(comment))
                     continue;
@@ -60242,7 +60245,10 @@ $CONTENT
         for (const message of messages) {
             if (!shouldFilterNativeWorldbookMessage_ACU(message))
                 continue;
-            const allowRawContentOnly = isNativeWorldbookPromptMessage_ACU(message);
+            const isNativeWorldbookMessage = isNativeWorldbookPromptMessage_ACU(message);
+            const isSystemMessage = String(message?.role || '').trim().toLowerCase() === 'system';
+            const allowRawContentOnly = (entry) => isNativeWorldbookMessage
+                || (isSystemMessage && isDatabaseGeneratedLorebookEntry_ACU(entry));
             if (typeof message.content === 'string') {
                 const result = removeNativeWorldbookGreenlightText_ACU(message.content, entries, allowRawContentOnly);
                 message.content = result.text;
@@ -60264,10 +60270,13 @@ $CONTENT
         const candidates = buildNativeWorldbookGreenlightRemovalCandidates_ACU(entry);
         if (candidates.length === 0)
             return false;
+        const isDatabaseGeneratedEntry = isDatabaseGeneratedLorebookEntry_ACU(entry);
         for (const message of Array.isArray(messages) ? messages : []) {
             if (!message || typeof message !== 'object')
                 continue;
-            const allowRawContentOnly = isNativeWorldbookPromptMessage_ACU(message);
+            const isSystemMessage = String(message.role || '').trim().toLowerCase() === 'system';
+            const allowRawContentOnly = isNativeWorldbookPromptMessage_ACU(message)
+                || (isSystemMessage && isDatabaseGeneratedEntry);
             const texts = typeof message.content === 'string'
                 ? [message.content]
                 : (Array.isArray(message.content)

@@ -333,6 +333,43 @@ describe('handleChatCompletionReady_ACU', () => {
     expect(mockLogDebug).not.toHaveBeenCalledWith('[提示词模板] 已补入 Agent 正文世界书绿灯消息，数量:', expect.any(Number));
   });
 
+  it('数据库导出 Skill 条目已存在于普通 system 消息时不会在底部重复补入', async () => {
+    const databaseContent = '# 关系档案-1\n\n| 人物 | 关系 |\n| --- | --- |\n| 艾琳 | 搭档 |';
+    mockPendingFinalGenerationGreenlightsRef.value = [{ bookName: '数据库世界书', uid: 'db-allowed' }];
+    mockGetAgentControlledWorldbookEntriesForFinalPrompt.mockResolvedValue([
+      {
+        bookName: '数据库世界书',
+        uid: 'db-allowed',
+        comment: 'TavernDB-ACU-CustomExport-关系档案-1',
+        content: databaseContent,
+      },
+    ]);
+    mockGetAgentGreenlightWorldbookEntriesForPlot.mockResolvedValue([
+      {
+        bookName: '数据库世界书',
+        uid: 'db-allowed',
+        comment: 'TavernDB-ACU-CustomExport-关系档案-1',
+        content: databaseContent,
+        depth: 1,
+        role: 'system',
+      },
+    ]);
+    const data = {
+      messages: [
+        { role: 'system', content: `系统提示\n\n${databaseContent}\n\n其他系统提示` },
+        { role: 'user', content: '当前输入' },
+      ],
+    };
+
+    await handleChatCompletionReady_ACU(data);
+
+    expect(data.messages).toEqual([
+      { role: 'system', content: `系统提示\n\n${databaseContent}\n\n其他系统提示` },
+      { role: 'user', content: '当前输入' },
+    ]);
+    expect(mockLogDebug).not.toHaveBeenCalledWith('[提示词模板] 已补入 Agent 正文世界书绿灯消息，数量:', expect.any(Number));
+  });
+
   it('正文蓝灯 allowlist 条目未被酒馆原生触发时会补入当前请求', async () => {
     mockPendingFinalGenerationGreenlightsRef.value = [{ bookName: '世界书', uid: 'agent-only', reason: '正文需要' }];
     mockGetAgentGreenlightWorldbookEntriesForPlot.mockResolvedValue([
@@ -395,6 +432,33 @@ describe('handleChatCompletionReady_ACU', () => {
     await handleChatCompletionReady_ACU(data);
 
     expect(mockGetAgentControlledWorldbookEntriesForFinalPrompt).toHaveBeenCalledWith({});
+    expect(data.messages).toEqual([
+      { role: 'system', content: '系统提示\n\n其他系统提示' },
+      { role: 'user', content: '当前输入' },
+    ]);
+    expect(mockLogDebug).toHaveBeenCalledWith('[提示词模板] 已过滤酒馆原生正文世界书绿灯片段，数量:', 1);
+  });
+
+  it('数据库导出 Skill 条目位于普通 system 消息且未获放行时会按完整正文过滤', async () => {
+    const databaseContent = '# 关系档案-1\n\n| 人物 | 关系 |\n| --- | --- |\n| 艾琳 | 搭档 |';
+    mockIsWorldbookTakeoverActive.mockReturnValue(true);
+    mockGetAgentControlledWorldbookEntriesForFinalPrompt.mockResolvedValue([
+      {
+        bookName: '数据库世界书',
+        uid: 'db-blocked',
+        comment: 'TavernDB-ACU-CustomExport-关系档案-1',
+        content: databaseContent,
+      },
+    ]);
+    const data = {
+      messages: [
+        { role: 'system', content: `系统提示\n\n${databaseContent}\n\n其他系统提示` },
+        { role: 'user', content: '当前输入' },
+      ],
+    };
+
+    await handleChatCompletionReady_ACU(data);
+
     expect(data.messages).toEqual([
       { role: 'system', content: '系统提示\n\n其他系统提示' },
       { role: 'user', content: '当前输入' },

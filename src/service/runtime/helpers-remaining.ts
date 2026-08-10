@@ -15,6 +15,7 @@ import { logDebug_ACU } from '../../shared/utils';
 import { parseRandomTags_ACU, replaceRandomVariables_ACU, parseCalcTags_ACU, parseMaxTags_ACU, parseMinTags_ACU, replaceCalcVariables_ACU, replaceMaxVariables_ACU, replaceMinVariables_ACU, parseIfBlockRecursive_ACU, getLatestAIMessageContent_ACU, replaceDbSqlVariables } from './template-vars';
 import { getPlotFromHistory_ACU, getWorldbookContentForPlot_ACU, getAgentControlledWorldbookEntriesForFinalPrompt_ACU, getAgentGreenlightWorldbookEntriesForPlot_ACU } from './plot-runtime';
 import { isWorldbookTakeoverActive_ACU } from '../agent/agent-worldbook-takeover';
+import { isDatabaseGeneratedLorebookEntry_ACU } from '../worldbook/worldbook-placeholder-classification';
 
 // ═══ 上下文标签提取/过滤 ═══
 export {
@@ -189,14 +190,21 @@ export {
     return String(message.role || '').trim().toLowerCase() === 'system';
   }
 
-  function removeNativeWorldbookGreenlightText_ACU(text: string, entries: any[], allowRawContentOnly: boolean) {
+  function removeNativeWorldbookGreenlightText_ACU(
+    text: string,
+    entries: any[],
+    allowRawContentOnly: boolean | ((entry: any) => boolean),
+  ) {
     let result = String(text || '');
     let removedCount = 0;
     for (const entry of Array.isArray(entries) ? entries : []) {
       const comment = String(entry?.comment || entry?.rawComment || entry?.name || '').trim();
       const candidates = buildNativeWorldbookGreenlightRemovalCandidates_ACU(entry);
+      const allowRawContentForEntry = typeof allowRawContentOnly === 'function'
+        ? allowRawContentOnly(entry)
+        : allowRawContentOnly;
       for (const candidate of candidates) {
-        if (!allowRawContentOnly && !candidate.requiresComment) continue;
+        if (!allowRawContentForEntry && !candidate.requiresComment) continue;
         if (candidate.requiresComment && comment && !result.includes(comment)) continue;
         const pattern = new RegExp(`(?:\\n{0,2})${escapeAgentWorldbookRegExp_ACU(candidate.text)}(?:\\n{0,2})`, 'g');
         const before = result;
@@ -215,7 +223,10 @@ export {
     let totalRemoved = 0;
     for (const message of messages) {
       if (!shouldFilterNativeWorldbookMessage_ACU(message)) continue;
-      const allowRawContentOnly = isNativeWorldbookPromptMessage_ACU(message);
+      const isNativeWorldbookMessage = isNativeWorldbookPromptMessage_ACU(message);
+      const isSystemMessage = String(message?.role || '').trim().toLowerCase() === 'system';
+      const allowRawContentOnly = (entry: any) => isNativeWorldbookMessage
+        || (isSystemMessage && isDatabaseGeneratedLorebookEntry_ACU(entry));
       if (typeof message.content === 'string') {
         const result = removeNativeWorldbookGreenlightText_ACU(message.content, entries, allowRawContentOnly);
         message.content = result.text;
@@ -235,9 +246,12 @@ export {
   function isWorldbookEntryPresentInMessages_ACU(messages: any[], entry: any) {
     const candidates = buildNativeWorldbookGreenlightRemovalCandidates_ACU(entry);
     if (candidates.length === 0) return false;
+    const isDatabaseGeneratedEntry = isDatabaseGeneratedLorebookEntry_ACU(entry);
     for (const message of Array.isArray(messages) ? messages : []) {
       if (!message || typeof message !== 'object') continue;
-      const allowRawContentOnly = isNativeWorldbookPromptMessage_ACU(message);
+      const isSystemMessage = String(message.role || '').trim().toLowerCase() === 'system';
+      const allowRawContentOnly = isNativeWorldbookPromptMessage_ACU(message)
+        || (isSystemMessage && isDatabaseGeneratedEntry);
       const texts = typeof message.content === 'string'
         ? [message.content]
         : (Array.isArray(message.content)
